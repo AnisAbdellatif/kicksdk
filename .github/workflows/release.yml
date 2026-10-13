@@ -377,5 +377,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
       - run: cargo fetch --locked
       - run: ../../scripts/vendor-native.sh bindings/dart kicksdk-ffi
+      - run: ../../scripts/package-files.sh bindings/dart
       - run: dart pub get
       - run: dart pub publish --force

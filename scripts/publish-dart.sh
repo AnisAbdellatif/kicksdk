@@ -21,5 +21,6 @@ json.dump(sums, open("bindings/dart/hook/checksums.json", "w"), indent=2, sort_k
 '
 echo "$(python3 -c 'import json;print(len(json.load(open("bindings/dart/hook/checksums.json"))))') libraries checksummed"
 scripts/vendor-native.sh bindings/dart kicksdk-ffi
+scripts/package-files.sh bindings/dart
 (cd bindings/dart && dart pub get && dart pub publish)
-rm -rf bindings/dart/native bindings/dart/hook/checksums.json
+rm -rf bindings/dart/native bindings/dart/hook/checksums.json bindings/dart/LICENSE bindings/dart/CHANGELOG.md

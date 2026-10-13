@@ -27,3 +27,5 @@ __pycache__/
 /examples/dart/.dart_tool/
 /examples/dart/pubspec.lock
 site/
+/bindings/dart/LICENSE
+/bindings/dart/CHANGELOG.md
