@@ -1,0 +1,9 @@
+name: kicksdk_example
+publish_to: none
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  kicksdk:
+    path: ../../bindings/dart

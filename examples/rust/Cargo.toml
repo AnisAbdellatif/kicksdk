@@ -1,0 +1,14 @@
+[package]
+name = "kicksdk-example"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Not part of the kicksdk workspace: an app of its own.
+[workspace]
+
+[dependencies]
+kicksdk = { path = "../../crates/kicksdk" }
+ureq = "3"
+tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+uuid = { version = "1", features = ["v4"] }

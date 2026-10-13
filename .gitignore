@@ -22,3 +22,7 @@
 /bindings/python/python/kicksdk/*.so
 /bindings/python/python/kicksdk/*.pyd
 __pycache__/
+/examples/rust/target/
+/examples/rust/Cargo.lock
+/examples/dart/.dart_tool/
+/examples/dart/pubspec.lock

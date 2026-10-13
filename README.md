@@ -117,7 +117,7 @@ const chat = kick.connectChat({
 // later: chat.close()
 ```
 
-`examples/node-chat.mjs` prints a channel's chat from Node.
+`examples/` has a small chat app for each language.
 
 ## Python
 
@@ -175,7 +175,7 @@ docs/KICK.md             everything known about Kick, with sources
 docs/architecture.md     how it is built, and why
 scripts/                 build-js, vendor-native (packages' source fallback), release-check
 tools/                   recorders
-examples/
+examples/                a minimal chat app per language
 ```
 
 ## Building and testing
