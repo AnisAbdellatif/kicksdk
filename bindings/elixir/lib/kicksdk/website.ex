@@ -31,4 +31,91 @@ defmodule Kicksdk.Website do
 
   @doc "Reads a channel user answer."
   def parse_channel_user(status, body), do: Native.parse_channel_user(status, body)
+
+  # Acting as a viewer: `session` is kick.com's `session_token`. Never log it.
+  # These go through Kicksdk.call/2 and return `{:error, reason}` for
+  # arguments Kick would refuse anyway (a timeout over a week, an empty
+  # message).
+
+  @doc "The signed-in viewer's standing on a channel."
+  def me_request(session, channel_slug, endpoints \\ nil),
+    do: Kicksdk.call_request("website.me_request", %{session: session, channel_slug: channel_slug}, endpoints)
+
+  @doc "Reads a `me` answer: `is_moderator`, `is_broadcaster`, `is_super_admin`."
+  def parse_me(status, body), do: Kicksdk.call("website.parse_me", %{status: status, body: body})
+
+  @doc "Bans a user for good."
+  def ban_request(session, channel_slug, username, endpoints \\ nil),
+    do:
+      Kicksdk.call_request(
+        "website.ban_request",
+        %{session: session, channel_slug: channel_slug, username: username},
+        endpoints
+      )
+
+  @doc "Times a user out for `minutes` (1 to 10080)."
+  def timeout_request(session, channel_slug, username, minutes, endpoints \\ nil),
+    do:
+      Kicksdk.call_request(
+        "website.timeout_request",
+        %{session: session, channel_slug: channel_slug, username: username, minutes: minutes},
+        endpoints
+      )
+
+  @doc "Lifts a ban or timeout."
+  def unban_request(session, channel_slug, username, endpoints \\ nil),
+    do:
+      Kicksdk.call_request(
+        "website.unban_request",
+        %{session: session, channel_slug: channel_slug, username: username},
+        endpoints
+      )
+
+  @doc "Deletes a message (needs the chatroom id)."
+  def delete_message_request(session, chatroom_id, message_id, endpoints \\ nil),
+    do:
+      Kicksdk.call_request(
+        "website.delete_message_request",
+        %{session: session, chatroom_id: chatroom_id, message_id: message_id},
+        endpoints
+      )
+
+  @doc "Pins `message` (the feed's data for it, whole) for `minutes`."
+  def pin_request(session, channel_slug, message, minutes, endpoints \\ nil),
+    do:
+      Kicksdk.call_request(
+        "website.pin_request",
+        %{session: session, channel_slug: channel_slug, message: message, minutes: minutes},
+        endpoints
+      )
+
+  @doc "Removes the pin."
+  def unpin_request(session, channel_slug, endpoints \\ nil),
+    do:
+      Kicksdk.call_request(
+        "website.unpin_request",
+        %{session: session, channel_slug: channel_slug},
+        endpoints
+      )
+
+  @doc """
+  Sends a message, or a reply when `reply_to` is
+  `%{message_id: …, content: …, sender_id: …, sender_username: …}`.
+  """
+  def send_request(session, chatroom_id, content, message_ref, reply_to \\ nil, endpoints \\ nil),
+    do:
+      Kicksdk.call_request(
+        "website.send_request",
+        %{
+          session: session,
+          chatroom_id: chatroom_id,
+          content: content,
+          message_ref: message_ref,
+          reply_to: reply_to
+        },
+        endpoints
+      )
+
+  @doc "Whether an acting call worked: `{:ok, nil}` or `{:error, {:status, code, excerpt}}`."
+  def parse_action(status, body), do: Kicksdk.call("website.parse_action", %{status: status, body: body})
 end

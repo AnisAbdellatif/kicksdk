@@ -3,6 +3,9 @@
 Kick (kick.com) without the I/O, from one Rust core, for Rust, JavaScript,
 Python, Dart/Flutter and Elixir.
 
+**Docs: https://anisabdellatif.github.io/kicksdk/**: install, every function
+in every language, each language's API reference, and the Kick reference.
+
 kicksdk knows Kick: which requests to make and what the answers look like,
 how the realtime chat feed speaks, how webhooks are signed. It never sends a
 request or opens a socket itself. Your code does, with whatever it already

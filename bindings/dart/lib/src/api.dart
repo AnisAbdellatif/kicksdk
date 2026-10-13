@@ -142,6 +142,44 @@ abstract final class PublicApi {
   static List<Json> parseChannels(int status, String body) =>
       _parse<List>('public_api.parse_channels', status, body).cast<Json>();
 
+  /// The top live streams, overall or in a category or language: up to 100.
+  static KickRequest topLivestreamsRequest(
+    String token, {
+    int? categoryId,
+    String? language,
+    String sort = 'viewer_count',
+    int limit = 100,
+    Map<String, String>? endpoints,
+  }) => _req('public_api.top_livestreams_request', {
+    'token': token,
+    'category_id': categoryId,
+    'language': language,
+    'sort': sort,
+    'limit': limit,
+  }, endpoints);
+
+  /// Subscribes the app to webhook events (name, version) for one channel.
+  static KickRequest subscribeRequest(
+    String token,
+    int broadcasterUserId,
+    List<(String, int)> events, {
+    Map<String, String>? endpoints,
+  }) => _req('public_api.subscribe_request', {
+    'token': token,
+    'broadcaster_user_id': broadcasterUserId,
+    'events': [
+      for (final (name, version) in events) {'name': name, 'version': version},
+    ],
+  }, endpoints);
+  static KickRequest subscriptionsRequest(String token, {Map<String, String>? endpoints}) =>
+      _req('public_api.subscriptions_request', {'token': token}, endpoints);
+  static List<Json> parseSubscriptions(int status, String body) =>
+      _parse<List>('public_api.parse_subscriptions', status, body).cast<Json>();
+
+  /// One request per 50 subscription ids.
+  static List<KickRequest> unsubscribeRequests(String token, List<String> ids, {Map<String, String>? endpoints}) =>
+      _reqs('public_api.unsubscribe_requests', {'token': token, 'ids': ids}, endpoints);
+
   static KickRequest publicKeyRequest({Map<String, String>? endpoints}) =>
       _req('public_api.public_key_request', const {}, endpoints);
   static String parsePublicKey(int status, String body) => _parse('public_api.parse_public_key', status, body);
@@ -161,6 +199,84 @@ abstract final class Website {
   static KickRequest channelUserRequest(String channelSlug, String username, {Map<String, String>? endpoints}) =>
       _req('website.channel_user_request', {'channel_slug': channelSlug, 'username': username}, endpoints);
   static Json parseChannelUser(int status, String body) => _parse('website.parse_channel_user', status, body);
+
+  // Acting as a viewer: `session` is kick.com's `session_token`. Never log it.
+
+  static KickRequest meRequest(String session, String channelSlug, {Map<String, String>? endpoints}) =>
+      _req('website.me_request', {'session': session, 'channel_slug': channelSlug}, endpoints);
+  static Json parseMe(int status, String body) => _parse('website.parse_me', status, body);
+
+  static KickRequest banRequest(
+    String session,
+    String channelSlug,
+    String username, {
+    Map<String, String>? endpoints,
+  }) => _req('website.ban_request', {'session': session, 'channel_slug': channelSlug, 'username': username}, endpoints);
+  static KickRequest timeoutRequest(
+    String session,
+    String channelSlug,
+    String username,
+    int minutes, {
+    Map<String, String>? endpoints,
+  }) => _req('website.timeout_request', {
+    'session': session,
+    'channel_slug': channelSlug,
+    'username': username,
+    'minutes': minutes,
+  }, endpoints);
+  static KickRequest unbanRequest(
+    String session,
+    String channelSlug,
+    String username, {
+    Map<String, String>? endpoints,
+  }) =>
+      _req('website.unban_request', {'session': session, 'channel_slug': channelSlug, 'username': username}, endpoints);
+  static KickRequest deleteMessageRequest(
+    String session,
+    int chatroomId,
+    String messageId, {
+    Map<String, String>? endpoints,
+  }) => _req('website.delete_message_request', {
+    'session': session,
+    'chatroom_id': chatroomId,
+    'message_id': messageId,
+  }, endpoints);
+
+  /// Pins `message` (the feed's data for it, whole) for `minutes`.
+  static KickRequest pinRequest(
+    String session,
+    String channelSlug,
+    Object? message,
+    int minutes, {
+    Map<String, String>? endpoints,
+  }) => _req('website.pin_request', {
+    'session': session,
+    'channel_slug': channelSlug,
+    'message': message,
+    'minutes': minutes,
+  }, endpoints);
+  static KickRequest unpinRequest(String session, String channelSlug, {Map<String, String>? endpoints}) =>
+      _req('website.unpin_request', {'session': session, 'channel_slug': channelSlug}, endpoints);
+
+  /// A message, or a reply when `replyTo` is
+  /// `{message_id, content, sender_id, sender_username}`.
+  static KickRequest sendRequest(
+    String session,
+    int chatroomId,
+    String content,
+    String messageRef, {
+    Map<String, Object?>? replyTo,
+    Map<String, String>? endpoints,
+  }) => _req('website.send_request', {
+    'session': session,
+    'chatroom_id': chatroomId,
+    'content': content,
+    'message_ref': messageRef,
+    'reply_to': replyTo,
+  }, endpoints);
+
+  /// Throws a [KickException] unless the acting call worked.
+  static void parseAction(int status, String body) => _parse<Object?>('website.parse_action', status, body);
 }
 
 /// Kick's official webhooks.

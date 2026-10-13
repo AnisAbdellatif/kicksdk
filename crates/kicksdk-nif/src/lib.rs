@@ -341,16 +341,23 @@ fn parse_webhook<'a>(env: Env<'a>, event_type: &str, body: &str) -> NifResult<Te
     })
 }
 
+/// Any core function by name (`kicksdk::dispatch`), arguments as JSON:
+/// `{:ok, value}` or `{:error, reason}` shaped as everywhere else here, plus
+/// `{:call, message}` for a call that does not fit and `{:webhook, message}`
+/// for a delivery that does not verify.
 #[rustler::nif]
-fn pin_request<'a>(
-    env: Env<'a>,
-    e: &str,
-    session: &str,
-    slug: &str,
-    message_json: &str,
-    minutes: u32,
-) -> NifResult<Term<'a>> {
-    result(env, website::pin_request(&endpoints(e)?, session, slug, &json_value(message_json)?, minutes))
+fn call<'a>(env: Env<'a>, name: &str, args_json: &str) -> NifResult<Term<'a>> {
+    let args = if args_json.is_empty() { Value::Null } else { json_value(args_json)? };
+    Ok(match kicksdk::dispatch::call(name, &args) {
+        Ok(v) => (atoms::ok(), encode(env, &v)).encode(env),
+        Err(e) => {
+            let reason = match (e.kind, e.status) {
+                ("status", Some(status)) => (atoms::status(), status, e.message.as_str()).encode(env),
+                (kind, _) => (rustler::types::atom::Atom::from_str(env, kind)?, e.message.as_str()).encode(env),
+            };
+            (atoms::error(), reason).encode(env)
+        }
+    })
 }
 
 rustler::init!("Elixir.Kicksdk.Native");

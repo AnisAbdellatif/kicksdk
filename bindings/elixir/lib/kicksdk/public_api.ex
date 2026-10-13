@@ -22,6 +22,17 @@ defmodule Kicksdk.PublicApi do
   def livestreams_requests(token, user_ids, endpoints \\ nil),
     do: request(Native.livestreams_requests(encode_endpoints(endpoints), token, user_ids))
 
+  @doc """
+  The top live streams, overall or in a category or language: up to 100.
+  Options: `:category_id`, `:language`, `:sort` (`"viewer_count"` or
+  `"started_at"`), `:limit`, `:endpoints`.
+  """
+  def top_livestreams_request(token, opts \\ []) do
+    args = %{token: token, category_id: opts[:category_id], language: opts[:language]}
+    args = Map.merge(args, %{sort: opts[:sort] || "viewer_count", limit: opts[:limit] || 100})
+    Kicksdk.call_request("public_api.top_livestreams_request", args, opts[:endpoints])
+  end
+
   @doc "Reads a `/livestreams` answer. Offline is `{:ok, []}`."
   def parse_livestreams(status, body), do: Native.parse_livestreams(status, body)
 

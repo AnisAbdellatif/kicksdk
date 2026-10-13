@@ -26,3 +26,4 @@ __pycache__/
 /examples/rust/Cargo.lock
 /examples/dart/.dart_tool/
 /examples/dart/pubspec.lock
+site/

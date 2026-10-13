@@ -14,7 +14,7 @@ name = "kicksdk_nif"
 crate-type = ["cdylib"]
 
 [dependencies]
-kicksdk.workspace = true
+kicksdk = { workspace = true, features = ["dispatch"] }
 serde.workspace = true
 serde_json.workspace = true
 rustler = { version = "0.38", default-features = false, features = ["nif_version_2_15"] }

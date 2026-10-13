@@ -55,12 +55,14 @@ jobs:
       - run: npm test
         working-directory: bindings/js
 
-  versions:
-    name: One version everywhere
+  consistency:
+    name: One version, every function in every language
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - run: scripts/release-check.sh
+      # Fails when a core function has no binding in some language.
+      - run: python3 scripts/docs/api_table.py --check
 
   python:
     name: Python package (PyO3)

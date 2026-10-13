@@ -400,7 +400,83 @@ pub fn parse_action(status: u16, body: &str) -> Result<(), JsValue> {
     website::parse_action(status, body).map_err(fail)
 }
 
+/// The top live streams, overall or in a category or language: up to 100.
+/// `sort` is `"viewer_count"` (the default) or `"started_at"`.
+#[wasm_bindgen(js_name = topLivestreamsRequest)]
+pub fn top_livestreams_request(
+    token: &str,
+    category_id: Option<f64>,
+    language: Option<String>,
+    sort: Option<String>,
+    limit: Option<u32>,
+    endpoints_: JsValue,
+) -> Result<JsValue, JsValue> {
+    let sort = match sort.as_deref().unwrap_or("viewer_count") {
+        "started_at" => public_api::Sort::StartedAt,
+        _ => public_api::Sort::ViewerCount,
+    };
+    result(public_api::top_livestreams_request(
+        &endpoints(endpoints_)?,
+        token,
+        category_id.map(|c| c as u64),
+        language.as_deref(),
+        sort,
+        limit.unwrap_or(100),
+    ))
+}
+
+/// Subscribes the app to webhook `events` (`[{name, version}]`) for one channel.
+#[wasm_bindgen(js_name = subscribeRequest)]
+pub fn subscribe_request(
+    token: &str,
+    broadcaster_user_id: f64,
+    events: JsValue,
+    endpoints_: JsValue,
+) -> Result<JsValue, JsValue> {
+    let list = json_arg(events)?;
+    let pairs: Vec<(String, u32)> = list
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|e| {
+                    Some((
+                        e.get("name")?.as_str()?.to_owned(),
+                        e.get("version").and_then(|v| v.as_u64()).unwrap_or(1) as u32,
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let refs: Vec<(&str, u32)> = pairs.iter().map(|(n, v)| (n.as_str(), *v)).collect();
+    result(public_api::subscribe_request(&endpoints(endpoints_)?, token, UserId(broadcaster_user_id as u64), &refs))
+}
+
+/// Every webhook subscription the app has.
+#[wasm_bindgen(js_name = subscriptionsRequest)]
+pub fn subscriptions_request(token: &str, endpoints_: JsValue) -> Result<JsValue, JsValue> {
+    out(&public_api::subscriptions_request(&endpoints(endpoints_)?, token))
+}
+
+/// Reads a subscriptions answer.
+#[wasm_bindgen(js_name = parseSubscriptions)]
+pub fn parse_subscriptions(status: u16, body: &str) -> Result<JsValue, JsValue> {
+    result(public_api::parse_subscriptions(status, body))
+}
+
+/// Removes subscriptions, 50 per request.
+#[wasm_bindgen(js_name = unsubscribeRequests)]
+pub fn unsubscribe_requests(token: &str, ids: Vec<String>, endpoints_: JsValue) -> Result<JsValue, JsValue> {
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    out(&public_api::unsubscribe_requests(&endpoints(endpoints_)?, token, &refs))
+}
+
 // ---- Webhooks ----------------------------------------------------------------
+
+/// Reads a delivery's body by its type header, without checking anything.
+#[wasm_bindgen(js_name = parseWebhook)]
+pub fn parse_webhook(event_type: &str, body: &str) -> Result<JsValue, JsValue> {
+    out(&webhooks::parse(event_type, body).map_err(|e| JsValue::from(js_sys::Error::new(&e.to_string())))?)
+}
 
 /// Checks a delivery: `headers` as `[[name, value]…]` or an object, `body` the
 /// raw text. Returns the typed event, or throws.

@@ -55,9 +55,11 @@ scripts/build-js.sh && (cd bindings/js && npm test)
 (cd bindings/dart && dart format --line-length 120 . && dart analyze --fatal-infos && dart test)
 (cd bindings/elixir && mix format --check-formatted && mix test)
 scripts/release-check.sh
+python3 scripts/docs/api_table.py --check   # every core function bound in every language
 ```
 
-CI runs all of them.
+CI runs all of them. `scripts/build-docs.sh` builds the docs site locally
+(into `site/`); the Docs workflow publishes it on every push to main.
 
 ## Releasing
 

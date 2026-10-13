@@ -1,0 +1,66 @@
+# Builds the docs site (scripts/build-docs.sh) and publishes it to GitHub
+# Pages, on every push to main: https://anisabdellatif.github.io/kicksdk/
+
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: dart-lang/setup-dart@v1
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      - uses: astral-sh/setup-uv@v6
+      - name: Tools for the WebAssembly
+        run: |
+          v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
+          cargo install wasm-bindgen-cli --version "$v" --locked
+          curl -sSL https://github.com/WebAssembly/binaryen/releases/download/version_120/binaryen-version_120-x86_64-linux.tar.gz | tar xz
+          echo "$PWD/binaryen-version_120/bin" >> "$GITHUB_PATH"
+      - name: Python with kicksdk, pdoc and markdown
+        working-directory: bindings/python
+        run: |
+          uv venv
+          uv pip install maturin pdoc markdown httpx websockets
+          .venv/bin/maturin develop --uv
+      - run: scripts/build-docs.sh site
+        env:
+          PYTHON: bindings/python/.venv/bin/python
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

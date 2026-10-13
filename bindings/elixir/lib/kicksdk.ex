@@ -39,6 +39,25 @@ defmodule Kicksdk do
   def request(%{"headers" => headers} = r),
     do: %{r | "headers" => Enum.map(headers, fn [k, v] -> {k, v} end)}
 
+  @doc """
+  Calls any core function by name (`kicksdk::dispatch`), e.g.
+  `Kicksdk.call("website.channel_request", %{slug: "xqc"})`. The modules here
+  wrap the common ones; this reaches every one.
+  """
+  @spec call(String.t(), map()) :: {:ok, term()} | {:error, term()}
+  def call(name, args \\ %{}), do: Kicksdk.Native.call(name, JSON.encode!(args))
+
+  @doc false
+  # A request builder through call/2: the request, or an error as raised.
+  def call_request(name, args, endpoints) do
+    args = if endpoints, do: Map.put(args, :endpoints, endpoints), else: args
+
+    case call(name, args) do
+      {:ok, r} -> request(r)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @doc false
   def encode_endpoints(nil), do: ""
   def encode_endpoints(%{} = e) when map_size(e) == 0, do: ""

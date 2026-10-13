@@ -23,6 +23,27 @@ def livestreams_requests(token: str, user_ids: list[int], endpoints: E = None) -
     return _requests("public_api.livestreams_requests", token=token, user_ids=list(user_ids), endpoints=endpoints)
 
 
+def top_livestreams_request(
+    token: str,
+    category_id: Optional[int] = None,
+    language: Optional[str] = None,
+    sort: str = "viewer_count",
+    limit: int = 100,
+    endpoints: E = None,
+) -> Request:
+    """The top live streams, overall or in a category or language: up to 100.
+    ``sort`` is ``viewer_count`` or ``started_at``."""
+    return _request(
+        "public_api.top_livestreams_request",
+        token=token,
+        category_id=category_id,
+        language=language,
+        sort=sort,
+        limit=limit,
+        endpoints=endpoints,
+    )
+
+
 def parse_livestreams(status: int, body: str) -> list[dict]:
     return _call("public_api.parse_livestreams", status=status, body=body)
 
