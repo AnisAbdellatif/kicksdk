@@ -44,7 +44,7 @@ fn main() {
 
         let mut actions = session.open(&token, now());
         'socket: loop {
-            for action in actions.drain(..).collect::<Vec<_>>() {
+            for action in std::mem::take(&mut actions) {
                 match action {
                     Action::Send { text } => ws.send(text.into()).unwrap(),
                     Action::Close { reason } => {
