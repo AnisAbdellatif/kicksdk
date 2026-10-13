@@ -10,8 +10,9 @@
 //! in the `session_token` cookie and sends it as a bearer token, and so do the
 //! `*_request` builders that take a `session`. Never log or store it.
 //!
-//! The channel answer carries a `playback_url` with a signed token; nothing
-//! here keeps it.
+//! The channel answer carries a `playback_url` with a signed token. It is
+//! passed on ([`WebsiteChannel::playback_url`]) because a player needs it;
+//! treat it like a credential - never log or store it.
 
 use crate::events::{self, ChatMessage, KickEvent};
 use crate::http::{self, Endpoints, Error, Method, Request, encode};
@@ -60,6 +61,15 @@ pub struct WebsiteChannel {
     pub viewer_count: Option<i64>,
     /// Kick's livestream id, when live.
     pub livestream_id: Option<u64>,
+    /// The stream's title, when live.
+    pub session_title: Option<String>,
+    /// The owner's username, case kept.
+    pub username: Option<String>,
+    /// The owner's picture.
+    pub profile_pic: Option<String>,
+    /// The live stream's HLS master playlist, **signed**: a credential for the
+    /// stream. Present while live. Never log or store it.
+    pub playback_url: Option<String>,
     /// The channel's own subscriber badges, by months ascending.
     pub subscriber_badges: Vec<SubscriberBadge>,
     /// Verified.
@@ -95,6 +105,10 @@ pub fn parse_channel(status: u16, body: &str) -> Result<WebsiteChannel, Error> {
         live: livestream.is_some_and(Value::is_object),
         viewer_count: livestream.and_then(|l| int(l, "viewer_count")),
         livestream_id: livestream.and_then(|l| uint(l, "id")),
+        session_title: livestream.and_then(|l| string(l, "session_title")),
+        username: get(&v, "user").and_then(|u| string(u, "username")),
+        profile_pic: get(&v, "user").and_then(|u| string(u, "profile_pic")),
+        playback_url: string(&v, "playback_url").filter(|u| !u.is_empty()),
         subscriber_badges,
         verified: boolean(&v, "verified").or_else(|| get(&v, "verified").map(Value::is_object)),
     })

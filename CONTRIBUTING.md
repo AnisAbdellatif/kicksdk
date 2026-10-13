@@ -66,4 +66,5 @@ CI runs all of them. `scripts/build-docs.sh` builds the docs site locally
 Bump the version everywhere `scripts/release-check.sh` looks (Cargo.toml,
 package.json, mix.exs, pyproject.toml, pubspec.yaml, and `version` in
 `bindings/dart/hook/build.dart`), commit, then tag `v<version>` and push the
-tag. The release workflow does the rest.
+tag. The release workflow does the rest; the one-time registry setup it needs
+is in [docs/releasing.md](docs/releasing.md).

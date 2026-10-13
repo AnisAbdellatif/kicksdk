@@ -213,8 +213,10 @@ failure is a gap, never a zero.
 - `followers_count` came as a **number in one recording and a string in
   another**: parse both. *(recording)*
 - The channel id is repeated as `chatroom.chatable_id`. *(recording)*
-- The response carries a **`playback_url` with a signed token**: never
-  stored or logged.
+- The response carries a **`playback_url` with a signed token**: the
+  stream's HLS master playlist (Viewmux plays it). kicksdk passes it on for
+  players; treat it as a credential, never log or store it, and redact it in
+  recordings.
 - **Answers from a datacenter IP**: production has read followers from the
   VPS every 15 minutes since 2026-09-24 with no failed reading. *(production)*
 - By slug, so a rename makes it 404 until the new slug is known.

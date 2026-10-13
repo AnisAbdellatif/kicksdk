@@ -102,8 +102,9 @@ fn website_channels_give_the_chatroom() {
         let c = website::parse_channel(status, &body).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert!(c.chatroom_id.0 > 0);
         assert!(c.followers_count.is_some(), "{}", path.display());
-        // The signed playback URL is never carried out of the parser.
-        assert!(!serde_json::to_string(&c).unwrap().contains("playback"));
+        assert!(c.username.is_some());
+        // Redacted in the recordings: the real one is signed.
+        assert_eq!(c.playback_url.as_deref(), Some("[redacted]"));
     }
 }
 

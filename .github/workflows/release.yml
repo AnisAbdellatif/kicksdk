@@ -9,9 +9,15 @@
 #    packages get the checksums of exactly those binaries, and a vendored Cargo
 #    workspace (scripts/vendor-native.sh) to build from when no binary fits.
 #
-# Publishing needs, once: trusted publishing set up for this workflow on
-# crates.io, PyPI, npm and pub.dev, and a HEX_API_KEY secret. A registry that is
-# not set up fails its own job and leaves the others alone.
+# Publishing needs, per registry (docs/releasing.md):
+#   crates.io  CARGO_REGISTRY_TOKEN secret, or trusted publishing once the
+#              crates exist
+#   PyPI       a trusted publisher (can be set up before the project exists)
+#   npm        NPM_TOKEN secret, or trusted publishing once the package exists
+#   hex        HEX_API_KEY secret
+#   pub.dev    trusted publishing, which needs the package to exist: the
+#              first version goes up with scripts/publish-dart.sh
+# A registry that is not set up fails its own job and leaves the others alone.
 
 name: Release
 
@@ -191,16 +197,20 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
+    env:
+      # Secrets cannot appear in `if:`; this says whether there is one.
+      HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: rust-lang/crates-io-auth-action@v1
+      - if: env.HAS_TOKEN != 'true'
+        uses: rust-lang/crates-io-auth-action@v1
         id: auth
       - run: |
           cargo publish --locked -p kicksdk
           cargo publish --locked -p kicksdk-ffi
         env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
 
   pypi:
     name: Publish to PyPI
@@ -240,8 +250,12 @@ jobs:
       - run: scripts/build-js.sh
       - run: npm test
         working-directory: bindings/js
+      # With NPM_TOKEN, a token publish (the first one); without, npm's
+      # trusted publishing through this workflow's OIDC token.
       - run: npm publish --provenance --access public
         working-directory: bindings/js
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   hex:
     name: Publish to hex
