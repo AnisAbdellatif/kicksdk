@@ -317,7 +317,8 @@ jobs:
   hex:
     name: Publish to hex
     needs: [release, nif]
-    if: ${{ !inputs.only || contains(inputs.only, 'hex') }}
+    # On a re-run with only "hex", nif is skipped: its NIFs are on the release already.
+    if: ${{ always() && needs.release.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.nif.result) && (!inputs.only || contains(inputs.only, 'hex')) }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -347,7 +348,7 @@ jobs:
   pub:
     name: Publish to pub.dev
     needs: [release, ffi]
-    if: ${{ !inputs.only || contains(inputs.only, 'pub') }}
+    if: ${{ always() && needs.release.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.ffi.result) && (!inputs.only || contains(inputs.only, 'pub')) }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
