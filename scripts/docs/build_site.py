@@ -73,10 +73,10 @@ LANGS = [
     },
     {
         "name": "JavaScript / TypeScript",
-        "install": "npm install kicksdk",
+        "install": "npm install kicksdk-js",
         "how": "WebAssembly, with connectChat for fetch + WebSocket. Types included.",
         "ref": "js/index.html",
-        "registry": ("npm", "https://www.npmjs.com/package/kicksdk"),
+        "registry": ("npm", "https://www.npmjs.com/package/kicksdk-js"),
     },
     {
         "name": "Python",

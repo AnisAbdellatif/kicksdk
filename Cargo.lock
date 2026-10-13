@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "kicksdk"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "percent-encoding",
@@ -217,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "kicksdk-ffi"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "kicksdk",
  "serde_json",
@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "kicksdk-py"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "kicksdk",
  "pyo3",
@@ -235,7 +235,7 @@ dependencies = [
 
 [[package]]
 name = "kicksdk-wasm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "getrandom",
  "js-sys",
@@ -248,7 +248,7 @@ dependencies = [
 
 [[package]]
 name = "kicksdk_nif"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "kicksdk",
  "rustler",

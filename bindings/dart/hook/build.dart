@@ -31,7 +31,7 @@ import 'package:hooks/hooks.dart';
 
 /// This package's version: the release the precompiled libraries come from.
 /// scripts/release-check.sh keeps it equal to pubspec.yaml's.
-const version = '0.1.0';
+const version = '0.1.1';
 const releases = 'https://github.com/AnisAbdellatif/kicksdk/releases/download';
 const assetName = 'kicksdk_ffi';
 

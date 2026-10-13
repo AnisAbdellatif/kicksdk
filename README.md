@@ -30,7 +30,7 @@ Kick changes something, it is fixed once.
 | Language | Package | How | Binaries |
 |---|---|---|---|
 | Rust | `kicksdk` on crates.io | the crate | - |
-| JavaScript / TypeScript | `kicksdk` on npm | WebAssembly, plus `connectChat` | one `.wasm`, everywhere |
+| JavaScript / TypeScript | `kicksdk-js` on npm | WebAssembly, plus `connectChat` | one `.wasm`, everywhere |
 | Python | `kicksdk-py` on PyPI (`import kicksdk`) | PyO3, plus `kicksdk.aio.connect_chat` | abi3 wheels for Linux (glibc, musl), macOS, Windows; sdist builds from source |
 | Dart / Flutter | `kicksdk` on pub.dev | `dart:ffi` over a C ABI, plus `connectChat` | Linux, macOS, Windows, Android, iOS, downloaded by the build hook; builds from source otherwise |
 | Elixir | `kicksdk` on hex | a NIF (rustler_precompiled) | Linux (glibc, musl), macOS, Windows; builds from source otherwise |
@@ -108,7 +108,7 @@ for action in session.receive(&frame, now_ms) {
 `connectChat`, which does the networking around a `Session`.
 
 ```js
-import * as kick from 'kicksdk';
+import * as kick from 'kicksdk-js';
 await kick.init();
 
 const chat = kick.connectChat({

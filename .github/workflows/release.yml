@@ -77,6 +77,10 @@ jobs:
           targets: ${{ matrix.target }}
       - id: build
         uses: philss/rustler-precompiled-action@v1.1.4
+        # The action looks for target/ inside project-dir; a workspace member
+        # builds into the workspace's. This sends it where the action looks.
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/crates/kicksdk-nif/target
         with:
           project-name: kicksdk_nif
           project-version: ${{ needs.release.outputs.version }}
@@ -123,11 +127,10 @@ jobs:
       - if: ${{ !matrix.ndk }}
         run: cargo build --release --locked -p kicksdk-ffi --target ${{ matrix.target }}
       - if: ${{ matrix.ndk }}
+        # The runner's ANDROID_NDK_ROOT is what cargo-ndk finds the NDK by.
         run: |
           cargo install cargo-ndk --locked
           cargo ndk -t ${{ matrix.ndk }} -P 21 build --release --locked -p kicksdk-ffi
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
       - name: Name it for the release
         shell: bash
         run: |
@@ -226,6 +229,9 @@ jobs:
           merge-multiple: true
           path: dist
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # A re-run after another registry failed must not fail here.
+          skip-existing: true
 
   npm:
     name: Publish to npm

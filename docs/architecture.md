@@ -84,7 +84,7 @@ Two ways in:
 
 Per language:
 
-- **WebAssembly** (`crates/kicksdk-wasm`, npm `kicksdk`): plain JS objects
+- **WebAssembly** (`crates/kicksdk-wasm`, npm `kicksdk-js`): plain JS objects
   with snake_case keys, as Kick writes them. About 370 KB after wasm-opt,
   most of it RSA for webhooks; a browser-only build without the `webhooks`
   feature would be much smaller, if that ever matters.

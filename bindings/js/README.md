@@ -1,4 +1,7 @@
-# kicksdk (JavaScript)
+# kicksdk-js
+
+kicksdk for JavaScript. (On npm the name is `kicksdk-js`: npm treats
+`kicksdk` as too close to the unrelated `kick-sdk`.)
 
 Kick (kick.com) without the I/O: requests, response parsers, the realtime chat
 protocol and webhook verification, compiled from the
@@ -6,7 +9,7 @@ protocol and webhook verification, compiled from the
 plus `connectChat`, which drives Kick's chat feed with `fetch` and `WebSocket`.
 
 ```js
-import * as kick from 'kicksdk';
+import * as kick from 'kicksdk-js';
 await kick.init();            // in Node: kick.init(fs.readFileSync(wasmPath))
 
 const chat = kick.connectChat({

@@ -7,7 +7,7 @@ defmodule Kicksdk do
   request or opens a socket itself. You do, with whatever HTTP and WebSocket
   client your application already uses, and hand Kicksdk what came back.
 
-  The same Rust core runs in browsers (npm `kicksdk`) and here, as a NIF.
+  The same Rust core runs in browsers (npm `kicksdk-js`) and here, as a NIF.
 
     * `Kicksdk.PublicApi` - the official API and the app token.
     * `Kicksdk.Website` - kick.com's own endpoints: chatroom id, follower totals, history.
