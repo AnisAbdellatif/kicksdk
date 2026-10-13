@@ -1,0 +1,29 @@
+{
+  "elapsed_ms": 203,
+  "kind": "http",
+  "recorded_at": "2026-09-24T03:21:59.194778Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://kick.com/api/v2/channels/user0001/videos/latest"
+  },
+  "response": {
+    "body": "{\"error\":\"Not Found\",\"message\":\"Channel not found.\",\"status\":404}",
+    "headers": [
+      [
+        "cache-control",
+        "no-cache, private"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 03:21:59 GMT"
+      ]
+    ],
+    "status": 404
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "elapsed_ms": 724,
+  "kind": "http",
+  "recorded_at": "2026-09-24T03:21:51.765815Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://api.kick.com/private/v1/channels/user0001"
+  },
+  "response": {
+    "body": "{\"data\":{\"account\":{\"channel\":{\"banner_picture\":\"https://example.invalid/asset/1\",\"description\":\"\",\"followers_count\":38323,\"id\":\"channel_anon0501\",\"slug\":\"user0001\"},\"user\":{\"id\":\"user_anon0502\",\"is_verified\":true,\"profile_picture\":\"https://example.invalid/asset/4\",\"username\":\"user0001\"}}},\"status\":{\"code\":200,\"error\":false,\"message\":\"text-1294\"}}",
+    "headers": [
+      [
+        "cache-control",
+        "no-cache, private"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 03:21:52 GMT"
+      ]
+    ],
+    "status": 200
+  }
+}

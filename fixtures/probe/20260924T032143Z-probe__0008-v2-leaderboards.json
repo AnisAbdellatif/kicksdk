@@ -1,0 +1,29 @@
+{
+  "elapsed_ms": 703,
+  "kind": "http",
+  "recorded_at": "2026-09-24T03:21:57.488760Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://kick.com/api/v2/channels/user0001/leaderboards"
+  },
+  "response": {
+    "body": "{\"gifts\":[{\"quantity\":180,\"user_id\":900000062,\"username\":\"user0087\"},{\"quantity\":136,\"user_id\":900000063,\"username\":\"user0088\"},{\"quantity\":94,\"user_id\":900000064,\"username\":\"user0089\"},{\"quantity\":65,\"user_id\":900000065,\"username\":\"user0090\"},{\"quantity\":54,\"user_id\":900000066,\"username\":\"user0091\"},{\"quantity\":51,\"user_id\":900000067,\"username\":\"user0092\"},{\"quantity\":46,\"user_id\":900000068,\"username\":\"user0093\"},{\"quantity\":42,\"user_id\":900000069,\"username\":\"user0094\"},{\"quantity\":41,\"user_id\":900000070,\"username\":\"user0095\"},{\"quantity\":30,\"user_id\":900000040,\"username\":\"user0038\"}],\"gifts_enabled\":true,\"gifts_month\":[{\"quantity\":17,\"user_id\":900000067,\"username\":\"user0092\"},{\"quantity\":7,\"user_id\":900000066,\"username\":\"user0091\"},{\"quantity\":5,\"user_id\":900000070,\"username\":\"user0095\"},{\"quantity\":4,\"user_id\":900000016,\"username\":\"user0007\"},{\"quantity\":3,\"user_id\":900000071,\"username\":\"user0096\"},{\"quantity\":2,\"user_id\":900000072,\"username\":\"user0097\"},{\"quantity\":2,\"user_id\":900000073,\"username\":\"user0098\"},{\"quantity\":2,\"user_id\":900000074,\"username\":\"user0099\"},{\"quantity\":2,\"user_id\":900000065,\"username\":\"user0090\"},{\"quantity\":2,\"user_id\":900000075,\"username\":\"user0100\"}],\"gifts_month_enabled\":true,\"gifts_week\":[{\"quantity\":5,\"user_id\":900000070,\"username\":\"user0095\"},{\"quantity\":3,\"user_id\":900000016,\"username\":\"user0007\"},{\"quantity\":2,\"user_id\":900000072,\"username\":\"user0097\"},{\"quantity\":1,\"user_id\":900000074,\"username\":\"user0099\"},{\"quantity\":1,\"user_id\":900000065,\"username\":\"user0090\"}],\"gifts_week_enabled\":true}",
+    "headers": [
+      [
+        "cache-control",
+        "private, no-store"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 03:21:58 GMT"
+      ]
+    ],
+    "status": 200
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "elapsed_ms": 207,
+  "kind": "http",
+  "recorded_at": "2026-09-24T03:21:45.508802Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://api.kick.com/channels/900000002/followers-count"
+  },
+  "response": {
+    "body": "{\"message\":\"Not Found\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 03:21:45 GMT"
+      ]
+    ],
+    "status": 404
+  }
+}

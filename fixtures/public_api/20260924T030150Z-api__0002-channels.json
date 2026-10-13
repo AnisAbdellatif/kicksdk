@@ -1,0 +1,27 @@
+{
+  "elapsed_ms": 636,
+  "kind": "http",
+  "recorded_at": "2026-09-24T03:01:52.791074Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "slug": "user0066"
+    },
+    "url": "https://api.kick.com/public/v1/channels"
+  },
+  "response": {
+    "body": "{\"data\":{},\"message\":\"Invalid request\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 03:01:53 GMT"
+      ]
+    ],
+    "status": 400
+  }
+}

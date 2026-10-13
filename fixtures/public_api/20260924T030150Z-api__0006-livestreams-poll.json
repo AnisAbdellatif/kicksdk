@@ -1,0 +1,27 @@
+{
+  "elapsed_ms": 275,
+  "kind": "http",
+  "recorded_at": "2026-09-24T03:02:25.211065Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "broadcaster_user_id": 900000059
+    },
+    "url": "https://api.kick.com/public/v1/livestreams"
+  },
+  "response": {
+    "body": "{\"data\":[{\"broadcaster_user_id\":900000059,\"category\":{\"id\":15,\"name\":\"Just Chatting\",\"thumbnail\":\"https://example.invalid/asset/12\"},\"channel_id\":900000061,\"has_mature_content\":false,\"language\":\"en\",\"profile_picture\":\"https://example.invalid/asset/58\",\"slug\":\"user0062\",\"started_at\":\"2026-09-24T03:01:11Z\",\"stream_title\":\"text-1282\",\"thumbnail\":\"https://example.invalid/asset/62\",\"viewer_count\":1}],\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 03:02:25 GMT"
+      ]
+    ],
+    "status": 200
+  }
+}

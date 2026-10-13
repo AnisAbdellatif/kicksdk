@@ -1,0 +1,29 @@
+{
+  "elapsed_ms": 133,
+  "kind": "http",
+  "recorded_at": "2026-09-24T03:21:44.366587Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://kick.com/api/v2/channels/user0001"
+  },
+  "response": {
+    "body": "{\"banner_image\":{\"url\":\"https://example.invalid/asset/6\"},\"can_host\":true,\"chatroom\":{\"channel_id\":900000002,\"chat_mode\":\"public\",\"chat_mode_old\":\"public\",\"chatable_id\":900000002,\"chatable_type\":\"App\\\\Models\\\\Channel\",\"created_at\":\"2023-09-19T18:09:04.000000Z\",\"emotes_mode\":false,\"followers_mode\":true,\"following_min_duration\":5,\"id\":900000004,\"message_interval\":5,\"slow_mode\":false,\"subscribers_mode\":false,\"updated_at\":\"2026-06-24T19:51:34.000000Z\"},\"follower_badges\":[],\"followers_count\":\"38300\",\"id\":900000002,\"is_affiliate\":true,\"is_banned\":false,\"livestream\":{\"categories\":[{\"category\":{\"icon\":\"🕹️\",\"id\":1,\"name\":\"Games\",\"slug\":\"games\"},\"category_id\":1,\"deleted_at\":null,\"description\":null,\"id\":14353,\"is_fallback\":false,\"is_mature\":false,\"is_promoted\":false,\"name\":\"EA Sports FC 27\",\"slug\":\"ea-sports-fc-27\",\"tags\":[\"Sport\",\"Simulator\"],\"viewers\":60457}],\"channel_id\":900000002,\"created_at\":\"2026-09-23 22:02:10\",\"duration\":0,\"id\":900000005,\"is_live\":true,\"is_mature\":false,\"lang_iso\":\"ar\",\"language\":\"Arabic\",\"risk_level_id\":null,\"session_title\":\"text-1385\",\"slug\":\"user0004\",\"source\":null,\"start_time\":\"2026-09-23 22:02:09\",\"tags\":[],\"thumbnail\":{\"url\":\"https://example.invalid/asset/7\"},\"twitch_channel\":null,\"viewer_count\":307},\"muted\":false,\"offline_banner_image\":{\"src\":\"https://example.invalid/asset/8\",\"srcset\":\"https://example.invalid/asset/9\"},\"playback_url\":\"[redacted]\",\"recent_categories\":[{\"banner\":{\"responsive\":\"https://example.invalid/asset/10\",\"url\":\"https://example.invalid/asset/2\"},\"category\":{\"icon\":\"🕹️\",\"id\":1,\"name\":\"Games\",\"slug\":\"games\"},\"category_id\":1,\"deleted_at\":null,\"description\":null,\"id\":14353,\"is_fallback\":false,\"is_mature\":false,\"is_promoted\":false,\"name\":\"EA Sports FC 27\",\"slug\":\"ea-sports-fc-27\",\"tags\":[\"Sport\",\"Simulator\"],\"viewers\":60457},{\"banner\":{\"responsive\":\"https://example.invalid/asset/11\",\"url\":\"https://example.invalid/asset/12\"},\"category\":{\"icon\":\"🎙️\",\"id\":2,\"name\":\"IRL\",\"slug\":\"irl\"},\"category_id\":2,\"deleted_at\":null,\"description\":null,\"id\":15,\"is_fallback\":false,\"is_mature\":false,\"is_promoted\":false,\"name\":\"Just Chatting\",\"slug\":\"just-chatting\",\"tags\":[\"IRL\",\"Casual\"],\"viewers\":268050},{\"banner\":{\"responsive\":\"https://example.invalid/asset/13\",\"url\":\"https://example.invalid/asset/14\"},\"category\":{\"icon\":\"🎙️\",\"id\":2,\"name\":\"IRL\",\"slug\":\"irl\"},\"category_id\":2,\"deleted_at\":null,\"description\":null,\"id\":8549,\"is_fallback\":false,\"is_mature\":false,\"is_promoted\":false,\"name\":\"IRL\",\"slug\":\"irl\",\"tags\":[\"Adventure\"],\"viewers\":259536}],\"role\":null,\"slug\":\"user0001\",\"subscriber_badges\":[{\"badge_image\":{\"src\":\"https://example.invalid/asset/15\",\"srcset\":\"\"},\"channel_id\":900000002,\"id\":900000006,\"months\":1},{\"badge_image\":{\"src\":\"https://example.invalid/asset/16\",\"srcset\":\"\"},\"channel_id\":900000002,\"id\":900000007,\"months\":2},{\"badge_image\":{\"src\":\"https://example.invalid/asset/17\",\"srcset\":\"\"},\"channel_id\":900000002,\"id\":900000008,\"months\":3},{\"badge_image\":{\"src\":\"https://example.invalid/asset/18\",\"srcset\":\"\"},\"channel_id\":900000002,\"id\":900000009,\"months\":6},{\"badge_image\":{\"src\":\"https://example.invalid/asset/19\",\"srcset\":\"\"},\"channel_id\":900000002,\"id\":900000010,\"months\":9},{\"badge_image\":{\"src\":\"https://example.invalid/asset/20\",\"srcset\":\"\"},\"channel_id\":900000002,\"id\":900000011,\"months\":12},{\"badge_image\":{\"src\":\"https://example.invalid/asset/21\",\"srcset\":\"\"},\"channel_id\":900000002,\"id\":900000012,\"months\":18},{\"badge_image\":{\"src\":\"https://example.invalid/asset/22\",\"srcset\":\"\"},\"channel_id\":900000002,\"id\":900000013,\"months\":24},{\"badge_image\":{\"src\":\"https://example.invalid/asset/23\",\"srcset\":\"\"},\"channel_id\":900000002,\"id\":900000014,\"months\":30}],\"subscription_enabled\":true,\"user\":{\"bio\":\"text-1386\",\"club\":null,\"discord\":\"handle-1387\",\"facebook\":\"handle-1388\",\"id\":900000001,\"instagram\":\"handle-1389\",\"profile_pic\":\"https://example.invalid/asset/24\",\"tiktok\":\"handle-1390\",\"twitter\":\"handle-1391\",\"username\":\"user0001\",\"youtube\":\"handle-1392\"},\"user_id\":900000001,\"verified\":true,\"vod_enabled\":true}",
+    "headers": [
+      [
+        "cache-control",
+        "public, max-age=15"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 03:21:44 GMT"
+      ]
+    ],
+    "status": 200
+  }
+}

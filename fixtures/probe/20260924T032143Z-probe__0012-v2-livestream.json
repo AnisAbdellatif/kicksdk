@@ -1,0 +1,29 @@
+{
+  "elapsed_ms": 241,
+  "kind": "http",
+  "recorded_at": "2026-09-24T03:22:03.777783Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://kick.com/api/v2/channels/user0001/livestream"
+  },
+  "response": {
+    "body": "{\"data\":{\"category\":{\"id\":14353,\"name\":\"EA Sports FC 27\",\"parent_category\":{\"id\":1,\"slug\":\"games\"},\"slug\":\"ea-sports-fc-27\",\"tags\":[\"Sport\",\"Simulator\"]},\"created_at\":\"2026-09-23T22:02:10.000000Z\",\"id\":900000005,\"is_mature\":false,\"language\":\"Arabic\",\"playback_url\":\"[redacted]\",\"session_title\":\"text-1355\",\"slug\":\"user0004\",\"thumbnail\":{\"src\":\"https://example.invalid/asset/118\",\"srcset\":\"https://example.invalid/asset/119\"},\"viewers\":307}}",
+    "headers": [
+      [
+        "cache-control",
+        "no-cache, private"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 03:22:04 GMT"
+      ]
+    ],
+    "status": 200
+  }
+}

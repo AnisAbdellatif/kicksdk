@@ -1,0 +1,31 @@
+[package]
+name = "kicksdk"
+description = "Kick (kick.com) without the I/O: requests, response parsers, the realtime chat protocol and webhook verification"
+readme = "../../README.md"
+keywords = ["kick", "streaming", "chat", "centrifugo", "sans-io"]
+categories = ["api-bindings", "parser-implementations"]
+# The tests read ../../fixtures, which is not part of the crate.
+include = ["src/**/*.rs"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = ["webhooks"]
+# Webhook signature verification (RSA, SHA-256). Pure Rust, works in WASM.
+webhooks = ["dep:rsa", "dep:sha2", "dep:base64"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+percent-encoding = "2"
+rsa = { version = "0.9", optional = true, default-features = false, features = ["sha2", "std", "pem"] }
+sha2 = { version = "0.10", optional = true, default-features = false, features = ["oid"] }
+base64 = { version = "0.22", optional = true }
+
+[dev-dependencies]
+pretty_assertions = "1"

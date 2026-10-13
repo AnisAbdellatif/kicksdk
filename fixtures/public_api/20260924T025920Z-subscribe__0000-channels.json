@@ -1,0 +1,27 @@
+{
+  "elapsed_ms": 828,
+  "kind": "http",
+  "recorded_at": "2026-09-24T02:59:20.522983Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "slug": "user0062"
+    },
+    "url": "https://api.kick.com/public/v1/channels"
+  },
+  "response": {
+    "body": "{\"data\":[{\"active_gifted_subscribers_count\":0,\"active_subscribers_count\":0,\"banner_picture\":\"https://example.invalid/asset/61\",\"broadcaster_user_id\":900000059,\"canceled_subscribers_count\":0,\"category\":{\"id\":0,\"name\":\"\",\"thumbnail\":\"\"},\"channel_description\":\"text-1277\",\"slug\":\"user0062\",\"stream\":{\"is_live\":false,\"is_mature\":false,\"key\":\"\",\"language\":\"\",\"start_time\":\"0001-01-01T00:00:00Z\",\"thumbnail\":\"\",\"url\":\"\",\"viewer_count\":0},\"stream_title\":\"\"}],\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 02:59:21 GMT"
+      ]
+    ],
+    "status": 200
+  }
+}

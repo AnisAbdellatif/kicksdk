@@ -1,0 +1,27 @@
+{
+  "elapsed_ms": 748,
+  "kind": "http",
+  "recorded_at": "2026-09-24T03:01:52.038599Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "slug": "user0062"
+    },
+    "url": "https://api.kick.com/public/v1/channels"
+  },
+  "response": {
+    "body": "{\"data\":[{\"active_gifted_subscribers_count\":0,\"active_subscribers_count\":0,\"banner_picture\":\"https://example.invalid/asset/61\",\"broadcaster_user_id\":900000059,\"canceled_subscribers_count\":0,\"category\":{\"id\":15,\"name\":\"Just Chatting\",\"thumbnail\":\"https://example.invalid/asset/12\"},\"channel_description\":\"text-1278\",\"slug\":\"user0062\",\"stream\":{\"is_live\":true,\"is_mature\":false,\"key\":\"\",\"language\":\"en\",\"start_time\":\"2026-09-24T03:01:11Z\",\"thumbnail\":\"https://example.invalid/asset/62\",\"url\":\"\",\"viewer_count\":1},\"stream_title\":\"text-1279\"}],\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 03:01:52 GMT"
+      ]
+    ],
+    "status": 200
+  }
+}

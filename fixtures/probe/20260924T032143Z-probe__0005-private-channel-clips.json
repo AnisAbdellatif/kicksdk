@@ -1,0 +1,29 @@
+{
+  "elapsed_ms": 726,
+  "kind": "http",
+  "recorded_at": "2026-09-24T03:21:53.491835Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://api.kick.com/private/v1/channels/user0001/clips"
+  },
+  "response": {
+    "body": "{\"message\":\"\"}",
+    "headers": [
+      [
+        "cache-control",
+        "no-cache, private"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 03:21:54 GMT"
+      ]
+    ],
+    "status": 404
+  }
+}

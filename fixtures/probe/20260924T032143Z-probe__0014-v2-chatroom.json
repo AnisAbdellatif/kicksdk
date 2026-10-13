@@ -1,0 +1,29 @@
+{
+  "elapsed_ms": 210,
+  "kind": "http",
+  "recorded_at": "2026-09-24T03:22:06.233752Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://kick.com/api/v2/channels/user0001/chatroom"
+  },
+  "response": {
+    "body": "{\"account_age\":{\"enabled\":false,\"min_duration\":0},\"emotes_mode\":{\"enabled\":false},\"followers_mode\":{\"enabled\":true,\"min_duration\":3},\"gifts_enabled\":{\"enabled\":false},\"gifts_month_enabled\":{\"enabled\":false},\"gifts_week_enabled\":{\"enabled\":false},\"id\":900000004,\"pinned_message\":null,\"show_banners\":{\"enabled\":false},\"show_quick_emotes\":{\"enabled\":false},\"slow_mode\":{\"enabled\":false,\"message_interval\":0},\"subscribers_mode\":{\"enabled\":false}}",
+    "headers": [
+      [
+        "cache-control",
+        "no-cache, private"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 03:22:06 GMT"
+      ]
+    ],
+    "status": 200
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "elapsed_ms": 275,
+  "kind": "http",
+  "recorded_at": "2026-09-24T03:04:27.455086Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "broadcaster_user_id": 900000059
+    },
+    "url": "https://api.kick.com/public/v1/livestreams"
+  },
+  "response": {
+    "body": "{\"data\":[{\"broadcaster_user_id\":900000059,\"category\":{\"id\":64,\"name\":\"VALORANT\",\"thumbnail\":\"https://example.invalid/asset/59\"},\"channel_id\":900000061,\"has_mature_content\":true,\"language\":\"ar\",\"profile_picture\":\"https://example.invalid/asset/58\",\"slug\":\"user0062\",\"started_at\":\"2026-09-24T03:01:11Z\",\"stream_title\":\"text-1290\",\"thumbnail\":\"https://example.invalid/asset/62\",\"viewer_count\":1}],\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 03:04:27 GMT"
+      ]
+    ],
+    "status": 200
+  }
+}

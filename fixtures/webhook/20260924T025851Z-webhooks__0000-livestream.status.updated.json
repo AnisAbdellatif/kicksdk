@@ -1,0 +1,42 @@
+{
+  "anonymized": true,
+  "answered": 200,
+  "kind": "webhook",
+  "original_signature_valid": true,
+  "recorded_at": "2026-09-24T03:01:14.491584Z",
+  "request": {
+    "body": "{\"broadcaster\":{\"channel_slug\":\"user0062\",\"identity\":null,\"is_anonymous\":false,\"is_verified\":null,\"profile_picture\":\"https://example.invalid/asset/58\",\"user_id\":900000059,\"username\":\"user0063\"},\"ended_at\":null,\"is_live\":true,\"started_at\":\"2026-09-24T03:01:11Z\",\"title\":\"text-1270\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "kick-event-message-id",
+        "01M38NRBAYJD052V75Z0QVR37E"
+      ],
+      [
+        "kick-event-message-timestamp",
+        "2026-09-24T03:01:14Z"
+      ],
+      [
+        "kick-event-subscription-id",
+        "01M38NMXVMMWW0TZXGC7V5WBTB"
+      ],
+      [
+        "kick-event-type",
+        "livestream.status.updated"
+      ],
+      [
+        "kick-event-version",
+        "1"
+      ],
+      [
+        "kick-event-signature",
+        "[original signature removed: body anonymized]"
+      ]
+    ],
+    "method": "POST",
+    "path": "/"
+  }
+}

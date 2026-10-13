@@ -1,0 +1,42 @@
+{
+  "anonymized": true,
+  "answered": 200,
+  "kind": "webhook",
+  "original_signature_valid": true,
+  "recorded_at": "2026-09-24T03:01:14.877965Z",
+  "request": {
+    "body": "{\"broadcaster\":{\"channel_slug\":\"user0062\",\"identity\":null,\"is_anonymous\":false,\"is_verified\":null,\"profile_picture\":\"https://example.invalid/asset/58\",\"user_id\":900000059,\"username\":\"user0063\"},\"metadata\":{\"Category\":{\"id\":15,\"name\":\"Just Chatting\",\"thumbnail\":\"https://example.invalid/asset/12\"},\"category\":{\"id\":15,\"name\":\"Just Chatting\",\"thumbnail\":\"https://example.invalid/asset/12\"},\"has_mature_content\":false,\"language\":\"en\",\"title\":\"text-1271\"}}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "kick-event-message-id",
+        "01M38NRB8EYSNE0VV0VJ7XP36M"
+      ],
+      [
+        "kick-event-message-timestamp",
+        "2026-09-24T03:01:14Z"
+      ],
+      [
+        "kick-event-subscription-id",
+        "01M38NMY0HZ4R1ZVVBCRA63TBT"
+      ],
+      [
+        "kick-event-type",
+        "livestream.metadata.updated"
+      ],
+      [
+        "kick-event-version",
+        "1"
+      ],
+      [
+        "kick-event-signature",
+        "[original signature removed: body anonymized]"
+      ]
+    ],
+    "method": "POST",
+    "path": "/"
+  }
+}

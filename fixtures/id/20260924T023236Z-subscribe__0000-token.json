@@ -1,0 +1,29 @@
+{
+  "elapsed_ms": 799,
+  "kind": "http",
+  "recorded_at": "2026-09-24T02:32:36.848185Z",
+  "request": {
+    "json": null,
+    "method": "POST",
+    "params": {},
+    "url": "https://id.kick.com/oauth/token"
+  },
+  "response": {
+    "body": "{\"access_token\":\"[redacted]\",\"expires_in\":5184000,\"token_type\":\"Bearer\"}",
+    "headers": [
+      [
+        "cache-control",
+        "no-store"
+      ],
+      [
+        "content-type",
+        "application/json;charset=UTF-8"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 02:32:37 GMT"
+      ]
+    ],
+    "status": 200
+  }
+}

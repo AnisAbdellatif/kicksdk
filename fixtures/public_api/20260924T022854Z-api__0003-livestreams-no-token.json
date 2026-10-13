@@ -1,0 +1,25 @@
+{
+  "elapsed_ms": 713,
+  "kind": "http",
+  "recorded_at": "2026-09-24T02:28:57.502444Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/livestreams"
+  },
+  "response": {
+    "body": "{\"data\":{},\"message\":\"Unauthorized\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 02:28:58 GMT"
+      ]
+    ],
+    "status": 401
+  }
+}

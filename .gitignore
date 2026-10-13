@@ -1,0 +1,11 @@
+/target/
+# The npm package's build output: made by scripts/build-js.sh, published, not committed.
+/bindings/js/pkg/
+/bindings/js/node_modules/
+/bindings/elixir/_build/
+/bindings/elixir/deps/
+/bindings/elixir/priv/native/
+/bindings/elixir/doc/
+/bindings/elixir/*.ez
+/bindings/elixir/erl_crash.dump
+.DS_Store

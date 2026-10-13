@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo doc --no-deps -p kicksdk
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - run: cargo test --workspace
+      # The minimum supported Rust version, for the core alone.
+      - uses: dtolnay/rust-toolchain@1.88
+      - run: cargo +1.88 build -p kicksdk
+
+  js:
+    name: npm package (WebAssembly)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: wasm-bindgen-cli at the version Cargo.lock pins
+        run: |
+          v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
+          cargo install wasm-bindgen-cli --version "$v" --locked
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: scripts/build-js.sh
+      - run: npm test
+        working-directory: bindings/js
+
+  elixir:
+    name: hex package (NIF)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bindings/elixir
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix test

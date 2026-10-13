@@ -1,0 +1,66 @@
+{
+  "elapsed_ms": 3119,
+  "kind": "http",
+  "recorded_at": "2026-09-24T02:59:21.352571Z",
+  "request": {
+    "json": {
+      "broadcaster_user_id": 900000059,
+      "events": [
+        {
+          "name": "livestream.status.updated",
+          "version": 1
+        },
+        {
+          "name": "livestream.metadata.updated",
+          "version": 1
+        },
+        {
+          "name": "channel.followed",
+          "version": 1
+        },
+        {
+          "name": "channel.subscription.new",
+          "version": 1
+        },
+        {
+          "name": "channel.subscription.renewal",
+          "version": 1
+        },
+        {
+          "name": "channel.subscription.gifts",
+          "version": 1
+        },
+        {
+          "name": "kicks.gifted",
+          "version": 1
+        },
+        {
+          "name": "moderation.banned",
+          "version": 1
+        },
+        {
+          "name": "channel.reward.redemption.updated",
+          "version": 1
+        }
+      ],
+      "method": "webhook"
+    },
+    "method": "POST",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/events/subscriptions"
+  },
+  "response": {
+    "body": "{\"data\":[{\"name\":\"livestream.status.updated\",\"subscription_id\":\"01M38NMXVMMWW0TZXGC7V5WBTB\",\"version\":1},{\"name\":\"livestream.metadata.updated\",\"subscription_id\":\"01M38NMY0HZ4R1ZVVBCRA63TBT\",\"version\":1},{\"name\":\"channel.followed\",\"subscription_id\":\"01M38NMZ3DEKF6XCKXKPRPXZ95\",\"version\":1},{\"name\":\"channel.subscription.new\",\"subscription_id\":\"01M38NMZ3RBZZEZJY59P47PZBG\",\"version\":1},{\"name\":\"channel.subscription.renewal\",\"subscription_id\":\"01M38NMZDTYK5FX1RE3JZMYRVW\",\"version\":1},{\"name\":\"channel.subscription.gifts\",\"subscription_id\":\"01M38NMZJTMG7A65QGT42K31QT\",\"version\":1},{\"name\":\"kicks.gifted\",\"subscription_id\":\"01M38NMZR597RZF2S27VNVYHNQ\",\"version\":1},{\"name\":\"moderation.banned\",\"subscription_id\":\"01M38NMZVCMNJG4PSNX9RQHK49\",\"version\":1},{\"name\":\"channel.reward.redemption.updated\",\"subscription_id\":\"01M38NMZYMNJGTJD2TF6BXAS4T\",\"version\":1}],\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 02:59:24 GMT"
+      ]
+    ],
+    "status": 200
+  }
+}

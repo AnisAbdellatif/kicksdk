@@ -1,0 +1,27 @@
+{
+  "elapsed_ms": 735,
+  "kind": "http",
+  "recorded_at": "2026-09-24T02:28:56.561133Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "slug": "user0001"
+    },
+    "url": "https://api.kick.com/public/v1/channels"
+  },
+  "response": {
+    "body": "{\"data\":[{\"active_gifted_subscribers_count\":55,\"active_subscribers_count\":72,\"banner_picture\":\"https://example.invalid/asset/1\",\"broadcaster_user_id\":900000001,\"canceled_subscribers_count\":8,\"category\":{\"id\":14353,\"name\":\"EA Sports FC 27\",\"thumbnail\":\"https://example.invalid/asset/2\"},\"channel_description\":\"\",\"slug\":\"user0001\",\"stream\":{\"is_live\":true,\"is_mature\":false,\"key\":\"\",\"language\":\"ar\",\"start_time\":\"2026-09-23T22:02:09Z\",\"thumbnail\":\"https://example.invalid/asset/3\",\"url\":\"\",\"viewer_count\":325},\"stream_title\":\"text-697\"}],\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 02:28:57 GMT"
+      ]
+    ],
+    "status": 200
+  }
+}
