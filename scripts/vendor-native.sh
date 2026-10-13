@@ -38,5 +38,6 @@ PY
 cp README.md "$dest/README.md"
 # Drops the other members' packages from the copied lock file, keeping every
 # version as it was, so `cargo build --locked` holds there.
+cargo fetch --locked
 (cd "$dest" && cargo metadata --offline --format-version 1 >/dev/null)
 echo "$dest: kicksdk + $crate"

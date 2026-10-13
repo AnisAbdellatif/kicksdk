@@ -331,6 +331,9 @@ jobs:
         with:
           otp-version: "28"
           elixir-version: "1.19"
+      # The vendoring prunes the lock file offline: the crates must be in the
+      # cargo cache first.
+      - run: cargo fetch --locked
       - run: ../../scripts/vendor-native.sh bindings/elixir kicksdk-nif
       - run: mix deps.get
       # Writes checksum-Elixir.Kicksdk.Native.exs from the release's own NIFs.
@@ -371,6 +374,7 @@ jobs:
           cat hook/checksums.json
         env:
           GH_TOKEN: ${{ github.token }}
+      - run: cargo fetch --locked
       - run: ../../scripts/vendor-native.sh bindings/dart kicksdk-ffi
       - run: dart pub get
       - run: dart pub publish --force
