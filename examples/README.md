@@ -6,11 +6,11 @@ channel's slug.
 
 | Language | Run | First |
 |---|---|---|
-| Rust | `cargo run -- xqc` | - |
-| JavaScript | `node chat.mjs xqc` | `scripts/build-js.sh` |
-| Python | `python chat.py xqc` | `pip install "../../bindings/python[aio]"` |
-| Dart | `dart run bin/chat.dart xqc` | - (the build hook compiles the library) |
-| Elixir | `elixir chat.exs xqc` | - (Mix.install compiles the NIF) |
+| Rust | `cargo run -- <channel>` | - |
+| JavaScript | `node chat.mjs <channel>` | `scripts/build-js.sh` |
+| Python | `python chat.py <channel>` | `pip install "../../bindings/python[aio]"` |
+| Dart | `dart run bin/chat.dart <channel>` | - (the build hook compiles the library) |
+| Elixir | `elixir chat.exs <channel>` | - (Mix.install compiles the NIF) |
 
 The Rust and Elixir apps drive `Session` themselves around a plain HTTP client
 and WebSocket; JavaScript, Python and Dart use their package's `connectChat`,

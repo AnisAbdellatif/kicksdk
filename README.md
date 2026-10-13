@@ -81,7 +81,7 @@ kicksdk = "0.1"
 use kicksdk::{realtime::{self, Action, Session, SessionOptions}, website, Endpoints};
 
 let e = Endpoints::default();
-let req = website::channel_request(&e, "xqc");
+let req = website::channel_request(&e, "somechannel");
 // … send it with your client …
 let channel = website::parse_channel(status, &body)?;
 

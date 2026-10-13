@@ -1,4 +1,4 @@
-# Prints a Kick channel's chat:  elixir chat.exs xqc
+# Prints a Kick channel's chat:  elixir chat.exs <channel>
 #
 # kicksdk builds the requests and speaks the protocol; Req sends the requests
 # and WebSockex holds the socket. Builds the NIF from source (needs Rust).
@@ -79,5 +79,6 @@ defmodule Chat do
 end
 
 :persistent_term.put(:t0, System.monotonic_time(:millisecond))
-{:ok, _} = Chat.start(List.first(System.argv(), "xqc"))
+slug = List.first(System.argv()) || raise "usage: elixir chat.exs <channel>"
+{:ok, _} = Chat.start(slug)
 Process.sleep(:infinity)

@@ -1,11 +1,15 @@
-// Prints a Kick channel's chat:  dart run bin/chat.dart xqc
+// Prints a Kick channel's chat:  dart run bin/chat.dart <channel>
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:kicksdk/io.dart';
 
 Future<void> main(List<String> args) async {
-  final req = Website.channelRequest(args.isEmpty ? 'xqc' : args.first);
+  if (args.isEmpty) {
+    stderr.writeln('usage: dart run bin/chat.dart <channel>');
+    exit(64);
+  }
+  final req = Website.channelRequest(args.first);
   final res = await (await (HttpClient()..userAgent = 'Mozilla/5.0').openUrl(req.method, req.url)).close();
   final channel = Website.parseChannel(res.statusCode, await res.transform(utf8.decoder).join());
 

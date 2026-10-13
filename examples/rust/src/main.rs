@@ -1,4 +1,4 @@
-//! Prints a Kick channel's chat:  cargo run -- xqc
+//! Prints a Kick channel's chat:  cargo run -- <channel>
 //!
 //! kicksdk builds the requests and speaks the protocol; ureq sends the
 //! requests and tungstenite holds the socket.
@@ -19,7 +19,7 @@ fn send(http: &ureq::Agent, r: &Request) -> (u16, String) {
 }
 
 fn main() {
-    let slug = std::env::args().nth(1).unwrap_or_else(|| "xqc".into());
+    let slug = std::env::args().nth(1).expect("usage: cargo run -- <channel>");
     let e = Endpoints::default();
     let http: ureq::Agent =
         ureq::Agent::config_builder().http_status_as_error(false).user_agent("Mozilla/5.0").build().into();

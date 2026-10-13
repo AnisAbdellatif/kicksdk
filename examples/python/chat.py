@@ -1,4 +1,4 @@
-"""Prints a Kick channel's chat:  python chat.py xqc
+"""Prints a Kick channel's chat:  python chat.py <channel>
 
 Install the package first:  pip install "../../bindings/python[aio]"
 """
@@ -22,4 +22,6 @@ async def main(slug: str) -> None:
                 print(f'{e["event"]["sender"]["username"]}: {e["event"]["content"]}')
 
 
-asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "xqc"))
+if len(sys.argv) != 2:
+    sys.exit("usage: python chat.py <channel>")
+asyncio.run(main(sys.argv[1]))

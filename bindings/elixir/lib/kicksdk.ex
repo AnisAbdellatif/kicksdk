@@ -41,7 +41,7 @@ defmodule Kicksdk do
 
   @doc """
   Calls any core function by name (`kicksdk::dispatch`), e.g.
-  `Kicksdk.call("website.channel_request", %{slug: "xqc"})`. The modules here
+  `Kicksdk.call("website.channel_request", %{slug: "somechannel"})`. The modules here
   wrap the common ones; this reaches every one.
   """
   @spec call(String.t(), map()) :: {:ok, term()} | {:error, term()}
