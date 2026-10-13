@@ -31,7 +31,7 @@ Kick changes something, it is fixed once.
 |---|---|---|---|
 | Rust | `kicksdk` on crates.io | the crate | - |
 | JavaScript / TypeScript | `kicksdk` on npm | WebAssembly, plus `connectChat` | one `.wasm`, everywhere |
-| Python | `kicksdk` on PyPI | PyO3, plus `kicksdk.aio.connect_chat` | abi3 wheels for Linux (glibc, musl), macOS, Windows; sdist builds from source |
+| Python | `kicksdk-py` on PyPI (`import kicksdk`) | PyO3, plus `kicksdk.aio.connect_chat` | abi3 wheels for Linux (glibc, musl), macOS, Windows; sdist builds from source |
 | Dart / Flutter | `kicksdk` on pub.dev | `dart:ffi` over a C ABI, plus `connectChat` | Linux, macOS, Windows, Android, iOS, downloaded by the build hook; builds from source otherwise |
 | Elixir | `kicksdk` on hex | a NIF (rustler_precompiled) | Linux (glibc, musl), macOS, Windows; builds from source otherwise |
 | C | `kicksdk-ffi` on crates.io | `include/kicksdk.h` | the same libraries as Dart |

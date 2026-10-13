@@ -92,7 +92,7 @@ Per language:
   microseconds, so none needs a dirty scheduler. Values come back as
   JSON-shaped terms with **string keys**, not atoms: much of it is Kick's own
   data, and atom keys from it would let Kick grow the atom table.
-- **Python** (`bindings/python`, PyPI `kicksdk`): PyO3 over `dispatch`,
+- **Python** (`bindings/python`, PyPI `kicksdk-py`, imported as `kicksdk`): PyO3 over `dispatch`,
   dicts out. One abi3 wheel per platform covers CPython 3.9 and later.
 - **Dart / Flutter** (`bindings/dart`, pub `kicksdk`): `dart:ffi` over the C
   ABI, its library provided by a build hook (`hook/build.dart`), with a

@@ -80,10 +80,10 @@ LANGS = [
     },
     {
         "name": "Python",
-        "install": 'pip install "kicksdk[aio]"',
+        "install": 'pip install "kicksdk-py[aio]"',
         "how": "PyO3, abi3 wheels; kicksdk.aio.connect_chat over asyncio.",
         "ref": "python/kicksdk.html",
-        "registry": ("PyPI", "https://pypi.org/project/kicksdk/"),
+        "registry": ("PyPI", "https://pypi.org/project/kicksdk-py/"),
     },
     {
         "name": "Dart / Flutter",

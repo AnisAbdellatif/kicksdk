@@ -5,9 +5,12 @@ protocol and webhook verification, from the
 [kicksdk](https://github.com/AnisAbdellatif/kicksdk) Rust core.
 
 ```bash
-pip install kicksdk          # the core
-pip install "kicksdk[aio]"   # plus connect_chat over asyncio (httpx, websockets)
+pip install kicksdk-py          # the core
+pip install "kicksdk-py[aio]"   # plus connect_chat over asyncio (httpx, websockets)
 ```
+
+The import is `kicksdk`. (On PyPI the name is `kicksdk-py`: PyPI treats
+`kicksdk` as too close to the unrelated `kick-sdk`.)
 
 ```python
 import asyncio, kicksdk.aio

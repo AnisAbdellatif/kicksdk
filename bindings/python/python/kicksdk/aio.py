@@ -1,4 +1,4 @@
-"""Kick's chat feed over asyncio: ``pip install kicksdk[aio]``.
+"""Kick's chat feed over asyncio: ``pip install "kicksdk-py[aio]"``.
 
 ::
 
