@@ -24,16 +24,29 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Re-runs part of a release from this workflow's current definition, against
+  # the tagged code: e.g. tag v0.1.1, only "nif,hex" after a fix to those jobs.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to release, e.g. v0.1.1
+        required: true
+      only:
+        description: Jobs to run, comma separated (release, nif, ffi, wheels, crates, pypi, npm, hex, pub); empty for all
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   release:
     name: Create the GitHub release
+    if: ${{ !inputs.only || contains(inputs.only, 'release') || contains(inputs.only, 'nif') || contains(inputs.only, 'ffi') || contains(inputs.only, 'hex') || contains(inputs.only, 'pub') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -41,10 +54,12 @@ jobs:
       version: ${{ steps.v.outputs.version }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - id: v
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
       - run: scripts/release-check.sh "${{ steps.v.outputs.version }}"
-      - run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+      - run: gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -53,12 +68,14 @@ jobs:
   nif:
     name: NIF ${{ matrix.target }}
     needs: release
+    if: ${{ !inputs.only || contains(inputs.only, 'nif') }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
+        # rustler_precompiled's default targets, which Kicksdk.Native lists.
         include:
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
           - { target: x86_64-unknown-linux-musl, os: ubuntu-22.04, cross: true }
@@ -72,24 +89,42 @@ jobs:
           - { target: x86_64-pc-windows-gnu, os: windows-latest }
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - id: build
-        uses: philss/rustler-precompiled-action@v1.1.4
-        # The action looks for target/ inside project-dir; a workspace member
-        # builds into the workspace's. This sends it where the action looks.
-        env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/crates/kicksdk-nif/target
+      - if: ${{ matrix.cross }}
+        uses: taiki-e/install-action@v2
         with:
-          project-name: kicksdk_nif
-          project-version: ${{ needs.release.outputs.version }}
-          target: ${{ matrix.target }}
-          nif-version: "2.15"
-          use-cross: ${{ matrix.cross || false }}
-          project-dir: crates/kicksdk-nif
-      - run: gh release upload "$GITHUB_REF_NAME" "${{ steps.build.outputs.file-path }}"
+          tool: cross
+      - name: Build
         shell: bash
+        env:
+          # musl links statically by default, and a NIF has to be a shared
+          # library. On macOS the NIF's enif_* symbols come from the VM that
+          # loads it, so they are left for the loader to resolve.
+          RUSTFLAGS: >-
+            ${{ contains(matrix.target, 'musl') && '-C target-feature=-crt-static' || '' }}
+            ${{ contains(matrix.target, 'apple') && '-C link-arg=-undefined -C link-arg=dynamic_lookup' || '' }}
+        run: |
+          tool=cargo
+          if [ "${{ matrix.cross }}" = "true" ]; then tool=cross; fi
+          $tool build --release --locked -p kicksdk_nif --target ${{ matrix.target }}
+      - name: Package as rustler_precompiled names it
+        shell: bash
+        run: |
+          v=${{ needs.release.outputs.version }}
+          t=${{ matrix.target }}
+          dir=target/$t/release
+          case "$t" in
+            *windows*) src=$dir/kicksdk_nif.dll;      name=kicksdk_nif-v$v-nif-2.15-$t.dll ;;
+            *apple*)   src=$dir/libkicksdk_nif.dylib; name=libkicksdk_nif-v$v-nif-2.15-$t.so ;;
+            *)         src=$dir/libkicksdk_nif.so;    name=libkicksdk_nif-v$v-nif-2.15-$t.so ;;
+          esac
+          cp "$src" "$name"
+          tar czf "$name.tar.gz" "$name"
+          gh release upload "$TAG" "$name.tar.gz" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -98,6 +133,7 @@ jobs:
   ffi:
     name: FFI ${{ matrix.target }}
     needs: release
+    if: ${{ !inputs.only || contains(inputs.only, 'ffi') }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -121,6 +157,8 @@ jobs:
           - { target: x86_64-linux-android, os: ubuntu-22.04, ext: so, ndk: x86_64 }
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -141,7 +179,7 @@ jobs:
           esac
           out=kicksdk_ffi-v${{ needs.release.outputs.version }}-${{ matrix.target }}.${{ matrix.ext }}
           cp "$src" "$out"
-          gh release upload "$GITHUB_REF_NAME" "$out"
+          gh release upload "$TAG" "$out" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -150,6 +188,7 @@ jobs:
   wheels:
     name: Wheels ${{ matrix.os }} ${{ matrix.target }}
     needs: release
+    if: ${{ !inputs.only || contains(inputs.only, 'wheels') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -165,6 +204,8 @@ jobs:
           - { os: windows-latest, target: aarch64 }
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: bindings/python
@@ -179,9 +220,12 @@ jobs:
   sdist:
     name: Python sdist
     needs: release
+    if: ${{ !inputs.only || contains(inputs.only, 'wheels') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: bindings/python
@@ -197,6 +241,7 @@ jobs:
   crates:
     name: Publish to crates.io
     needs: release
+    if: ${{ !inputs.only || contains(inputs.only, 'crates') }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -205,6 +250,8 @@ jobs:
       HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - if: env.HAS_TOKEN != 'true'
         uses: rust-lang/crates-io-auth-action@v1
@@ -218,6 +265,7 @@ jobs:
   pypi:
     name: Publish to PyPI
     needs: [wheels, sdist]
+    if: ${{ !inputs.only || contains(inputs.only, 'pypi') }}
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -236,11 +284,14 @@ jobs:
   npm:
     name: Publish to npm
     needs: release
+    if: ${{ !inputs.only || contains(inputs.only, 'npm') }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -266,12 +317,15 @@ jobs:
   hex:
     name: Publish to hex
     needs: [release, nif]
+    if: ${{ !inputs.only || contains(inputs.only, 'hex') }}
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: bindings/elixir
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: erlef/setup-beam@v1
         with:
@@ -290,6 +344,7 @@ jobs:
   pub:
     name: Publish to pub.dev
     needs: [release, ffi]
+    if: ${{ !inputs.only || contains(inputs.only, 'pub') }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -298,11 +353,13 @@ jobs:
         working-directory: bindings/dart
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: dart-lang/setup-dart@v1
       - name: Checksums of the release's own libraries
         run: |
           mkdir -p ../../ffi
-          gh release download "$GITHUB_REF_NAME" --pattern 'kicksdk_ffi-*' --dir ../../ffi
+          gh release download "$TAG" --pattern 'kicksdk_ffi-*' --dir ../../ffi
           (cd ../../ffi && sha256sum kicksdk_ffi-*) | python3 -c '
           import json, sys
           sums = {}
