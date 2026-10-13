@@ -1,0 +1,21 @@
+name: kicksdk
+description: >-
+  Kick (kick.com) without the I/O - requests, response parsers, the realtime
+  chat protocol and webhook verification - from one Rust core, through dart:ffi.
+version: 0.1.0
+repository: https://github.com/AnisAbdellatif/kicksdk
+issue_tracker: https://github.com/AnisAbdellatif/kicksdk/issues
+topics: [kick, chat, streaming, ffi]
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  code_assets: ^2.1.0
+  crypto: ^3.0.0
+  ffi: ^2.1.0
+  hooks: ^2.2.0
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0

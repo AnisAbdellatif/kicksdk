@@ -16,5 +16,12 @@ handshake: Kick's realtime server refuses anything else.
 
 Values come back the way JSON decodes: maps with string keys.
 
-Building needs a Rust toolchain for now; precompiled NIFs (rustler_precompiled)
-are planned. MIT OR Apache-2.0. Not affiliated with Kick.
+The NIF comes precompiled for Linux (glibc and musl; x86_64, aarch64, arm,
+riscv64), macOS and Windows, downloaded from the GitHub release and checked
+against the checksums published with the package. On any other target, or
+with `KICKSDK_BUILD=1`, it is built from the Rust sources shipped in the
+package, which needs a Rust toolchain and adding `{:rustler, "~> 0.38",
+optional: true}` to your deps. `KICKSDK_BASE_URL` points the download at a
+mirror.
+
+MIT OR Apache-2.0. Not affiliated with Kick.

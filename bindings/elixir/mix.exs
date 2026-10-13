@@ -22,7 +22,9 @@ defmodule Kicksdk.MixProject do
 
   defp deps do
     [
-      {:rustler, "~> 0.38.0", runtime: false},
+      {:rustler_precompiled, "~> 0.10.0"},
+      # Only to build from source; precompiled NIFs need nothing.
+      {:rustler, "~> 0.38.0", optional: true, runtime: false},
       {:ex_doc, "~> 0.38", only: :dev, runtime: false}
     ]
   end
@@ -31,7 +33,10 @@ defmodule Kicksdk.MixProject do
     [
       licenses: ["MIT", "Apache-2.0"],
       links: %{"GitHub" => @source},
-      files: ~w(lib native/kicksdk_nif/src native/kicksdk_nif/Cargo.toml mix.exs README.md)
+      # native/ and the checksum file are written by the release workflow
+      # (scripts/vendor-native.sh, mix rustler_precompiled.download).
+      files: ~w(lib native/Cargo.toml native/Cargo.lock native/crates native/LICENSE-MIT
+        native/LICENSE-APACHE native/README.md checksum-Elixir.Kicksdk.Native.exs mix.exs README.md)
     ]
   end
 end

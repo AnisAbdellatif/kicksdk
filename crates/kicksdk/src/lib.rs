@@ -25,6 +25,8 @@
 //! - [`events`]: Kick's chat-feed events, typed.
 //! - [`content`]: chat message text, with its `[emote:id:name]` tokens.
 //! - [`webhooks`]: the official webhooks: headers, signature and bodies.
+//! - `dispatch` (feature `dispatch`): every function by name, JSON in and out,
+//!   for bindings that cross a C ABI or a dynamic language.
 //!
 //! Everything here is grounded in `docs/KICK.md`, which records each fact
 //! about Kick with where it was seen. When Kick changes, that file changes
@@ -34,6 +36,8 @@
 #![warn(missing_docs)]
 
 pub mod content;
+#[cfg(feature = "dispatch")]
+pub mod dispatch;
 pub mod events;
 pub mod http;
 pub mod ids;

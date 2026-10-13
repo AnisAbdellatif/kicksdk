@@ -10,10 +10,10 @@ Follow this order, every time:
 2. **A recording** in `fixtures/`, anonymized (below), that shows it.
 3. **The core.** Change `crates/kicksdk` until the new recording passes.
 4. **The bindings.** Rebuild them and run their tests, which read the same
-   fixtures. A new public function needs a wrapper in
-   `crates/kicksdk-wasm/src/lib.rs`,
-   `bindings/elixir/native/kicksdk_nif/src/lib.rs` and the matching Elixir
-   module.
+   fixtures. A new public function goes in `crates/kicksdk/src/dispatch.rs`
+   (which makes it callable from C, Dart and Python) and gets a wrapper in
+   `crates/kicksdk-wasm/src/lib.rs`, `crates/kicksdk-nif/src/lib.rs`, and
+   each language's module (`bindings/*/`).
 
 Never change a parser to fit what you think Kick sends. Change it to fit a
 recording of what Kick did send.
@@ -47,11 +47,21 @@ This repository is public.
 
 ```bash
 cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps -p kicksdk
-cargo test --workspace
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps -p kicksdk --all-features
+cargo test --workspace --all-features
 scripts/build-js.sh && (cd bindings/js && npm test)
+(cd bindings/python && maturin develop && pytest)
+(cd bindings/dart && dart format --line-length 120 . && dart analyze --fatal-infos && dart test)
 (cd bindings/elixir && mix format --check-formatted && mix test)
+scripts/release-check.sh
 ```
 
 CI runs all of them.
+
+## Releasing
+
+Bump the version everywhere `scripts/release-check.sh` looks (Cargo.toml,
+package.json, mix.exs, pyproject.toml, pubspec.yaml, and `version` in
+`bindings/dart/hook/build.dart`), commit, then tag `v<version>` and push the
+tag. The release workflow does the rest.

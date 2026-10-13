@@ -29,7 +29,7 @@ jobs:
       - run: cargo test --workspace
       # The minimum supported Rust version, for the core alone.
       - uses: dtolnay/rust-toolchain@1.88
-      - run: cargo +1.88 build -p kicksdk
+      - run: cargo +1.88 build -p kicksdk --all-features
 
   js:
     name: npm package (WebAssembly)
@@ -40,6 +40,7 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get install -y binaryen
       - name: wasm-bindgen-cli at the version Cargo.lock pins
         run: |
           v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
@@ -50,6 +51,46 @@ jobs:
       - run: scripts/build-js.sh
       - run: npm test
         working-directory: bindings/js
+
+  versions:
+    name: One version everywhere
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: scripts/release-check.sh
+
+  python:
+    name: Python package (PyO3)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bindings/python
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+      - run: uv venv && uv pip install maturin pytest httpx websockets
+      - run: .venv/bin/maturin develop --uv
+      - run: .venv/bin/pytest -q
+
+  dart:
+    name: Dart package (FFI, built from source)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bindings/dart
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: dart-lang/setup-dart@v1
+      - run: dart pub get
+      - run: dart format --output=none --set-exit-if-changed --line-length 120 .
+      - run: dart analyze --fatal-infos
+      # No hook/checksums.json in a checkout: the build hook compiles the
+      # library with cargo, the fallback every package has.
+      - run: dart test
 
   elixir:
     name: hex package (NIF)

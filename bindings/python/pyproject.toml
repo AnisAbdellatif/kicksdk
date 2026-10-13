@@ -1,0 +1,35 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "kicksdk"
+version = "0.1.0"
+description = "Kick (kick.com) without the I/O: requests, parsers, the realtime chat protocol and webhook verification, from one Rust core"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+requires-python = ">=3.9"
+keywords = ["kick", "chat", "streaming", "centrifugo"]
+classifiers = [
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+# kicksdk.aio.connect_chat: the chat feed over asyncio.
+aio = ["httpx>=0.27", "websockets>=13"]
+
+[project.urls]
+Repository = "https://github.com/AnisAbdellatif/kicksdk"
+
+[dependency-groups]
+dev = ["pytest>=8", "maturin>=1.9,<2", "httpx>=0.27", "websockets>=13"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "kicksdk._native"
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

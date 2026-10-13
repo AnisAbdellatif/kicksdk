@@ -9,3 +9,16 @@
 /bindings/elixir/*.ez
 /bindings/elixir/erl_crash.dump
 .DS_Store
+# Release-time files: the vendored Cargo workspace and the checksums of the
+# precompiled binaries are written into the packages by the release workflow,
+# never committed (their absence is what makes a checkout build from source).
+/bindings/elixir/native/
+/bindings/elixir/checksum-*.exs
+/bindings/dart/native/
+/bindings/dart/hook/checksums.json
+/bindings/dart/.dart_tool/
+/bindings/dart/pubspec.lock
+/bindings/python/.venv/
+/bindings/python/python/kicksdk/*.so
+/bindings/python/python/kicksdk/*.pyd
+__pycache__/

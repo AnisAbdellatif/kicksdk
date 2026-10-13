@@ -20,7 +20,10 @@ rm -rf bindings/js/pkg
 wasm-bindgen --target web --out-dir bindings/js/pkg --out-name kicksdk \
   target/wasm32-unknown-unknown/release/kicksdk_wasm.wasm
 if command -v wasm-opt >/dev/null; then
-  wasm-opt -Os --enable-bulk-memory --enable-nontrapping-float-to-int \
+  # The features rustc emits for wasm32 by default (bulk memory, sign-ext,
+  # reference types, multivalue, non-trapping float-to-int).
+  wasm-opt -Os --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
+    --enable-reference-types --enable-multivalue --enable-mutable-globals \
     bindings/js/pkg/kicksdk_bg.wasm -o bindings/js/pkg/kicksdk_bg.wasm
 fi
 rm -f bindings/js/pkg/.gitignore

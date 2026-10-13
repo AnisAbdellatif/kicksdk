@@ -1,0 +1,298 @@
+# Releases every package from one tag: git tag v0.2.0 && git push origin v0.2.0
+#
+# 1. The GitHub release is created first; every precompiled binary is
+#    uploaded to it.
+# 2. Binaries, per target: the Elixir NIF (rustler_precompiled's naming), the
+#    Dart/C library (kicksdk_ffi-v<version>-<triple>.<so|dylib|dll>), Python
+#    wheels, the WebAssembly.
+# 3. Each package is published once its binaries are up. The hex and pub
+#    packages get the checksums of exactly those binaries, and a vendored Cargo
+#    workspace (scripts/vendor-native.sh) to build from when no binary fits.
+#
+# Publishing needs, once: trusted publishing set up for this workflow on
+# crates.io, PyPI, npm and pub.dev, and a HEX_API_KEY secret. A registry that is
+# not set up fails its own job and leaves the others alone.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Create the GitHub release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - run: scripts/release-check.sh "${{ steps.v.outputs.version }}"
+      - run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # ---- Elixir: precompiled NIFs -------------------------------------------------
+
+  nif:
+    name: NIF ${{ matrix.target }}
+    needs: release
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-22.04, cross: true }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04, cross: true }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-22.04, cross: true }
+          - { target: arm-unknown-linux-gnueabihf, os: ubuntu-22.04, cross: true }
+          - { target: riscv64gc-unknown-linux-gnu, os: ubuntu-22.04, cross: true }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: x86_64-pc-windows-gnu, os: windows-latest }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - id: build
+        uses: philss/rustler-precompiled-action@v1.1.4
+        with:
+          project-name: kicksdk_nif
+          project-version: ${{ needs.release.outputs.version }}
+          target: ${{ matrix.target }}
+          nif-version: "2.15"
+          use-cross: ${{ matrix.cross || false }}
+          project-dir: crates/kicksdk-nif
+      - run: gh release upload "$GITHUB_REF_NAME" "${{ steps.build.outputs.file-path }}"
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # ---- Dart (and C): the FFI library ------------------------------------------
+
+  ffi:
+    name: FFI ${{ matrix.target }}
+    needs: release
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Built on the oldest Ubuntu runner, so the library asks for the
+          # oldest glibc.
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04, ext: so }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm, ext: so }
+          - { target: x86_64-apple-darwin, os: macos-latest, ext: dylib }
+          - { target: aarch64-apple-darwin, os: macos-latest, ext: dylib }
+          - { target: aarch64-apple-ios, os: macos-latest, ext: dylib }
+          - { target: aarch64-apple-ios-sim, os: macos-latest, ext: dylib }
+          - { target: x86_64-apple-ios, os: macos-latest, ext: dylib }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, ext: dll }
+          - { target: aarch64-pc-windows-msvc, os: windows-latest, ext: dll }
+          - { target: aarch64-linux-android, os: ubuntu-22.04, ext: so, ndk: arm64-v8a }
+          - { target: armv7-linux-androideabi, os: ubuntu-22.04, ext: so, ndk: armeabi-v7a }
+          - { target: x86_64-linux-android, os: ubuntu-22.04, ext: so, ndk: x86_64 }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - if: ${{ !matrix.ndk }}
+        run: cargo build --release --locked -p kicksdk-ffi --target ${{ matrix.target }}
+      - if: ${{ matrix.ndk }}
+        run: |
+          cargo install cargo-ndk --locked
+          cargo ndk -t ${{ matrix.ndk }} -P 21 build --release --locked -p kicksdk-ffi
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+      - name: Name it for the release
+        shell: bash
+        run: |
+          dir=target/${{ matrix.target }}/release
+          case "${{ matrix.ext }}" in
+            dll) src=$dir/kicksdk_ffi.dll ;;
+            *)   src=$dir/libkicksdk_ffi.${{ matrix.ext }} ;;
+          esac
+          out=kicksdk_ffi-v${{ needs.release.outputs.version }}-${{ matrix.target }}.${{ matrix.ext }}
+          cp "$src" "$out"
+          gh release upload "$GITHUB_REF_NAME" "$out"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # ---- Python: wheels ----------------------------------------------------------
+
+  wheels:
+    name: Wheels ${{ matrix.os }} ${{ matrix.target }}
+    needs: release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, target: x86_64, manylinux: auto }
+          - { os: ubuntu-22.04, target: aarch64, manylinux: auto }
+          - { os: ubuntu-22.04, target: x86_64, manylinux: musllinux_1_2 }
+          - { os: ubuntu-22.04, target: aarch64, manylinux: musllinux_1_2 }
+          - { os: macos-latest, target: x86_64 }
+          - { os: macos-latest, target: aarch64 }
+          - { os: windows-latest, target: x64 }
+          - { os: windows-latest, target: aarch64 }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.target }}-${{ matrix.manylinux || 'native' }}
+          path: bindings/python/dist
+
+  sdist:
+    name: Python sdist
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: bindings/python/dist
+
+  # ---- Publishing --------------------------------------------------------------
+
+  crates:
+    name: Publish to crates.io
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - run: |
+          cargo publish --locked -p kicksdk
+          cargo publish --locked -p kicksdk-ffi
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  pypi:
+    name: Publish to PyPI
+    needs: [wheels, sdist]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  npm:
+    name: Publish to npm
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: |
+          v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
+          cargo install wasm-bindgen-cli --version "$v" --locked
+          sudo apt-get install -y binaryen
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: scripts/build-js.sh
+      - run: npm test
+        working-directory: bindings/js
+      - run: npm publish --provenance --access public
+        working-directory: bindings/js
+
+  hex:
+    name: Publish to hex
+    needs: [release, nif]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bindings/elixir
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      - run: ../../scripts/vendor-native.sh bindings/elixir kicksdk-nif
+      - run: mix deps.get
+      # Writes checksum-Elixir.Kicksdk.Native.exs from the release's own NIFs.
+      - run: |
+          KICKSDK_BUILD=1 mix compile
+          mix rustler_precompiled.download Kicksdk.Native --all --print
+      - run: mix hex.publish --yes
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+
+  pub:
+    name: Publish to pub.dev
+    needs: [release, ffi]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    defaults:
+      run:
+        working-directory: bindings/dart
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dart-lang/setup-dart@v1
+      - name: Checksums of the release's own libraries
+        run: |
+          mkdir -p ../../ffi
+          gh release download "$GITHUB_REF_NAME" --pattern 'kicksdk_ffi-*' --dir ../../ffi
+          (cd ../../ffi && sha256sum kicksdk_ffi-*) | python3 -c '
+          import json, sys
+          sums = {}
+          for line in sys.stdin:
+              digest, name = line.split()
+              sums[name.lstrip("*")] = digest
+          json.dump(sums, open("hook/checksums.json", "w"), indent=2, sort_keys=True)
+          '
+          cat hook/checksums.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: ../../scripts/vendor-native.sh bindings/dart kicksdk-ffi
+      - run: dart pub get
+      - run: dart pub publish --force

@@ -68,21 +68,60 @@ Reconnecting is the host's: `Backoff` gives the delays (1 s doubling to
 
 ## Bindings
 
+Two ways in:
+
+- **Hand-written, typed**: WebAssembly (`crates/kicksdk-wasm`) and the Elixir
+  NIF (`crates/kicksdk-nif`) wrap each function. They came first, and a JS or
+  BEAM caller gets real function signatures from them.
+- **Through `dispatch`**: the core's `dispatch` module (feature `dispatch`)
+  exposes every function by name, JSON in and JSON out, and a realtime
+  session by method name. The C ABI (`crates/kicksdk-ffi`, six functions) and
+  the Python extension (two entry points) sit on it, and their language-side
+  modules are thin typed wrappers. A function added to `dispatch` reaches C,
+  Dart and Python at once. The cost is a JSON round trip per call: a few
+  microseconds, against chat that arrives at most a few hundred times a
+  second.
+
+Per language:
+
 - **WebAssembly** (`crates/kicksdk-wasm`, npm `kicksdk`): plain JS objects
-  with snake_case keys, as Kick writes them. About 600 KB before wasm-opt.
-  Most of that is RSA for webhooks; a browser-only build without the
-  `webhooks` feature would be much smaller, if that ever matters.
+  with snake_case keys, as Kick writes them. About 370 KB after wasm-opt,
+  most of it RSA for webhooks; a browser-only build without the `webhooks`
+  feature would be much smaller, if that ever matters.
 - **Elixir** (`bindings/elixir`, hex `kicksdk`): a NIF. Every call returns in
   microseconds, so none needs a dirty scheduler. Values come back as
   JSON-shaped terms with **string keys**, not atoms: much of it is Kick's own
   data, and atom keys from it would let Kick grow the atom table.
-- **Dart / Flutter** (for Viewmux) and **Python** are the next bindings:
-  `flutter_rust_bridge` and PyO3 over the same core.
+- **Python** (`bindings/python`, PyPI `kicksdk`): PyO3 over `dispatch`,
+  dicts out. One abi3 wheel per platform covers CPython 3.9 and later.
+- **Dart / Flutter** (`bindings/dart`, pub `kicksdk`): `dart:ffi` over the C
+  ABI, its library provided by a build hook (`hook/build.dart`), with a
+  `NativeFinalizer` freeing sessions.
+
+## Precompiled, and from source
+
+Users should not need Rust, so every native package ships binaries, and every
+one can still build without them:
+
+| Package | Precompiled | Checked by | Falls back to |
+|---|---|---|---|
+| npm | the `.wasm` in the package | the registry | `scripts/build-js.sh` |
+| PyPI | abi3 wheels | pip, against the registry | the sdist, which carries the crates |
+| pub | `kicksdk_ffi-v<version>-<triple>.<ext>` on the GitHub release, fetched by the build hook | `hook/checksums.json`, written at release | `cargo build` of `native/` |
+| hex | rustler_precompiled tarballs on the GitHub release | `checksum-Elixir.Kicksdk.Native.exs`, written at release | Rustler, on `native/` |
+
+`native/` is a copy of the Cargo workspace trimmed to the core and the one
+crate the package needs (`scripts/vendor-native.sh`), with the repository's
+`Cargo.lock`, so a source build is the build CI tested. Neither `native/` nor
+the checksum files are committed. Without them, a checkout of the repository
+builds from the workspace itself. A binary whose checksum does not match is
+refused outright: falling back to a source build there would hide a
+tampered release.
 
 ## Fixtures are the contract
 
-`fixtures/` holds Kick's real answers and frames, anonymized. The Rust, JS and
-Elixir suites all read them. A Kick change goes like this: record it, see
+`fixtures/` holds Kick's real answers and frames, anonymized. The Rust, JS,
+Python, Dart and Elixir suites all read them. A Kick change goes like this: record it, see
 every suite fail, fix the core, and every binding passes again. Recordings
 never hold a token, a real name, real text or a signed URL; see
 CONTRIBUTING.md.

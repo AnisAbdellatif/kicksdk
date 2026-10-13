@@ -1,6 +1,67 @@
 defmodule Kicksdk.Native do
   @moduledoc false
-  use Rustler, otp_app: :kicksdk, crate: "kicksdk_nif"
+
+  # The NIF comes precompiled from the GitHub release matching this version,
+  # checked against checksum-Elixir.Kicksdk.Native.exs (written when the
+  # package is published). It is built from source instead - which needs Rust
+  # and the optional :rustler dependency - when:
+  #
+  #   * KICKSDK_BUILD=1 (or true) is set;
+  #   * there is no checksum file: a checkout of the repository;
+  #   * no precompiled NIF exists for this machine's target.
+  #
+  # A download that fails on a supported target stops the build with a
+  # message; set KICKSDK_BUILD=1 to build from source instead.
+  #
+  # KICKSDK_BASE_URL points the download at a mirror of the release assets
+  # (the checksums still apply).
+
+  version = Mix.Project.config()[:version]
+  root = Path.expand("../..", __DIR__)
+  nif_versions = ["2.15"]
+  targets = RustlerPrecompiled.Config.default_targets()
+
+  # native/ is the vendored Cargo workspace in a published package; in the
+  # repository the crate is at the top level.
+  source =
+    if File.dir?(Path.join(root, "native/crates/kicksdk-nif")),
+      do: "native/crates/kicksdk-nif",
+      else: "../../crates/kicksdk-nif"
+
+  # This machine as rustler_precompiled describes a target (its own helper
+  # for this is private).
+  parts = :erlang.system_info(:system_architecture) |> List.to_string() |> String.split("-")
+
+  system =
+    if length(parts) in [3, 4],
+      do: Map.new(Enum.zip([:arch, :vendor, :os, :abi], parts)),
+      else: %{}
+
+  here = %{
+    os_type: :os.type(),
+    target_system: system,
+    word_size: :erlang.system_info(:wordsize),
+    nif_version: hd(nif_versions)
+  }
+
+  supported? = match?({:ok, _}, RustlerPrecompiled.target(here, targets, nif_versions))
+
+  force_build =
+    System.get_env("KICKSDK_BUILD") in ["1", "true"] or
+      not File.exists?(Path.join(root, "checksum-Elixir.Kicksdk.Native.exs")) or
+      not supported?
+
+  use RustlerPrecompiled,
+    otp_app: :kicksdk,
+    crate: "kicksdk_nif",
+    path: source,
+    base_url:
+      System.get_env("KICKSDK_BASE_URL") ||
+        "https://github.com/AnisAbdellatif/kicksdk/releases/download/v#{version}",
+    version: version,
+    targets: targets,
+    nif_versions: nif_versions,
+    force_build: force_build
 
   defp err, do: :erlang.nif_error(:nif_not_loaded)
 

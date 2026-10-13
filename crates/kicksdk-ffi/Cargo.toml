@@ -1,0 +1,21 @@
+[package]
+name = "kicksdk-ffi"
+description = "kicksdk behind a C ABI: every function by name, JSON in and out (the Dart binding's native library)"
+readme = "../../README.md"
+keywords = ["kick", "ffi", "dart"]
+categories = ["api-bindings"]
+include = ["src/**/*.rs", "include/*.h"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "kicksdk_ffi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+kicksdk = { workspace = true, features = ["dispatch"] }
+serde_json.workspace = true

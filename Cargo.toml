@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/kicksdk", "crates/kicksdk-wasm", "bindings/elixir/native/kicksdk_nif"]
-default-members = ["crates/kicksdk", "crates/kicksdk-wasm", "bindings/elixir/native/kicksdk_nif"]
+members = ["crates/kicksdk", "crates/kicksdk-wasm", "crates/kicksdk-nif", "crates/kicksdk-ffi", "bindings/python"]
+default-members = ["crates/kicksdk", "crates/kicksdk-ffi", "crates/kicksdk-nif"]
 
 [workspace.package]
 version = "0.1.0"

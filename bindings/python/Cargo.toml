@@ -1,0 +1,21 @@
+[package]
+name = "kicksdk-py"
+description = "kicksdk for Python"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+kicksdk = { workspace = true, features = ["dispatch"] }
+serde_json.workspace = true
+# abi3: one wheel per platform serves every CPython from 3.9 on.
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
+pythonize = "0.29"

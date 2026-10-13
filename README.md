@@ -1,7 +1,7 @@
 # kicksdk
 
-Kick (kick.com) without the I/O, from one Rust core, for Rust, JavaScript and
-Elixir.
+Kick (kick.com) without the I/O, from one Rust core, for Rust, JavaScript,
+Python, Dart/Flutter and Elixir.
 
 kicksdk knows Kick: which requests to make and what the answers look like,
 how the realtime chat feed speaks, how webhooks are signed. It never sends a
@@ -21,8 +21,22 @@ Kick changes something, it is fixed once.
    │  public_api · website · realtime · events ·     │
    │  content · webhooks                             │
    └─────────────────────────────────────────────────┘
-     Rust crate      npm (WebAssembly)     hex (NIF)
+   crates.io   npm (Wasm)   PyPI (PyO3)   pub (FFI)   hex (NIF)
 ```
+
+| Language | Package | How | Binaries |
+|---|---|---|---|
+| Rust | `kicksdk` on crates.io | the crate | - |
+| JavaScript / TypeScript | `kicksdk` on npm | WebAssembly, plus `connectChat` | one `.wasm`, everywhere |
+| Python | `kicksdk` on PyPI | PyO3, plus `kicksdk.aio.connect_chat` | abi3 wheels for Linux (glibc, musl), macOS, Windows; sdist builds from source |
+| Dart / Flutter | `kicksdk` on pub.dev | `dart:ffi` over a C ABI, plus `connectChat` | Linux, macOS, Windows, Android, iOS, downloaded by the build hook; builds from source otherwise |
+| Elixir | `kicksdk` on hex | a NIF (rustler_precompiled) | Linux (glibc, musl), macOS, Windows; builds from source otherwise |
+| C | `kicksdk-ffi` on crates.io | `include/kicksdk.h` | the same libraries as Dart |
+
+Precompiled binaries come from the GitHub release of the package's version and
+are checked against checksums published with the package; a binary that does
+not match is refused. Where none fits, every package builds from the Rust
+sources it ships with.
 
 ## What it covers
 
@@ -105,6 +119,32 @@ const chat = kick.connectChat({
 
 `examples/node-chat.mjs` prints a channel's chat from Node.
 
+## Python
+
+```python
+import asyncio, kicksdk.aio
+
+async def main():
+    async with kicksdk.aio.connect_chat(chatroom_id, channel_id) as chat:
+        async for e in chat:
+            if e["event"]["type"] == "chat_message":
+                print(e["event"]["sender"]["username"], e["event"]["content"])
+
+asyncio.run(main())
+```
+
+## Dart / Flutter
+
+```dart
+import 'package:kicksdk/io.dart';
+
+final chat = connectChat(
+  chatroomId: chatroomId,
+  channelId: channelId,
+  onEvent: (e) => print(e['event']),
+);
+```
+
 ## Elixir
 
 `bindings/elixir` is the hex package, a NIF over the same core. Values come
@@ -122,13 +162,18 @@ for action <- Kicksdk.Realtime.Session.receive(session, frame, now), do: handle(
 ## Layout
 
 ```
-crates/kicksdk/          the core
+crates/kicksdk/          the core (with `dispatch`: every function by name, JSON in and out)
 crates/kicksdk-wasm/     its WebAssembly binding (built into bindings/js/pkg)
+crates/kicksdk-ffi/      a C ABI over dispatch: the Dart package's library, and C's
+crates/kicksdk-nif/      the Elixir NIF
 bindings/js/             the npm package: the binding, connectChat, types
-bindings/elixir/         the hex package and its NIF crate (native/kicksdk_nif)
+bindings/python/         the PyPI package: PyO3 over dispatch, kicksdk.aio
+bindings/dart/           the pub package: dart:ffi, the build hook, connectChat
+bindings/elixir/         the hex package
 fixtures/                Kick's answers and frames, recorded and anonymized
 docs/KICK.md             everything known about Kick, with sources
 docs/architecture.md     how it is built, and why
+scripts/                 build-js, vendor-native (packages' source fallback), release-check
 tools/                   recorders
 examples/
 ```
@@ -136,15 +181,19 @@ examples/
 ## Building and testing
 
 ```bash
-cargo test --workspace            # the core, against fixtures/
-scripts/build-js.sh               # the WebAssembly (needs wasm-bindgen-cli, see the script)
-(cd bindings/js && npm test)      # the npm package, against the same fixtures
-(cd bindings/elixir && mix test)  # the hex package, against the same fixtures
+cargo test --workspace --all-features   # the core and the C ABI, against fixtures/
+scripts/build-js.sh                     # the WebAssembly (wasm-bindgen-cli; wasm-opt if installed)
+(cd bindings/js && npm test)
+(cd bindings/python && maturin develop && pytest)
+(cd bindings/dart && dart test)         # the build hook compiles the library with cargo
+(cd bindings/elixir && mix test)        # compiles the NIF from source in a checkout
 ```
 
-All three test suites read the same `fixtures/`, so a recording of a Kick
+Every test suite reads the same `fixtures/`, so a recording of a Kick
 change fails every binding until the core handles it. How to record one is in
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[CONTRIBUTING.md](CONTRIBUTING.md). Releasing is a tag: `.github/workflows/release.yml`
+builds every binary, uploads it to the GitHub release, and publishes each
+package.
 
 ## License
 
