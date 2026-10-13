@@ -14,10 +14,6 @@
 # never committed (their absence is what makes a checkout build from source).
 /bindings/elixir/native/
 /bindings/elixir/checksum-*.exs
-/bindings/dart/native/
-/bindings/dart/hook/checksums.json
-/bindings/dart/.dart_tool/
-/bindings/dart/pubspec.lock
 /bindings/python/.venv/
 /bindings/python/python/kicksdk/*.so
 /bindings/python/python/kicksdk/*.pyd
@@ -27,5 +23,3 @@ __pycache__/
 /examples/dart/.dart_tool/
 /examples/dart/pubspec.lock
 site/
-/bindings/dart/LICENSE
-/bindings/dart/CHANGELOG.md

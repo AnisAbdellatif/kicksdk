@@ -1,0 +1,9 @@
+# Not committed. pub ignores this file because .pubignore is here, so the
+# release-time files below (written by scripts/vendor-native.sh,
+# scripts/package-files.sh and the checksum step) do go into the package.
+.dart_tool/
+pubspec.lock
+native/
+hook/checksums.json
+LICENSE
+CHANGELOG.md

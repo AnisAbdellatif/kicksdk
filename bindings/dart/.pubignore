@@ -1,2 +1,5 @@
+# Replaces .gitignore for pub: native/, hook/checksums.json, LICENSE and
+# CHANGELOG.md are published.
 .dart_tool/
+pubspec.lock
 native/target/
