@@ -19,7 +19,13 @@ cargo build --release --target wasm32-unknown-unknown -p kicksdk-wasm
 rm -rf bindings/js/pkg
 wasm-bindgen --target web --out-dir bindings/js/pkg --out-name kicksdk \
   target/wasm32-unknown-unknown/release/kicksdk_wasm.wasm
-if command -v wasm-opt >/dev/null; then
+# Older wasm-opt (Ubuntu's apt package among them) mangles the reference-type
+# table wasm-bindgen sets up, and the module then fails to load ("failed to
+# grow table"). Below 116 it is skipped rather than trusted.
+opt_version=$(wasm-opt --version 2>/dev/null | sed -n 's/.*version \([0-9]*\).*/\1/p')
+if [ "${opt_version:-0}" -lt 116 ]; then
+  [ -n "$opt_version" ] && echo "wasm-opt $opt_version is too old (116+ needed); not optimizing" >&2
+elif command -v wasm-opt >/dev/null; then
   # The features rustc emits for wasm32 by default (bulk memory, sign-ext,
   # reference types, multivalue, non-trapping float-to-int).
   wasm-opt -Os --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
