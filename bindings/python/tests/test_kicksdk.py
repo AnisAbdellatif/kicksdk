@@ -136,6 +136,7 @@ def test_reconnect_codes_and_backoff():
 
 def test_every_core_function_is_reachable():
     assert "website.channel_request" in kicksdk._native.FUNCTIONS
+    assert kicksdk._native.NativeError.__module__ == "kicksdk._native"
 
 
 def test_packaged_licenses_are_the_repositorys():

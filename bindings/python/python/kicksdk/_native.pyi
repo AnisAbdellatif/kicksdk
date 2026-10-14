@@ -1,7 +1,12 @@
 """Types of the compiled extension (bindings/python/src/lib.rs). Internal:
-use the :mod:`kicksdk` modules, which wrap it."""
+use the :mod:`kicksdk` modules, which wrap it.
 
-from typing import Any, Mapping, Optional
+Checked against the built module: ``python -m mypy.stubtest kicksdk._native``.
+"""
+
+from typing import Any, Mapping, Optional, final
+
+__all__ = ["call", "NativeSession", "NativeBackoff", "NativeError", "FUNCTIONS"]
 
 FUNCTIONS: list[str]
 
@@ -10,12 +15,14 @@ class NativeError(Exception):
 
 def call(name: str, args: Optional[Mapping[str, Any]] = None) -> Any: ...
 
+@final
 class NativeSession:
-    def __init__(self, channels: list[str]) -> None: ...
+    def __new__(cls, channels: list[str]) -> NativeSession: ...
     def call(self, method: str, args: Optional[Mapping[str, Any]] = None) -> Any: ...
 
+@final
 class NativeBackoff:
-    def __init__(self, initial_ms: int, max_ms: int) -> None: ...
+    def __new__(cls, initial_ms: int, max_ms: int) -> NativeBackoff: ...
     @property
     def initial_ms(self) -> int: ...
     @property

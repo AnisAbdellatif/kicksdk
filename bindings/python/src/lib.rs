@@ -12,7 +12,7 @@ use pyo3::types::PyDict;
 use pythonize::{depythonize, pythonize};
 use serde_json::Value;
 
-create_exception!(_native, NativeError, PyException, "A failed call: (kind, status, message).");
+create_exception!(kicksdk._native, NativeError, PyException, "A failed call: (kind, status, message).");
 
 fn args(obj: Option<&Bound<'_, PyDict>>) -> PyResult<Value> {
     match obj {
