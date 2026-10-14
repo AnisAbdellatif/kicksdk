@@ -119,11 +119,10 @@ def test_a_recorded_session_replays():
 
 
 def test_reconnect_codes_and_backoff():
-    assert not realtime.should_reconnect(3501)
-    assert not realtime.should_reconnect(4500)
-    assert realtime.should_reconnect(1006) and realtime.should_reconnect(3000)
+    assert realtime.retry_after_ms(3501) == realtime.retry_after_ms(4500) == realtime.TERMINAL_RETRY_MS == 300_000
+    assert realtime.retry_after_ms(1006) == realtime.retry_after_ms(3000) == realtime.retry_after_ms(4499) == 0
     with pytest.raises(KickError) as e:
-        realtime.should_reconnect(70_000)
+        realtime.retry_after_ms(70_000)
     assert e.value.kind == "call"
 
     b = realtime.Backoff()
@@ -132,6 +131,15 @@ def test_reconnect_codes_and_backoff():
     assert (b.next_delay_jittered(0.0), b.next_delay_jittered(0.5), b.next()) == (500, 1_500, 4.0)
     assert (b.initial, b.maximum) == (1.0, 30.0)
     assert realtime.Backoff(0, 0).next_delay() == 1, "never a busy loop"
+
+
+def test_backoff_has_a_slower_stage_for_terminal_closes():
+    b = realtime.Backoff()
+    assert [b.next_delay_for(300_000, 0.0) for _ in range(5)] == [300_000, 600_000, 1_200_000, 1_800_000, 1_800_000]
+    assert b.next_delay_for(0, 0.0) == 500, "the ordinary stage is left as it was"
+    b.reset()
+    assert b.next_delay_for(300_000, 0.5) == 337_500
+    assert b.next_delay_for(300_000, float("nan")) == 600_000
 
 
 def test_every_core_function_is_reachable():

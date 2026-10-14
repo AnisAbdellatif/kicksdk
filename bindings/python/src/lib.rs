@@ -87,6 +87,10 @@ impl NativeBackoff {
         self.0.next_delay_jittered(random)
     }
 
+    fn next_delay_for(&mut self, retry_after_ms: u64, random: f64) -> u64 {
+        self.0.next_delay_for(retry_after_ms, random)
+    }
+
     fn reset(&mut self) {
         self.0.reset();
     }
