@@ -175,3 +175,10 @@ def test_packaged_licenses_are_the_repositorys() -> None:
         if not (root / name).exists():
             pytest.skip("not in the repository (an sdist)")
         assert (here / name).read_bytes() == (root / name).read_bytes(), name
+
+
+def test_next_delay_for_refuses_a_bad_wait() -> None:
+    b = kicksdk.realtime.Backoff()
+    for bad in (-1, 1.5, "300000", True):
+        with pytest.raises((TypeError, ValueError)):
+            b.next_delay_for(bad, 0.0)  # type: ignore[arg-type]

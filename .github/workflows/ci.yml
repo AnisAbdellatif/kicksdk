@@ -90,8 +90,19 @@ jobs:
           "$RUNNER_TEMP/actionlint"
 
   python:
-    name: Python package (PyO3)
+    name: Python package (PyO3, ${{ matrix.python }})
     runs-on: ubuntu-latest
+    # The oldest Python and dependency versions the package allows, and the
+    # current ones: the wheel is abi3, and aio supports websockets 13+ and
+    # httpx 0.27+.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.9"
+            deps: websockets==13.0 httpx==0.27.0
+          - python: "3.14"
+            deps: websockets httpx
     defaults:
       run:
         working-directory: bindings/python
@@ -104,9 +115,16 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-      - run: uv venv && uv pip install maturin pytest httpx websockets
+      - run: |
+          read -ra deps <<< "$DEPS"
+          uv venv -p "$PYTHON" && uv pip install maturin pytest mypy "${deps[@]}"
+        env:
+          PYTHON: ${{ matrix.python }}
+          DEPS: ${{ matrix.deps }}
       - run: .venv/bin/maturin develop --uv
       - run: .venv/bin/pytest -q
+      - run: .venv/bin/python -m mypy.stubtest kicksdk._native
+      - run: .venv/bin/python -m mypy --strict python/kicksdk/aio.py python/kicksdk/webhooks.py tests ../../examples/python/chat.py
 
   dart:
     name: Dart package (FFI, built from source)

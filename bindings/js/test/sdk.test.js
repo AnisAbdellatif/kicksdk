@@ -130,3 +130,9 @@ test('connectChat: fetches the server and a token, connects, subscribes, deliver
   assert.ok(states.at(-1).subscribed.includes('chatrooms.900000002.v2'));
   assert.ok(events.some((e) => e.event.type === 'chat_message' && e.channel === 'chatrooms.900000002.v2'));
 });
+
+test('parseContent takes combine as a boolean, never coerced', () => {
+  assert.throws(() => sdk.parseContent('a', 'false'), TypeError);
+  assert.throws(() => sdk.parseContent('a', 1), TypeError);
+  assert.ok(Array.isArray(sdk.parseContent('a', false)));
+});

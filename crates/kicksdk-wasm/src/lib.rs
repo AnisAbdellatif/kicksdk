@@ -94,6 +94,10 @@ extern "C" {
     /// which wasm-bindgen would get from `'10'` or `true` by coercion.
     #[wasm_bindgen(typescript_type = "number")]
     pub type Num;
+    /// A flag: a JS boolean, checked by [`flag`] rather than coerced
+    /// (wasm-bindgen would read `'false'` or `1` as true).
+    #[wasm_bindgen(typescript_type = "boolean")]
+    pub type Flag;
     /// Ids: an array of JS numbers, checked by [`id_list`].
     #[wasm_bindgen(typescript_type = "readonly number[]")]
     pub type IdList;
@@ -166,6 +170,12 @@ fn whole(what: &str, n: f64, max: u64) -> Result<u64, JsValue> {
 /// A JS number, any (NaN included); anything else is a `TypeError`.
 fn number(what: &str, value: &JsValue) -> Result<f64, JsValue> {
     value.as_f64().ok_or_else(|| type_error(&format!("{what} must be a number")))
+}
+
+/// A JS boolean; anything else is a `TypeError`.
+fn flag(what: &str, value: Flag) -> Result<bool, JsValue> {
+    let value: JsValue = value.into();
+    value.as_bool().ok_or_else(|| type_error(&format!("{what} must be a boolean")))
 }
 
 /// [`whole`], for a value that must be a JS number.
@@ -258,8 +268,8 @@ pub fn parse_event(name: &str, data: JsValue) -> Result<JsValue, JsValue> {
 
 /// A message's text and emotes.
 #[wasm_bindgen(js_name = parseContent)]
-pub fn parse_content(text: &str, combine: bool) -> Result<JsValue, JsValue> {
-    out(&content::parse(text, combine))
+pub fn parse_content(text: &str, combine: Flag) -> Result<JsValue, JsValue> {
+    out(&content::parse(text, flag("combine", combine)?))
 }
 
 /// An emote's image URL.

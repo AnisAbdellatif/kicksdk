@@ -188,6 +188,10 @@ class Backoff:
         ``random`` times a quarter of that: 300000, 600000, 1200000, 1800000,
         1800000 … ms from Kick's 5 minutes and ``random`` 0. The ordinary
         stage is left as it was."""
+        if isinstance(retry_after_ms, bool) or not isinstance(retry_after_ms, int):
+            raise TypeError("retry_after_ms must be an int")
+        if retry_after_ms < 0:
+            raise ValueError(f"retry_after_ms must be 0 or more, not {retry_after_ms}")
         return self._b.next_delay_for(retry_after_ms, float(random))
 
     def reset(self) -> None:
