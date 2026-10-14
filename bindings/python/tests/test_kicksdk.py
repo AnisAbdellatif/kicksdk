@@ -17,7 +17,7 @@ def files(d: str, part: str = "") -> list[Path]:
 
 
 def response(p: Path) -> tuple[int, str]:
-    r = json.loads(p.read_text())["response"]
+    r = json.loads(p.read_text(encoding="utf-8"))["response"]
     return r["status"], r["body"]
 
 
@@ -54,11 +54,11 @@ def test_parsers_read_the_recordings() -> None:
 
 def test_webhook_signatures() -> None:
     d = FIXTURES / "signing"
-    pem, body = (d / "test-public-key.pem").read_text(), (d / "body.json").read_text()
+    pem, body = (d / "test-public-key.pem").read_text(encoding="utf-8"), (d / "body.json").read_text(encoding="utf-8")
     headers = {
         "Kick-Event-Message-Id": "01M38M9K3YRKV8E6Q68C18ZWG4",
         "Kick-Event-Message-Timestamp": "2026-09-24T02:35:42Z",
-        "Kick-Event-Signature": (d / "signature.b64").read_text().strip(),
+        "Kick-Event-Signature": (d / "signature.b64").read_text(encoding="utf-8").strip(),
         "Kick-Event-Type": "channel.followed",
         "Kick-Event-Version": "1",
     }
@@ -103,7 +103,7 @@ def test_webhook_signatures() -> None:
 
 def test_a_recorded_session_replays() -> None:
     for p in files("realtime", ".jsonl"):
-        records = [json.loads(line) for line in p.read_text().splitlines()]
+        records = [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines()]
         sent = [r["frame"] for r in records if r["direction"] == "out"]
         channels = [
             json.loads(line)["subscribe"]["channel"]
