@@ -90,9 +90,22 @@ defmodule Kicksdk.WebhooksTest do
              Webhooks.verify(@pem, tl(headers()), @body, now: @sent)
   end
 
-  test "a signed body must be the shape of its claimed type" do
+  test "a signed body that is not its claimed type's shape is {:shape, _}, not {:webhook, _}" do
     retyped = List.keyreplace(headers(), "Kick-Event-Type", 0, {"Kick-Event-Type", "kicks.gifted"})
     assert {:error, {:shape, _}} = Webhooks.verify(@pem, retyped, @body, now: @sent)
+
+    # The same through call/2, whose dispatch reports it as kind "shape".
+    args = %{
+      public_key_pem: @pem,
+      headers: Enum.map(retyped, &Tuple.to_list/1),
+      body: @body,
+      now: @sent
+    }
+
+    assert {:error, {:shape, _}} = Kicksdk.call("webhooks.verify", args)
+
+    assert {:error, {:webhook, "signature does not match"}} =
+             Kicksdk.call("webhooks.verify", %{args | body: @body <> " "})
   end
 
   test "parse reads raw bytes, and fails on what is not JSON" do

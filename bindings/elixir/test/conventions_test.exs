@@ -121,7 +121,22 @@ defmodule Kicksdk.ConventionsTest do
 
         assert_raise ArgumentError, ~r/:api must be a URL string/, fn -> builder.(%{api: 9}) end
         assert_raise ArgumentError, ~r/must be a map/, fn -> builder.("http://localhost:9") end
+
+        # A misspelt key is refused even when its value is nil.
+        assert_raise ArgumentError, ~r/unknown key :realtme/, fn -> builder.(%{realtme: nil}) end
+        assert_raise ArgumentError, ~r/unknown key "apii"/, fn -> builder.(%{"apii" => nil}) end
+
+        # A struct is not a map of endpoints.
+        assert_raise ArgumentError, ~r/got a struct/, fn -> builder.(URI.parse("http://localhost:9")) end
       end
+    end
+
+    test "take atom or string keys, and nil for Kick's own" do
+      assert %{"url" => "https://web.kick.com/" <> _} = Realtime.token_request("c", %{realtime: nil})
+      assert %{"url" => "https://web.kick.com/" <> _} = Realtime.token_request("c", %{"realtime" => nil})
+
+      assert %{"url" => "http://localhost:9/" <> _} =
+               Realtime.token_request("c", %{"realtime" => "http://localhost:9"})
     end
 
     test "are checked by the NIF too" do
@@ -132,6 +147,13 @@ defmodule Kicksdk.ConventionsTest do
       assert_raise ArgumentError, ~r/`api` must be a URL string/, fn ->
         Kicksdk.Native.token_request(~s({"api":9}), "c")
       end
+
+      assert_raise ArgumentError, ~r/unknown key `realtme`/, fn ->
+        Kicksdk.Native.token_request(~s({"realtme":null}), "c")
+      end
+
+      assert %{"url" => "https://web.kick.com/" <> _} =
+               Kicksdk.Native.token_request(~s({"realtime":null}), "c")
     end
   end
 

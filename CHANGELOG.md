@@ -236,25 +236,48 @@ version stays 0.1.1 until release.
   returns request headers as `{k, v}` tuples, like the wrappers.
 - **Breaking**: `Webhooks.verify/4` takes `:now` (default
   `System.os_time(:second)`), `:tolerance_secs` and `:skip_freshness`, and
-  verifies the raw bytes; failures are `{:error, {:webhook, message}}`.
+  verifies the raw bytes. A delivery that cannot be trusted (header, key,
+  signature, timestamp) is `{:error, {:webhook, message}}`; a signed one
+  whose body is not the claimed type's shape is `{:error, {:shape, what}}`
+  (`{:json, _}` if not JSON), from `verify/4` and `Kicksdk.call/2` alike.
   New `Webhooks.public_key/1` reads Kick's key once.
 - Non-UTF-8 input returns `{:error, _}` instead of raising (webhook bodies
   verify byte for byte).
 - `Session` takes any integer `now`, `System.monotonic_time(:millisecond)`
   included; `deadline/1` answers on the caller's clock. A poisoned session
-  raises a clear `RuntimeError`; `closed/1` recovers it.
+  raises a clear `RuntimeError`; `closed/1` recovers it. A call on a session
+  that another process is calling at the same moment raises `RuntimeError`
+  ("busy") instead of blocking a scheduler until the other call ends.
 - New: `Realtime.retry_after_ms/1` (replaces the unreleased
   `should_reconnect?/1`), `Kicksdk.Realtime.Backoff` (with
-  `next_delay_jittered/2`).
-- **Breaking**: endpoints with an unknown key or a non-string value raise
+  `next_delay_jittered/2` and `next_delay_for/3`, whose struct carries the
+  terminal-close count in `terminal_closes`; `reset/1` clears it).
+- **Breaking**: the session's `"close"` action has `"code"`, `"reason"`,
+  `"terminal"` and `"retry_after_ms"` instead of `"reconnect"`; a terminal
+  close means "wait longer and come back as a new client", never "stop".
+- **Breaking**: endpoints with an unknown key (even with a `nil` value), a
+  non-string value, or a struct (`%URI{}`) instead of a map raise
   `ArgumentError`; HTTP statuses outside 0..65535 are `{:error, {:invalid, _}}`.
+  The `Kicksdk.endpoints` type says what is accepted: atom or string keys,
+  `nil` values for Kick's own.
 - NIFs whose work grows with the input run on a dirty scheduler above 4 KiB.
 - `config :rustler_precompiled, :force_build, kicksdk: true` works; changing
-  `KICKSDK_BUILD`, `KICKSDK_BASE_URL` or `TARGET_*` recompiles the module;
-  an unrecognised system architecture or a `TARGET_*` cross build falls back
-  to a source build instead of failing.
-- `examples/elixir/chat.exs` ticks, refreshes its token, and reconnects or
-  stops as the session says.
+  `KICKSDK_BUILD`, `KICKSDK_BASE_URL` or `TARGET_*` recompiles the module,
+  also after a cross build (whose NIF does not load on the build machine;
+  the check now lives in `Kicksdk.Native.Build`, which always loads). As a
+  dependency, Mix does not look: `mix deps.compile kicksdk --force`. An
+  unrecognised Unix system architecture or a `TARGET_*` target without a
+  precompiled NIF falls back to a source build instead of failing; Windows
+  (architecture `win32`) gets the precompiled NIF as before.
+- `KICKSDK_BASE_URL` without a path (`http://localhost:8080`) works: a `/`
+  is added (rustler_precompiled asked for `http://localhost:8080kicksdk_nif-…`).
+- `examples/elixir/chat.exs` follows KICK.md §6.1: ticks, refreshes its
+  token, reconnects after `Backoff.next_delay_for/3` of the close's
+  `retry_after_ms` (or of the socket's close code), comes back as a new
+  client (new client id, connection request and token) after a terminal
+  close, resets the backoff when the chat feed subscribes, and stops only
+  when told to (`Chat.stop/1`). Frames queued for a socket that dropped are not sent on the
+  next one.
 - Integers beyond 64 bits in Kick's JSON still arrive as floats (the core
   reads JSON without arbitrary precision); documented.
 

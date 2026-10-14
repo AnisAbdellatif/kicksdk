@@ -31,15 +31,18 @@ defmodule Kicksdk do
       `call/2`.
     * `reason` is `{:status, code, excerpt}` (Kick answered an error status),
       `{:shape, what}`, `{:json, message}`, `{:invalid, what}` (refused
-      before sending), `{:webhook, message}` (a delivery that does not
-      verify) or `{:call, message}` (`call/2` arguments that do not fit).
+      before sending), `{:webhook, message}` (a webhook delivery that cannot
+      be trusted; a signed one whose body is not its type's shape is
+      `{:shape, what}`, see `Kicksdk.Webhooks.verify/4`) or
+      `{:call, message}` (`call/2` arguments that do not fit).
     * An argument no call could use - endpoints with an unknown key or a
       value that is not a URL string, text that is not UTF-8 where a plain
       value is returned - raises `ArgumentError`.
 
   Every builder takes an optional `endpoints` map last, to point any part of
   Kick somewhere else (a simulator, a proxy): `%{api: …, id: …, website: …,
-  realtime: …}`, any subset (`nil` for Kick's own). Any other key raises:
+  realtime: …}`, any subset, keys as atoms or strings (`nil` for Kick's
+  own). Any other key raises, even with a `nil` value, and so does a struct:
   a typo must not quietly send the request to kick.com.
 
   Integers come back exact up to 64 bits. Kick sends no bigger ones; one in
@@ -61,8 +64,12 @@ defmodule Kicksdk do
   @typedoc "`{:ok, value}` or `{:error, reason}`."
   @type result(value) :: {:ok, value} | {:error, reason()}
 
-  @typedoc "Where Kick is: any subset of the four, or nil for Kick itself."
-  @type endpoints :: %{optional(:api | :id | :website | :realtime) => String.t()} | nil
+  @typedoc """
+  Where Kick is: any subset of the four keys, as atoms or strings, each a URL
+  or nil for Kick's own; or nil for Kick itself.
+  """
+  @type endpoints ::
+          %{optional(:api | :id | :website | :realtime | String.t()) => String.t() | nil} | nil
 
   @doc false
   # Requests come out of the NIF and dispatch with headers as two-element
@@ -127,26 +134,37 @@ defmodule Kicksdk do
 
   @endpoint_keys ~w(api id website realtime)
 
-  # The override checked, with string keys and without nil values.
+  # The override checked, with string keys and without nil values. Every key
+  # is checked, nil or not: a misspelt one must not pass for "Kick's own".
   defp endpoints!(nil), do: %{}
 
+  defp endpoints!(%_{} = struct),
+    do: raise(ArgumentError, "endpoints must be a map or nil, got a struct: #{inspect(struct)}")
+
   defp endpoints!(%{} = endpoints) do
-    for {key, url} <- endpoints, url != nil, into: %{} do
-      name = if is_atom(key) or is_binary(key), do: to_string(key)
-
-      if name not in @endpoint_keys,
-        do:
-          raise(
-            ArgumentError,
-            "endpoints: unknown key #{inspect(key)} (expected :api, :id, :website, :realtime)"
-          )
-
-      if not (is_binary(url) and String.valid?(url)),
-        do: raise(ArgumentError, "endpoints: #{inspect(key)} must be a URL string, got: #{inspect(url)}")
-
-      {name, url}
-    end
+    for {key, url} <- endpoints, endpoint!(key, url), into: %{}, do: {to_string(key), url}
   end
 
   defp endpoints!(other), do: raise(ArgumentError, "endpoints must be a map or nil, got: #{inspect(other)}")
+
+  # Whether to keep the entry: false for nil (Kick's own); raises for an
+  # unknown key or a value that is not a URL string.
+  defp endpoint!(key, url) do
+    name = if is_atom(key) or is_binary(key), do: to_string(key)
+
+    cond do
+      name not in @endpoint_keys ->
+        raise ArgumentError,
+              "endpoints: unknown key #{inspect(key)} (expected :api, :id, :website, :realtime)"
+
+      url == nil ->
+        false
+
+      is_binary(url) and String.valid?(url) ->
+        true
+
+      true ->
+        raise ArgumentError, "endpoints: #{inspect(key)} must be a URL string, got: #{inspect(url)}"
+    end
+  end
 end

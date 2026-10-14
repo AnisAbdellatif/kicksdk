@@ -42,7 +42,7 @@ use rustler::types::atom::Atom;
 use rustler::{Binary, Encoder, Env, NifResult, Resource, ResourceArc, Term};
 use serde::Serialize;
 use serde_json::Value;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 
 mod atoms {
     rustler::atoms! {
@@ -177,7 +177,8 @@ fn parsed<'a, T: Serialize>(
 
 /// The endpoints override: a JSON object with any of `api`, `id`, `website`,
 /// `realtime` as URL strings (null for the default). Anything else is
-/// raised: a typo must not quietly send the request to kick.com.
+/// raised, an unknown key even with a null value (as `dispatch` does): a
+/// typo must not quietly send the request to kick.com.
 fn endpoints(json: &[u8]) -> NifResult<Endpoints> {
     let mut e = Endpoints::default();
     if json.is_empty() {
@@ -186,21 +187,21 @@ fn endpoints(json: &[u8]) -> NifResult<Endpoints> {
     let given: serde_json::Map<String, Value> =
         serde_json::from_slice(json).map_err(|_| argument_error("endpoints must be a map of URL strings"))?;
     for (key, value) in given {
-        let url = match value {
-            Value::Null => continue,
-            Value::String(url) => url,
-            _ => return Err(argument_error(format!("endpoints: `{key}` must be a URL string"))),
-        };
-        e = match key.as_str() {
-            "api" => e.with_api(url),
-            "id" => e.with_id(url),
-            "website" => e.with_website(url),
-            "realtime" => e.with_realtime(url),
+        let set: fn(Endpoints, String) -> Endpoints = match key.as_str() {
+            "api" => Endpoints::with_api,
+            "id" => Endpoints::with_id,
+            "website" => Endpoints::with_website,
+            "realtime" => Endpoints::with_realtime,
             other => {
                 return Err(argument_error(format!(
                     "endpoints: unknown key `{other}` (expected api, id, website, realtime)"
                 )));
             }
+        };
+        e = match value {
+            Value::Null => e,
+            Value::String(url) => set(e, url),
+            _ => return Err(argument_error(format!("endpoints: `{key}` must be a URL string"))),
         };
     }
     Ok(e)
@@ -294,14 +295,22 @@ fn retry_after_ms(code: u16) -> u64 {
     realtime::retry_after_ms(code)
 }
 
-/// `realtime::Backoff` as three integers, `{initial_ms, max_ms, next_ms}`,
-/// so that Elixir keeps it as an immutable struct.
-type BackoffFields = (u64, u64, u64);
+/// `realtime::Backoff` as four integers, `{initial_ms, max_ms, next_ms,
+/// terminal_closes}` (its serde fields), so that Elixir keeps it as an
+/// immutable struct. Every call takes all four and returns all four: a field
+/// left out would be lost between calls (the terminal count, and with it the
+/// escalation from 5 to 30 minutes).
+type BackoffFields = (u64, u64, u64, u32);
 
 fn backoff(fields: BackoffFields) -> NifResult<realtime::Backoff> {
-    let (initial_ms, max_ms, next_ms) = fields;
-    serde_json::from_value(serde_json::json!({"initial_ms": initial_ms, "max_ms": max_ms, "next_ms": next_ms}))
-        .map_err(|e| runtime_error(format!("kicksdk: cannot rebuild a backoff: {e}")))
+    let (initial_ms, max_ms, next_ms, terminal_closes) = fields;
+    serde_json::from_value(serde_json::json!({
+        "initial_ms": initial_ms,
+        "max_ms": max_ms,
+        "next_ms": next_ms,
+        "terminal_closes": terminal_closes,
+    }))
+    .map_err(|e| runtime_error(format!("kicksdk: cannot rebuild a backoff: {e}")))
 }
 
 fn fields(b: &realtime::Backoff) -> NifResult<BackoffFields> {
@@ -309,7 +318,9 @@ fn fields(b: &realtime::Backoff) -> NifResult<BackoffFields> {
     let field = |k: &str| {
         v.get(k).and_then(Value::as_u64).ok_or_else(|| runtime_error(format!("kicksdk: no {k} in a backoff")))
     };
-    Ok((field("initial_ms")?, field("max_ms")?, field("next_ms")?))
+    let terminal_closes = u32::try_from(field("terminal_closes")?)
+        .map_err(|_| runtime_error("kicksdk: terminal_closes out of range in a backoff"))?;
+    Ok((field("initial_ms")?, field("max_ms")?, field("next_ms")?, terminal_closes))
 }
 
 #[rustler::nif]
@@ -317,22 +328,31 @@ fn backoff_new(initial_ms: u64, max_ms: u64) -> NifResult<BackoffFields> {
     fields(&realtime::Backoff::new(initial_ms, max_ms))
 }
 
-/// `{delay_ms, next_ms}`; `random`, from `[0, 1)`, spreads the delay.
+/// `{delay_ms, backoff}`; `random`, from `[0, 1)`, spreads the delay.
 #[rustler::nif]
-fn backoff_next(b: BackoffFields, random: Option<f64>) -> NifResult<(u64, u64)> {
+fn backoff_next(b: BackoffFields, random: Option<f64>) -> NifResult<(u64, BackoffFields)> {
     let mut b = backoff(b)?;
     let delay = match random {
         Some(r) => b.next_delay_jittered(r),
         None => b.next_delay(),
     };
-    Ok((delay, fields(&b)?.2))
+    Ok((delay, fields(&b)?))
+}
+
+/// `{delay_ms, backoff}` after a close that asks for at least
+/// `retry_after_ms` (0 for an ordinary drop).
+#[rustler::nif]
+fn backoff_next_for(b: BackoffFields, retry_after_ms: u64, random: f64) -> NifResult<(u64, BackoffFields)> {
+    let mut b = backoff(b)?;
+    let delay = b.next_delay_for(retry_after_ms, random);
+    Ok((delay, fields(&b)?))
 }
 
 #[rustler::nif]
-fn backoff_reset(b: BackoffFields) -> NifResult<u64> {
+fn backoff_reset(b: BackoffFields) -> NifResult<BackoffFields> {
     let mut b = backoff(b)?;
     b.reset();
-    Ok(fields(&b)?.2)
+    fields(&b)
 }
 
 /// A session and the clock it is driven by.
@@ -367,18 +387,38 @@ impl Resource for SessionResource {}
 const POISONED: &str = "kicksdk: this realtime session panicked in an earlier call and its state cannot be \
                         trusted; call Kicksdk.Realtime.Session.closed/1 to reset it, or start a new one";
 
+const BUSY: &str = "kicksdk: this realtime session is busy in a call from another process; drive a session from \
+                    one process only (the one that owns the socket)";
+
 /// The session, unless a panic in an earlier call poisoned it: its state may
 /// be half-changed then, so it is refused until `closed/1` resets it.
+///
+/// Never waits: a session is meant for one process, and a second one calling
+/// it at the same time would block its scheduler (a normal one, behind a
+/// dirty twin reading a big frame) for as long as the call takes. That is
+/// raised instead.
 fn lock(m: &Mutex<SessionState>) -> NifResult<MutexGuard<'_, SessionState>> {
-    m.lock().map_err(|_| runtime_error(POISONED))
+    try_session(m, false).map_err(runtime_error)
 }
 
 /// The session even if poisoned, for `closed/1`, which resets every part of
 /// its state that a connection uses; the lock is usable again afterwards.
-fn lock_to_reset(m: &Mutex<SessionState>) -> MutexGuard<'_, SessionState> {
-    let guard = m.lock().unwrap_or_else(PoisonError::into_inner);
-    m.clear_poison();
-    guard
+fn lock_to_reset(m: &Mutex<SessionState>) -> NifResult<MutexGuard<'_, SessionState>> {
+    try_session(m, true).map_err(runtime_error)
+}
+
+/// The lock without waiting, or why not; a poisoned one taken (and cleared)
+/// only to `reset`.
+fn try_session(m: &Mutex<SessionState>, reset: bool) -> Result<MutexGuard<'_, SessionState>, &'static str> {
+    match m.try_lock() {
+        Ok(guard) => Ok(guard),
+        Err(TryLockError::WouldBlock) => Err(BUSY),
+        Err(TryLockError::Poisoned(_)) if !reset => Err(POISONED),
+        Err(TryLockError::Poisoned(p)) => {
+            m.clear_poison();
+            Ok(p.into_inner())
+        }
+    }
 }
 
 /// Runs `f` on the session with `now` on the core's clock.
@@ -456,7 +496,7 @@ fn session_tick<'a>(env: Env<'a>, s: ResourceArc<SessionResource>, now: i64) -> 
 
 #[rustler::nif]
 fn session_closed<'a>(env: Env<'a>, s: ResourceArc<SessionResource>) -> NifResult<Term<'a>> {
-    term(env, &lock_to_reset(&s.0).session.closed())
+    term(env, &lock_to_reset(&s.0)?.session.closed())
 }
 
 /// On the host's clock, the one `now` is given in.
@@ -793,7 +833,8 @@ fn parse_webhook_dirty<'a>(env: Env<'a>, event_type: Binary<'a>, body: Binary<'a
 /// Any core function by name (`kicksdk::dispatch`), arguments as JSON:
 /// `{:ok, value}` or `{:error, reason}` shaped as everywhere else here, plus
 /// `{:call, message}` for a call that does not fit and `{:webhook, message}`
-/// for a delivery that does not verify.
+/// for a delivery that does not verify (one that verifies but is not its
+/// type's shape is `{:shape, _}`, the dispatch error's kind, like any other).
 #[rustler::nif]
 fn call<'a>(env: Env<'a>, name: Binary<'a>, args_json: Binary<'a>) -> NifResult<Term<'a>> {
     dispatch(env, &name, &args_json)
@@ -853,6 +894,18 @@ mod tests {
     }
 
     #[test]
+    fn a_backoff_keeps_its_terminal_count_across_calls() {
+        let mut b = backoff(fields(&realtime::Backoff::default()).unwrap()).unwrap();
+        assert_eq!(b.next_delay_for(300_000, 0.0), 300_000);
+        let carried = fields(&b).unwrap();
+        assert_eq!(carried.3, 1);
+        let mut back = backoff(carried).unwrap();
+        assert_eq!(back.next_delay_for(300_000, 0.0), 600_000);
+        back.reset();
+        assert_eq!(fields(&back).unwrap(), (1_000, 30_000, 1_000, 0));
+    }
+
+    #[test]
     fn a_poisoned_session_is_refused_until_reset() {
         let m = std::sync::Arc::new(Mutex::new(state()));
         let m2 = m.clone();
@@ -861,8 +914,18 @@ mod tests {
             panic!("poison it");
         })
         .join();
-        assert!(m.lock().is_err());
-        let _ = lock_to_reset(&m).session.closed();
-        assert!(m.lock().is_ok());
+        assert_eq!(try_session(&m, false).err(), Some(POISONED));
+        let _ = try_session(&m, true).unwrap().session.closed();
+        assert!(try_session(&m, false).is_ok());
+    }
+
+    #[test]
+    fn a_busy_session_is_refused_instead_of_waited_for() {
+        let m = Mutex::new(state());
+        let held = try_session(&m, false).unwrap();
+        assert_eq!(try_session(&m, false).err(), Some(BUSY));
+        assert_eq!(try_session(&m, true).err(), Some(BUSY));
+        drop(held);
+        assert!(try_session(&m, false).is_ok());
     }
 }

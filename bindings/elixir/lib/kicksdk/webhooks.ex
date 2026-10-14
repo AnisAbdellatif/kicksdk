@@ -38,9 +38,18 @@ defmodule Kicksdk.Webhooks do
 
   @doc """
   Verifies and reads a delivery: `{:ok, %{"headers" => headers, "event" =>
-  event}}`, `{:error, {:webhook, message}}` when the signature, a header or
-  the timestamp is wrong, or `{:error, {:shape, what}}` when a signed body is
-  not the shape of its type.
+  event}}`, or one of:
+
+    * `{:error, {:webhook, message}}` - the delivery cannot be trusted: a
+      missing or malformed header, an unreadable key, a signature that does
+      not match, a stale timestamp. Answer it with an error status.
+    * `{:error, {:shape, what}}` - the signature is good, but the body is not
+      the shape of the type its (unsigned) `Kick-Event-Type` header claims:
+      a delivery re-typed by whoever relayed it, or a change on Kick's side.
+    * `{:error, {:json, message}}` - the signature is good, but the body is
+      not JSON.
+
+  `Kicksdk.call("webhooks.verify", …)` fails the same three ways.
 
   `key` is from `public_key/1` (or a PEM, read on every call). `body` is the
   raw body, byte for byte, UTF-8 or not: read it before any parser touches

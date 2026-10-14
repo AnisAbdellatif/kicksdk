@@ -36,9 +36,42 @@ defmodule Kicksdk.Realtime.BackoffTest do
     assert %Backoff{initial_ms: 500, max_ms: 500} = Backoff.new(500, 100)
   end
 
-  test "close codes: Centrifugo's terminal ranges say do not reconnect" do
-    for code <- [1000, 1006, 3000, 3499, 4000, 4499], do: assert(Realtime.should_reconnect?(code))
-    for code <- [3500, 3501, 3999, 4500, 4999], do: refute(Realtime.should_reconnect?(code))
-    assert_raise FunctionClauseError, fn -> Realtime.should_reconnect?(70_000) end
+  test "terminal closes wait long, longer each time in a row, until reset" do
+    b = Backoff.new()
+    expected = [300_000, 600_000, 1_200_000, 1_800_000, 1_800_000]
+    assert delays(b, 5, &Backoff.next_delay_for(&1, 300_000, 0.0)) == expected
+
+    # The count is carried in the struct from call to call.
+    {_, b} = Backoff.next_delay_for(b, 300_000, 0.0)
+    assert %Backoff{terminal_closes: 1} = b
+    {_, b} = Backoff.next_delay_for(b, 300_000, 0.0)
+    assert {1_200_000, _} = Backoff.next_delay_for(b, 300_000, 0.0)
+
+    # reset/1 ends both stages.
+    assert %Backoff{terminal_closes: 0} = b = Backoff.reset(b)
+    assert {300_000, _} = Backoff.next_delay_for(b, 300_000, 0.0)
+
+    # Spread by up to a quarter; an eighth for 0.5.
+    assert {337_500, _} = Backoff.next_delay_for(Backoff.new(), 300_000, 0.5)
+
+    for _ <- 1..100 do
+      {d, _} = Backoff.next_delay_for(Backoff.new(), 300_000, :rand.uniform())
+      assert d in 300_000..375_000
+    end
+  end
+
+  test "next_delay_for/3 with 0 is the ordinary stage, which a terminal close leaves alone" do
+    assert {500, _} = Backoff.next_delay_for(Backoff.new(), 0, 0.0)
+    assert delays(Backoff.new(), 3, &Backoff.next_delay_for(&1, 0, 0.0)) == [500, 1_000, 2_000]
+
+    {_, b} = Backoff.next_delay_for(Backoff.new(), 0, 0.0)
+    {_, b} = Backoff.next_delay_for(b, 300_000, 0.0)
+    assert {2_000, _} = Backoff.next_delay(b)
+  end
+
+  test "retry_after_ms/1: Centrifugo's terminal close codes wait 5 minutes, others none" do
+    for code <- [1000, 1006, 3000, 3499, 4000, 4499], do: assert(Realtime.retry_after_ms(code) == 0)
+    for code <- [3500, 3501, 3999, 4500, 4999], do: assert(Realtime.retry_after_ms(code) == 300_000)
+    assert_raise FunctionClauseError, fn -> Realtime.retry_after_ms(70_000) end
   end
 end
