@@ -14,7 +14,12 @@ defmodule Kicksdk.MixProject do
       description:
         "Kick (kick.com) without the I/O: requests, parsers, the realtime chat protocol and webhook verification, from one Rust core",
       package: package(),
-      docs: [main: "Kicksdk", source_url: @source, source_ref: "v#{@version}"]
+      docs: [main: "Kicksdk", source_url: @source, source_ref: "v#{@version}"],
+      dialyzer: [
+        plt_local_path: "_build/plts",
+        plt_add_apps: [:mix],
+        flags: [:error_handling, :extra_return, :missing_return, :underspecs]
+      ]
     ]
   end
 
@@ -25,7 +30,9 @@ defmodule Kicksdk.MixProject do
       {:rustler_precompiled, "~> 0.10.0"},
       # Only to build from source; precompiled NIFs need nothing.
       {:rustler, "~> 0.38.0", optional: true, runtime: false},
-      {:ex_doc, "~> 0.38", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.38", only: :dev, runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
   end
 

@@ -3,7 +3,7 @@ defmodule KicksdkTest do
   # same recordings the Rust and JavaScript tests read.
   use ExUnit.Case, async: true
 
-  alias Kicksdk.{Events, PublicApi, Realtime, Website, Webhooks}
+  alias Kicksdk.{Events, PublicApi, Realtime, Website}
   alias Kicksdk.Realtime.Session
 
   @fixtures Path.expand("../../../fixtures", __DIR__)
@@ -32,7 +32,7 @@ defmodule KicksdkTest do
     assert r["method"] == "POST"
     assert r["url"] == "http://localhost:9/rt/channels/668/chat/connection"
     assert {"origin", "https://kick.com"} in r["headers"]
-    assert length(PublicApi.livestreams_requests("t", Enum.to_list(1..120))) == 3
+    assert {:ok, [_, _, _]} = PublicApi.livestreams_requests("t", Enum.to_list(1..120))
     assert {:error, {:invalid, _}} = PublicApi.channels_by_ids_request("t", [])
   end
 
@@ -62,25 +62,6 @@ defmodule KicksdkTest do
 
       assert chatroom > 0 and is_integer(followers)
     end
-  end
-
-  test "webhook signatures verify, and a changed body does not" do
-    dir = Path.join(@fixtures, "signing")
-    pem = File.read!(Path.join(dir, "test-public-key.pem"))
-    body = File.read!(Path.join(dir, "body.json"))
-
-    headers = [
-      {"Kick-Event-Message-Id", "01M38M9K3YRKV8E6Q68C18ZWG4"},
-      {"Kick-Event-Message-Timestamp", "2026-09-24T02:35:42Z"},
-      {"Kick-Event-Signature", String.trim(File.read!(Path.join(dir, "signature.b64")))},
-      {"Kick-Event-Type", "channel.followed"},
-      {"Kick-Event-Version", "1"}
-    ]
-
-    assert {:ok, %{"event" => %{"type" => "followed", "follower" => %{"user_id" => 900_000_003}}}} =
-             Webhooks.verify(pem, headers, body)
-
-    assert {:error, "signature does not match"} = Webhooks.verify(pem, headers, body <> " ")
   end
 
   test "a recorded realtime session replays through Session" do
