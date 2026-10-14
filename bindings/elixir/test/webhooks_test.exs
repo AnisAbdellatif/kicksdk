@@ -66,7 +66,7 @@ defmodule Kicksdk.WebhooksTest do
     private = :public_key.generate_key({:rsa, 2048, 65_537})
     {:RSAPrivateKey, _, n, e, _, _, _, _, _, _, _} = private
     pem = :public_key.pem_encode([:public_key.pem_entry_encode(:SubjectPublicKeyInfo, {:RSAPublicKey, n, e})])
-    body = <<"{\"broadcaster\":{\"user_id\":1},\"follower\":{\"username\":\"", 255, "\"}}">>
+    body = ~s({"broadcaster":{"user_id":1},"follower":{"username":") <> <<255>> <> ~s("}})
     sign = fn b -> Base.encode64(:public_key.sign("#{@id}.#{@timestamp}." <> b, :sha256, private)) end
 
     # The signature holds over the raw bytes; the body is then not JSON.

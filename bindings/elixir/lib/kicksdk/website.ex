@@ -33,7 +33,7 @@ defmodule Kicksdk.Website do
   def history_request(channel_id, endpoints \\ nil),
     do: request(Native.history_request(encode_endpoints(endpoints), channel_id))
 
-  @doc "Reads a history answer: `%{\"messages\" => […], \"pinned\" => event | nil}`."
+  @doc ~s(Reads a history answer: `%{"messages" => […], "pinned" => event | nil}`.)
   @spec parse_history(integer(), binary()) :: Kicksdk.result(map())
   def parse_history(status, body),
     do:

@@ -20,6 +20,9 @@ defmodule Kicksdk.Webhooks do
   `verify/4`. See `docs/KICK.md` §4.
   """
 
+  # The NIF takes seconds as u64.
+  @max_secs 18_446_744_073_709_551_615
+
   @typedoc "Kick's public key, read once by `public_key/1`."
   @type public_key :: reference()
 
@@ -64,22 +67,19 @@ defmodule Kicksdk.Webhooks do
 
   defp freshness(opts) do
     case {opts[:skip_freshness], opts[:now], opts[:tolerance_secs]} do
-      {true, nil, _} ->
-        :skip
-
-      {true, _, _} ->
-        raise ArgumentError, "pass :now or skip_freshness: true, not both"
-
-      {false, now, tolerance}
-      when (is_nil(now) or (is_integer(now) and now >= 0)) and is_integer(tolerance) and
-             tolerance >= 0 ->
-        {now || System.os_time(:second), tolerance}
-
-      _ ->
-        raise ArgumentError,
-              ":now and :tolerance_secs must be non-negative integers (seconds), :skip_freshness a boolean"
+      {true, nil, _} -> :skip
+      {true, _, _} -> raise ArgumentError, "pass :now or skip_freshness: true, not both"
+      {false, nil, tolerance} -> freshness(System.os_time(:second), tolerance)
+      {false, now, tolerance} -> freshness(now, tolerance)
+      _ -> raise ArgumentError, ":skip_freshness must be a boolean"
     end
   end
+
+  defp freshness(now, tolerance) when now in 0..@max_secs//1 and tolerance in 0..@max_secs//1,
+    do: {now, tolerance}
+
+  defp freshness(_now, _tolerance),
+    do: raise(ArgumentError, ":now and :tolerance_secs must be non-negative integers (seconds)")
 
   @doc """
   Reads a body (raw bytes) by its type, without checking anything: `{:ok,

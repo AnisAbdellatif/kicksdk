@@ -26,7 +26,7 @@ defmodule Kicksdk.Events do
         else: Native.parse_event(name, data_json)
       )
 
-  @doc "Splits message text into `\"text\"` and `\"emote\"` parts. `ArgumentError` if it is not UTF-8."
+  @doc ~s(Splits message text into `"text"` and `"emote"` parts. `ArgumentError` if it is not UTF-8.)
   @spec parse_content(String.t(), boolean()) :: [map()]
   def parse_content(text, combine \\ false),
     do:

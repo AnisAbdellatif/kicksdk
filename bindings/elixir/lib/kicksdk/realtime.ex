@@ -47,7 +47,7 @@ defmodule Kicksdk.Realtime do
   def connection_request(client_id, endpoints \\ nil),
     do: request(Kicksdk.Native.connection_request(encode_endpoints(endpoints), client_id))
 
-  @doc "Reads a connection answer: `{:ok, [%{\"provider\" => \"centrifugo\", \"url\" => url} | …]}`."
+  @doc ~s(Reads a connection answer: `{:ok, [%{"provider" => "centrifugo", "url" => url} | …]}`.)
   @spec parse_connection(integer(), binary()) :: Kicksdk.result([map()])
   def parse_connection(status, body),
     do:
