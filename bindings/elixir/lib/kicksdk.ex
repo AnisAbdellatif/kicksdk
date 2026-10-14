@@ -20,42 +20,92 @@ defmodule Kicksdk do
   data, and atom keys from it would let Kick grow the atom table.
 
   A request is `%{"method" => "GET" | "POST" | "DELETE", "url" => url,
-  "headers" => [{name, value}], "body" => binary | nil}`. A parser takes the
-  status and body and returns `{:ok, value}` or `{:error, reason}`, where
-  reason is `{:status, code, excerpt}`, `{:shape, what}`, `{:json, message}` or
-  `{:invalid, what}`.
+  "headers" => [{name, value}], "body" => binary | nil}`.
 
-  Every function takes an optional `endpoints` map last, to point any part of
+  One convention throughout:
+
+    * A builder that cannot fail returns the request (`Kicksdk.Realtime.token_request/2`).
+    * A builder that can refuse its arguments (a slug that is `..`, a token
+      with a line break, a timeout over a week, text that is not UTF-8)
+      returns `{:ok, request}` or `{:error, reason}`, as do parsers and
+      `call/2`.
+    * `reason` is `{:status, code, excerpt}` (Kick answered an error status),
+      `{:shape, what}`, `{:json, message}`, `{:invalid, what}` (refused
+      before sending), `{:webhook, message}` (a delivery that does not
+      verify) or `{:call, message}` (`call/2` arguments that do not fit).
+    * An argument no call could use - text that is not UTF-8 where a plain
+      value is returned - raises `ArgumentError`.
+
+  Every builder takes an optional `endpoints` map last, to point any part of
   Kick somewhere else (a simulator, a proxy): `%{api: …, id: …, website: …,
   realtime: …}`, any subset.
+
+  Integers come back exact up to 64 bits. Kick sends no bigger ones; one in
+  its data would come back as a float, as the Rust core reads it.
   """
 
+  @typedoc "A request for your HTTP client."
+  @type request :: %{required(String.t()) => term()}
+
+  @typedoc "Why a call failed."
+  @type reason ::
+          {:status, non_neg_integer(), String.t()}
+          | {:shape, String.t()}
+          | {:json, String.t()}
+          | {:invalid, String.t()}
+          | {:webhook, String.t()}
+          | {:call, String.t()}
+
+  @typedoc "`{:ok, value}` or `{:error, reason}`."
+  @type result(value) :: {:ok, value} | {:error, reason()}
+
+  @typedoc "Where Kick is: any subset of the four, or nil for Kick itself."
+  @type endpoints :: %{optional(:api | :id | :website | :realtime) => String.t()} | nil
+
   @doc false
-  # Requests come out of the NIF with headers as two-element lists.
+  # Requests come out of the NIF and dispatch with headers as two-element
+  # lists; they go out with tuples.
   def request({:ok, r}), do: {:ok, request(r)}
   def request({:error, _} = e), do: e
   def request(list) when is_list(list), do: Enum.map(list, &request/1)
 
-  def request(%{"headers" => headers} = r),
+  def request(%{"method" => _, "url" => _, "headers" => headers} = r) when is_list(headers),
     do: %{r | "headers" => Enum.map(headers, fn [k, v] -> {k, v} end)}
+
+  def request(other), do: other
 
   @doc """
   Calls any core function by name (`kicksdk::dispatch`), e.g.
   `Kicksdk.call("website.channel_request", %{slug: "somechannel"})`. The modules here
   wrap the common ones; this reaches every one.
+
+  Arguments are encoded as JSON, so their text must be UTF-8 (`webhooks.*`
+  take a body that is not as `body_base64`); anything that does not encode is
+  `{:error, {:call, message}}`. A request in the result has its headers as
+  `{name, value}` tuples, as everywhere else.
   """
-  @spec call(String.t(), map()) :: {:ok, term()} | {:error, term()}
-  def call(name, args \\ %{}), do: Kicksdk.Native.call(name, JSON.encode!(args))
+  @spec call(String.t(), map()) :: result(term())
+  def call(name, args \\ %{}) when is_binary(name) and is_map(args) do
+    case encode(args) do
+      {:ok, json} -> request(Kicksdk.Native.call(name, json))
+      {:error, _} = e -> e
+    end
+  end
+
+  defp encode(args) do
+    {:ok, JSON.encode!(args)}
+  rescue
+    e -> {:error, {:call, "the arguments do not encode as JSON: " <> describe(e)}}
+  end
+
+  defp describe(%ErlangError{original: {:invalid_byte, byte}}), do: "a string is not UTF-8 (byte #{byte})"
+  defp describe(e), do: Exception.message(e)
 
   @doc false
-  # A request builder through call/2: the request, or an error as raised.
+  # A request builder through call/2.
   def call_request(name, args, endpoints) do
     args = if endpoints, do: Map.put(args, :endpoints, endpoints), else: args
-
-    case call(name, args) do
-      {:ok, r} -> request(r)
-      {:error, reason} -> {:error, reason}
-    end
+    call(name, args)
   end
 
   @doc false

@@ -4,28 +4,79 @@
 //! Values cross the way JSON decodes in Elixir: maps with **string keys**,
 //! lists, binaries, numbers, booleans and `nil`. Not atoms: much of what comes
 //! back is Kick's own data, and turning its keys into atoms would let Kick
-//! grow the atom table without limit. `{:ok, _}` / `{:error, _}` where Kick's
-//! answer can be refused. JSON arguments (the endpoints, a message to pin)
-//! arrive already encoded by the Elixir side.
+//! grow the atom table without limit. JSON arguments (the endpoints, `call`'s
+//! arguments) arrive already encoded by the Elixir side.
+//!
+//! Integers come back exact up to 64 bits (`i64` and `u64`). The core reads
+//! JSON without arbitrary precision, so a bigger integer in Kick's data (Kick
+//! sends none) is already a float when it gets here, and comes back as one.
+//!
+//! Text arrives as binaries, whatever they hold. What can fail on the data
+//! returns `{:ok, value}` or `{:error, reason}`, and text that is not UTF-8
+//! or a status out of range is one more such failure. What returns a plain
+//! value raises instead: `ArgumentError` for an argument it cannot use,
+//! `RuntimeError` for a session that a panic left unusable.
 //!
 //! Every NIF here returns in microseconds - no I/O, no waiting - so none needs
 //! a dirty scheduler. Webhook verification (one RSA public-key operation) is
 //! the slowest, at well under a millisecond.
 
+// `|s, b| website::parse_history(s, b)` rather than the bare path: the API
+// table (scripts/docs/api_table.py) finds the core function each NIF calls
+// by `module::function(`.
+#![allow(clippy::redundant_closure)]
+
 use kicksdk::http::Endpoints;
 use kicksdk::ids::{ChannelId, ChatroomId, UserId};
 use kicksdk::{content, events, public_api, realtime, webhooks, website};
-use rustler::{Encoder, Env, NifResult, Resource, ResourceArc, Term};
+use rustler::types::atom::Atom;
+use rustler::{Binary, Encoder, Env, NifResult, Resource, ResourceArc, Term};
 use serde::Serialize;
 use serde_json::Value;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 mod atoms {
-    rustler::atoms! { ok, error, status, shape, json, invalid }
+    rustler::atoms! {
+        ok, error, status, shape, json, invalid, call,
+        struct_ = "__struct__",
+        exception = "__exception__",
+        message,
+        argument_error = "Elixir.ArgumentError",
+        runtime_error = "Elixir.RuntimeError",
+    }
 }
 
+// ---- Conversions ---------------------------------------------------------------
+
+/// An Elixir exception, raised from a NIF: `%ArgumentError{message: …}`.
+struct Exception {
+    module: Atom,
+    message: String,
+}
+
+impl Encoder for Exception {
+    fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
+        let map = rustler::types::map::map_new(env);
+        map.map_put(atoms::struct_(), self.module)
+            .and_then(|m| m.map_put(atoms::exception(), true))
+            .and_then(|m| m.map_put(atoms::message(), self.message.as_str()))
+            .unwrap_or(map)
+    }
+}
+
+fn argument_error(message: impl Into<String>) -> rustler::Error {
+    rustler::Error::RaiseTerm(Box::new(Exception { module: atoms::argument_error(), message: message.into() }))
+}
+
+fn runtime_error(message: impl Into<String>) -> rustler::Error {
+    rustler::Error::RaiseTerm(Box::new(Exception { module: atoms::runtime_error(), message: message.into() }))
+}
+
+/// Any value as terms. It goes through `serde_json::Value`, which cannot
+/// fail for the core's types; if it ever did, that is raised, never returned
+/// as an `{:error, _}` where the caller expects a list or a map.
 fn term<'a, T: Serialize + ?Sized>(env: Env<'a>, v: &T) -> NifResult<Term<'a>> {
-    let value = serde_json::to_value(v).map_err(|e| rustler::Error::Term(Box::new(e.to_string())))?;
+    let value = serde_json::to_value(v).map_err(|e| runtime_error(format!("kicksdk: cannot convert a value: {e}")))?;
     Ok(encode(env, &value))
 }
 
@@ -36,6 +87,8 @@ fn encode<'a>(env: Env<'a>, v: &Value) -> Term<'a> {
         Value::Number(n) => match (n.as_i64(), n.as_u64()) {
             (Some(i), _) => i.encode(env),
             (None, Some(u)) => u.encode(env),
+            // A float, or an integer beyond 64 bits, which serde_json has
+            // already read as a float (see the module docs).
             _ => n.as_f64().unwrap_or(0.0).encode(env),
         },
         Value::String(s) => s.encode(env),
@@ -43,6 +96,7 @@ fn encode<'a>(env: Env<'a>, v: &Value) -> Term<'a> {
         Value::Object(map) => {
             let keys: Vec<Term<'a>> = map.keys().map(|k| k.encode(env)).collect();
             let values: Vec<Term<'a>> = map.values().map(|x| encode(env, x)).collect();
+            // The keys of a JSON object are distinct, so this cannot fail.
             Term::map_from_term_arrays(env, &keys, &values).unwrap_or_else(|_| rustler::types::atom::nil().encode(env))
         }
     }
@@ -59,12 +113,6 @@ fn error_term<'a>(env: Env<'a>, e: &kicksdk::Error) -> Term<'a> {
     }
 }
 
-/// Arguments the core refused before building a request: raised, so a
-/// builder's success value keeps its shape.
-fn raise(e: kicksdk::Error) -> rustler::Error {
-    rustler::Error::RaiseTerm(Box::new((atoms::invalid(), e.to_string())))
-}
-
 /// `{:ok, value}` or `{:error, reason}`.
 fn result<'a, T: Serialize>(env: Env<'a>, r: Result<T, kicksdk::Error>) -> NifResult<Term<'a>> {
     Ok(match r {
@@ -73,12 +121,57 @@ fn result<'a, T: Serialize>(env: Env<'a>, r: Result<T, kicksdk::Error>) -> NifRe
     })
 }
 
-fn endpoints(json: &str) -> NifResult<Endpoints> {
+/// Text from a binary, refused (`{:invalid, _}`) when it is not UTF-8.
+fn utf8<'b>(b: &'b [u8], what: &str) -> Result<&'b str, kicksdk::Error> {
+    std::str::from_utf8(b).map_err(|_| kicksdk::Error::Invalid(format!("{what} is not UTF-8")))
+}
+
+/// Text for a function that returns a plain value: raised when not UTF-8.
+fn text<'b>(b: &'b [u8], what: &str) -> NifResult<&'b str> {
+    utf8(b, what).map_err(|e| argument_error(e.to_string()))
+}
+
+fn texts(list: &[Binary], what: &str) -> Result<Vec<String>, kicksdk::Error> {
+    list.iter().map(|b| utf8(b.as_slice(), what).map(str::to_owned)).collect()
+}
+
+/// An HTTP status as the core takes it: an integer from 0 to 65535, never
+/// wrapped.
+fn http_status(t: Term) -> Result<u16, kicksdk::Error> {
+    t.decode::<i64>()
+        .ok()
+        .and_then(|s| u16::try_from(s).ok())
+        .ok_or_else(|| kicksdk::Error::Invalid("the status must be an integer from 0 to 65535".into()))
+}
+
+/// A parser over `(status, body)`. A body that is not UTF-8 is not JSON
+/// either, so it fails as `{:json, _}` - unless Kick answered an error
+/// status, which says more and keeps its excerpt.
+fn parsed<'a, T: Serialize>(
+    env: Env<'a>,
+    status: Term<'a>,
+    body: &[u8],
+    f: impl FnOnce(u16, &str) -> Result<T, kicksdk::Error>,
+) -> NifResult<Term<'a>> {
+    let status = match http_status(status) {
+        Ok(s) => s,
+        Err(e) => return result::<()>(env, Err(e)),
+    };
+    match std::str::from_utf8(body) {
+        Ok(text) => result(env, f(status, text)),
+        Err(_) => match f(status, &String::from_utf8_lossy(body)) {
+            Err(e @ kicksdk::Error::Status { .. }) => result::<()>(env, Err(e)),
+            _ => Ok((atoms::error(), (atoms::json(), "the body is not UTF-8")).encode(env)),
+        },
+    }
+}
+
+fn endpoints(json: &[u8]) -> NifResult<Endpoints> {
     if json.is_empty() {
         return Ok(Endpoints::default());
     }
     let mut base = serde_json::to_value(Endpoints::default()).unwrap();
-    let given: serde_json::Value = serde_json::from_str(json).map_err(|_| rustler::Error::BadArg)?;
+    let given: serde_json::Value = serde_json::from_slice(json).map_err(|_| rustler::Error::BadArg)?;
     if let (Some(b), Some(g)) = (base.as_object_mut(), given.as_object()) {
         for (k, v) in g {
             b.insert(k.clone(), v.clone());
@@ -87,28 +180,25 @@ fn endpoints(json: &str) -> NifResult<Endpoints> {
     serde_json::from_value(base).map_err(|_| rustler::Error::BadArg)
 }
 
-fn json_value(text: &str) -> NifResult<serde_json::Value> {
-    serde_json::from_str(text).map_err(|_| rustler::Error::BadArg)
-}
-
 // ---- Events and text -------------------------------------------------------
 
 #[rustler::nif]
-fn parse_event<'a>(env: Env<'a>, name: &str, data_json: &str) -> NifResult<Term<'a>> {
+fn parse_event<'a>(env: Env<'a>, name: Binary<'a>, data: Binary<'a>) -> NifResult<Term<'a>> {
     // Kick's data is usually a JSON string inside the JSON; the caller may
-    // hand over either that string's content or the outer value.
-    let data = serde_json::from_str(data_json).unwrap_or_else(|_| serde_json::Value::String(data_json.to_owned()));
-    term(env, &events::parse(name, &data))
+    // hand over either that string's content or the outer value. Text that
+    // is not JSON (or not UTF-8) is read as text.
+    let data = serde_json::from_slice(&data).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&data).into()));
+    term(env, &events::parse(text(&name, "the event name")?, &data))
 }
 
 #[rustler::nif]
-fn parse_content<'a>(env: Env<'a>, text: &str, combine: bool) -> NifResult<Term<'a>> {
-    term(env, &content::parse(text, combine))
+fn parse_content<'a>(env: Env<'a>, message: Binary<'a>, combine: bool) -> NifResult<Term<'a>> {
+    term(env, &content::parse(text(&message, "the message")?, combine))
 }
 
 #[rustler::nif]
-fn emote_url(id: &str) -> NifResult<String> {
-    content::emote_url(id).map_err(|_| rustler::Error::BadArg)
+fn emote_url<'a>(env: Env<'a>, id: Binary<'a>) -> NifResult<Term<'a>> {
+    result(env, utf8(&id, "the emote id").and_then(|id| content::emote_url(id)))
 }
 
 // ---- Realtime ----------------------------------------------------------------
@@ -119,28 +209,34 @@ fn chat_channels(chatroom: u64, channel: Option<u64>) -> Vec<String> {
 }
 
 #[rustler::nif]
-fn chat_connection_request<'a>(env: Env<'a>, e: &str, channel: u64, client_id: &str) -> NifResult<Term<'a>> {
-    term(env, &realtime::chat_connection_request(&endpoints(e)?, ChannelId(channel), client_id))
+fn chat_connection_request<'a>(
+    env: Env<'a>,
+    e: Binary<'a>,
+    channel: u64,
+    client_id: Binary<'a>,
+) -> NifResult<Term<'a>> {
+    let client_id = text(&client_id, "the client id")?;
+    term(env, &realtime::chat_connection_request(&endpoints(&e)?, ChannelId(channel), client_id))
 }
 
 #[rustler::nif]
-fn connection_request<'a>(env: Env<'a>, e: &str, client_id: &str) -> NifResult<Term<'a>> {
-    term(env, &realtime::connection_request(&endpoints(e)?, client_id))
+fn connection_request<'a>(env: Env<'a>, e: Binary<'a>, client_id: Binary<'a>) -> NifResult<Term<'a>> {
+    term(env, &realtime::connection_request(&endpoints(&e)?, text(&client_id, "the client id")?))
 }
 
 #[rustler::nif]
-fn parse_connection<'a>(env: Env<'a>, status: u16, body: &str) -> NifResult<Term<'a>> {
-    result(env, realtime::parse_connection(status, body))
+fn parse_connection<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| realtime::parse_connection(s, b))
 }
 
 #[rustler::nif]
-fn token_request<'a>(env: Env<'a>, e: &str, client_id: &str) -> NifResult<Term<'a>> {
-    term(env, &realtime::token_request(&endpoints(e)?, client_id))
+fn token_request<'a>(env: Env<'a>, e: Binary<'a>, client_id: Binary<'a>) -> NifResult<Term<'a>> {
+    term(env, &realtime::token_request(&endpoints(&e)?, text(&client_id, "the client id")?))
 }
 
 #[rustler::nif]
-fn parse_token<'a>(env: Env<'a>, status: u16, body: &str) -> NifResult<Term<'a>> {
-    result(env, realtime::parse_token(status, body))
+fn parse_token<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| realtime::parse_token(s, b))
 }
 
 struct SessionResource(Mutex<realtime::Session>);
@@ -148,12 +244,28 @@ struct SessionResource(Mutex<realtime::Session>);
 #[rustler::resource_impl]
 impl Resource for SessionResource {}
 
+const POISONED: &str = "kicksdk: this realtime session panicked in an earlier call and its state cannot be \
+                        trusted; call Kicksdk.Realtime.Session.closed/1 to reset it, or start a new one";
+
+/// The session, unless a panic in an earlier call poisoned it: its state may
+/// be half-changed then, so it is refused until `closed/1` resets it.
+fn lock(m: &Mutex<realtime::Session>) -> NifResult<MutexGuard<'_, realtime::Session>> {
+    m.lock().map_err(|_| runtime_error(POISONED))
+}
+
+/// The session even if poisoned, for `closed/1`, which resets every part of
+/// its state that a connection uses; the lock is usable again afterwards.
+fn lock_to_reset(m: &Mutex<realtime::Session>) -> MutexGuard<'_, realtime::Session> {
+    let guard = m.lock().unwrap_or_else(PoisonError::into_inner);
+    m.clear_poison();
+    guard
+}
+
 fn with<'a, F>(env: Env<'a>, s: &ResourceArc<SessionResource>, f: F) -> NifResult<Term<'a>>
 where
     F: FnOnce(&mut realtime::Session) -> Vec<realtime::Action>,
 {
-    let mut guard = s.0.lock().map_err(|_| rustler::Error::Atom("poisoned"))?;
-    term(env, &f(&mut guard))
+    term(env, &f(&mut *lock(&s.0)?))
 }
 
 #[rustler::nif]
@@ -162,17 +274,40 @@ fn session_new(channels: Vec<String>) -> ResourceArc<SessionResource> {
 }
 
 #[rustler::nif]
-fn session_open<'a>(env: Env<'a>, s: ResourceArc<SessionResource>, token: &str, now: u64) -> NifResult<Term<'a>> {
+fn session_open<'a>(env: Env<'a>, s: ResourceArc<SessionResource>, token: Binary<'a>, now: u64) -> NifResult<Term<'a>> {
+    let token = text(&token, "the token")?;
     with(env, &s, |x| x.open(token, now))
 }
 
+/// A frame is lines of JSON. A line that is not UTF-8 is skipped like one
+/// that is not JSON (the frame still counts as traffic).
 #[rustler::nif]
-fn session_receive<'a>(env: Env<'a>, s: ResourceArc<SessionResource>, text: &str, now: u64) -> NifResult<Term<'a>> {
-    with(env, &s, |x| x.receive(text, now))
+fn session_receive<'a>(
+    env: Env<'a>,
+    s: ResourceArc<SessionResource>,
+    frame: Binary<'a>,
+    now: u64,
+) -> NifResult<Term<'a>> {
+    let owned;
+    let frame = match std::str::from_utf8(&frame) {
+        Ok(f) => f,
+        Err(_) => {
+            owned =
+                frame.split(|b| *b == b'\n').filter_map(|l| std::str::from_utf8(l).ok()).collect::<Vec<_>>().join("\n");
+            &owned
+        }
+    };
+    with(env, &s, |x| x.receive(frame, now))
 }
 
 #[rustler::nif]
-fn session_refresh<'a>(env: Env<'a>, s: ResourceArc<SessionResource>, token: &str, now: u64) -> NifResult<Term<'a>> {
+fn session_refresh<'a>(
+    env: Env<'a>,
+    s: ResourceArc<SessionResource>,
+    token: Binary<'a>,
+    now: u64,
+) -> NifResult<Term<'a>> {
+    let token = text(&token, "the token")?;
     with(env, &s, |x| x.refresh(token, now))
 }
 
@@ -183,132 +318,177 @@ fn session_tick<'a>(env: Env<'a>, s: ResourceArc<SessionResource>, now: u64) -> 
 
 #[rustler::nif]
 fn session_closed<'a>(env: Env<'a>, s: ResourceArc<SessionResource>) -> NifResult<Term<'a>> {
-    with(env, &s, |x| x.closed())
+    term(env, &lock_to_reset(&s.0).closed())
 }
 
 #[rustler::nif]
-fn session_deadline(s: ResourceArc<SessionResource>) -> Option<u64> {
-    s.0.lock().ok().and_then(|x| x.deadline())
+fn session_deadline(s: ResourceArc<SessionResource>) -> NifResult<Option<u64>> {
+    Ok(lock(&s.0)?.deadline())
 }
 
 #[rustler::nif]
-fn session_subscribed(s: ResourceArc<SessionResource>, channel: &str) -> bool {
-    s.0.lock().map(|x| x.is_subscribed(channel)).unwrap_or(false)
+fn session_subscribed(s: ResourceArc<SessionResource>, channel: Binary) -> NifResult<bool> {
+    let channel = text(&channel, "the channel")?;
+    Ok(lock(&s.0)?.is_subscribed(channel))
 }
 
 #[rustler::nif]
-fn session_connected(s: ResourceArc<SessionResource>) -> bool {
-    s.0.lock().map(|x| x.is_connected()).unwrap_or(false)
+fn session_connected(s: ResourceArc<SessionResource>) -> NifResult<bool> {
+    Ok(lock(&s.0)?.is_connected())
 }
 
 // ---- Official API ------------------------------------------------------------
 
 #[rustler::nif]
-fn app_token_request<'a>(env: Env<'a>, e: &str, client_id: &str, secret: &str) -> NifResult<Term<'a>> {
-    term(env, &public_api::token_request(&endpoints(e)?, client_id, secret))
+fn app_token_request<'a>(
+    env: Env<'a>,
+    e: Binary<'a>,
+    client_id: Binary<'a>,
+    secret: Binary<'a>,
+) -> NifResult<Term<'a>> {
+    let (client_id, secret) = (text(&client_id, "the client id")?, text(&secret, "the client secret")?);
+    term(env, &public_api::token_request(&endpoints(&e)?, client_id, secret))
 }
 
 #[rustler::nif]
-fn parse_app_token<'a>(env: Env<'a>, status: u16, body: &str) -> NifResult<Term<'a>> {
-    result(env, public_api::parse_token(status, body))
+fn parse_app_token<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| public_api::parse_token(s, b))
 }
 
 #[rustler::nif]
-fn livestreams_requests<'a>(env: Env<'a>, e: &str, token: &str, ids: Vec<u64>) -> NifResult<Term<'a>> {
+fn livestreams_requests<'a>(env: Env<'a>, e: Binary<'a>, token: Binary<'a>, ids: Vec<u64>) -> NifResult<Term<'a>> {
     let ids: Vec<UserId> = ids.into_iter().map(UserId).collect();
-    term(env, &public_api::livestreams_requests(&endpoints(e)?, token, &ids).map_err(raise)?)
+    let e = endpoints(&e)?;
+    result(env, utf8(&token, "the token").and_then(|t| public_api::livestreams_requests(&e, t, &ids)))
 }
 
 #[rustler::nif]
-fn parse_livestreams<'a>(env: Env<'a>, status: u16, body: &str) -> NifResult<Term<'a>> {
-    result(env, public_api::parse_livestreams(status, body))
+fn parse_livestreams<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| public_api::parse_livestreams(s, b))
 }
 
 #[rustler::nif]
-fn channels_by_ids_request<'a>(env: Env<'a>, e: &str, token: &str, ids: Vec<u64>) -> NifResult<Term<'a>> {
+fn channels_by_ids_request<'a>(env: Env<'a>, e: Binary<'a>, token: Binary<'a>, ids: Vec<u64>) -> NifResult<Term<'a>> {
     let ids: Vec<UserId> = ids.into_iter().map(UserId).collect();
-    result(env, public_api::channels_by_ids_request(&endpoints(e)?, token, &ids))
+    let e = endpoints(&e)?;
+    result(env, utf8(&token, "the token").and_then(|t| public_api::channels_by_ids_request(&e, t, &ids)))
 }
 
 #[rustler::nif]
-fn channels_by_slugs_request<'a>(env: Env<'a>, e: &str, token: &str, slugs: Vec<String>) -> NifResult<Term<'a>> {
-    let refs: Vec<&str> = slugs.iter().map(String::as_str).collect();
-    result(env, public_api::channels_by_slugs_request(&endpoints(e)?, token, &refs))
+fn channels_by_slugs_request<'a>(
+    env: Env<'a>,
+    e: Binary<'a>,
+    token: Binary<'a>,
+    slugs: Vec<Binary<'a>>,
+) -> NifResult<Term<'a>> {
+    let e = endpoints(&e)?;
+    let r = utf8(&token, "the token").and_then(|t| {
+        let slugs = texts(&slugs, "a slug")?;
+        let refs: Vec<&str> = slugs.iter().map(String::as_str).collect();
+        public_api::channels_by_slugs_request(&e, t, &refs)
+    });
+    result(env, r)
 }
 
 #[rustler::nif]
-fn parse_channels<'a>(env: Env<'a>, status: u16, body: &str) -> NifResult<Term<'a>> {
-    result(env, public_api::parse_channels(status, body))
+fn parse_channels<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| public_api::parse_channels(s, b))
 }
 
 #[rustler::nif]
-fn public_key_request<'a>(env: Env<'a>, e: &str) -> NifResult<Term<'a>> {
-    term(env, &public_api::public_key_request(&endpoints(e)?))
+fn public_key_request<'a>(env: Env<'a>, e: Binary<'a>) -> NifResult<Term<'a>> {
+    term(env, &public_api::public_key_request(&endpoints(&e)?))
 }
 
 #[rustler::nif]
-fn parse_public_key<'a>(env: Env<'a>, status: u16, body: &str) -> NifResult<Term<'a>> {
-    result(env, public_api::parse_public_key(status, body))
+fn parse_public_key<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| public_api::parse_public_key(s, b))
 }
 
 #[rustler::nif]
 fn subscribe_request<'a>(
     env: Env<'a>,
-    e: &str,
-    token: &str,
+    e: Binary<'a>,
+    token: Binary<'a>,
     broadcaster: u64,
-    events: Vec<(String, u32)>,
+    events: Vec<(Binary<'a>, u32)>,
 ) -> NifResult<Term<'a>> {
-    let refs: Vec<(&str, u32)> = events.iter().map(|(n, v)| (n.as_str(), *v)).collect();
-    result(env, public_api::subscribe_request(&endpoints(e)?, token, UserId(broadcaster), &refs))
+    let e = endpoints(&e)?;
+    let r = utf8(&token, "the token").and_then(|t| {
+        let names = events.iter().map(|(n, _)| utf8(n, "an event name")).collect::<Result<Vec<_>, _>>()?;
+        let refs: Vec<(&str, u32)> = names.into_iter().zip(events.iter().map(|(_, v)| *v)).collect();
+        public_api::subscribe_request(&e, t, UserId(broadcaster), &refs)
+    });
+    result(env, r)
 }
 
 #[rustler::nif]
-fn subscriptions_request<'a>(env: Env<'a>, e: &str, token: &str) -> NifResult<Term<'a>> {
-    term(env, &public_api::subscriptions_request(&endpoints(e)?, token).map_err(raise)?)
+fn subscriptions_request<'a>(env: Env<'a>, e: Binary<'a>, token: Binary<'a>) -> NifResult<Term<'a>> {
+    let e = endpoints(&e)?;
+    result(env, utf8(&token, "the token").and_then(|t| public_api::subscriptions_request(&e, t)))
 }
 
 #[rustler::nif]
-fn parse_subscriptions<'a>(env: Env<'a>, status: u16, body: &str) -> NifResult<Term<'a>> {
-    result(env, public_api::parse_subscriptions(status, body))
+fn parse_subscriptions<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| public_api::parse_subscriptions(s, b))
 }
 
 #[rustler::nif]
-fn unsubscribe_requests<'a>(env: Env<'a>, e: &str, token: &str, ids: Vec<String>) -> NifResult<Term<'a>> {
-    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
-    term(env, &public_api::unsubscribe_requests(&endpoints(e)?, token, &refs).map_err(raise)?)
+fn unsubscribe_requests<'a>(
+    env: Env<'a>,
+    e: Binary<'a>,
+    token: Binary<'a>,
+    ids: Vec<Binary<'a>>,
+) -> NifResult<Term<'a>> {
+    let e = endpoints(&e)?;
+    let r = utf8(&token, "the token").and_then(|t| {
+        let ids = texts(&ids, "a subscription id")?;
+        let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        public_api::unsubscribe_requests(&e, t, &refs)
+    });
+    result(env, r)
 }
 
 // ---- Website API -------------------------------------------------------------
 
 #[rustler::nif]
-fn channel_request<'a>(env: Env<'a>, e: &str, slug: &str) -> NifResult<Term<'a>> {
-    term(env, &website::channel_request(&endpoints(e)?, slug).map_err(raise)?)
+fn channel_request<'a>(env: Env<'a>, e: Binary<'a>, slug: Binary<'a>) -> NifResult<Term<'a>> {
+    let e = endpoints(&e)?;
+    result(env, utf8(&slug, "the slug").and_then(|s| website::channel_request(&e, s)))
 }
 
 #[rustler::nif]
-fn parse_channel<'a>(env: Env<'a>, status: u16, body: &str) -> NifResult<Term<'a>> {
-    result(env, website::parse_channel(status, body))
+fn parse_channel<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| website::parse_channel(s, b))
 }
 
 #[rustler::nif]
-fn history_request<'a>(env: Env<'a>, e: &str, channel: u64) -> NifResult<Term<'a>> {
-    term(env, &website::history_request(&endpoints(e)?, ChannelId(channel)))
+fn history_request<'a>(env: Env<'a>, e: Binary<'a>, channel: u64) -> NifResult<Term<'a>> {
+    term(env, &website::history_request(&endpoints(&e)?, ChannelId(channel)))
 }
 
 #[rustler::nif]
-fn parse_history<'a>(env: Env<'a>, status: u16, body: &str) -> NifResult<Term<'a>> {
-    result(env, website::parse_history(status, body))
+fn parse_history<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| website::parse_history(s, b))
 }
 
 #[rustler::nif]
-fn channel_user_request<'a>(env: Env<'a>, e: &str, slug: &str, username: &str) -> NifResult<Term<'a>> {
-    term(env, &website::channel_user_request(&endpoints(e)?, slug, username).map_err(raise)?)
+fn channel_user_request<'a>(
+    env: Env<'a>,
+    e: Binary<'a>,
+    slug: Binary<'a>,
+    username: Binary<'a>,
+) -> NifResult<Term<'a>> {
+    let e = endpoints(&e)?;
+    let r = utf8(&slug, "the slug")
+        .and_then(|s| Ok((s, utf8(&username, "the username")?)))
+        .and_then(|(s, u)| website::channel_user_request(&e, s, u));
+    result(env, r)
 }
 
 #[rustler::nif]
-fn parse_channel_user<'a>(env: Env<'a>, status: u16, body: &str) -> NifResult<Term<'a>> {
-    result(env, website::parse_channel_user(status, body))
+fn parse_channel_user<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| website::parse_channel_user(s, b))
 }
 
 // ---- Webhooks ----------------------------------------------------------------
@@ -351,19 +531,30 @@ fn parse_webhook<'a>(env: Env<'a>, event_type: &str, body: &str) -> NifResult<Te
     })
 }
 
+// ---- Any function by name ------------------------------------------------------
+
 /// Any core function by name (`kicksdk::dispatch`), arguments as JSON:
 /// `{:ok, value}` or `{:error, reason}` shaped as everywhere else here, plus
 /// `{:call, message}` for a call that does not fit and `{:webhook, message}`
 /// for a delivery that does not verify.
 #[rustler::nif]
-fn call<'a>(env: Env<'a>, name: &str, args_json: &str) -> NifResult<Term<'a>> {
-    let args = if args_json.is_empty() { Value::Null } else { json_value(args_json)? };
+fn call<'a>(env: Env<'a>, name: Binary<'a>, args_json: Binary<'a>) -> NifResult<Term<'a>> {
+    let refuse = |message: &str| Ok((atoms::error(), (atoms::call(), message)).encode(env));
+    let Ok(name) = std::str::from_utf8(&name) else { return refuse("the function name is not UTF-8") };
+    let args = if args_json.is_empty() {
+        Value::Null
+    } else {
+        match serde_json::from_slice(&args_json) {
+            Ok(v) => v,
+            Err(_) => return refuse("the arguments are not JSON"),
+        }
+    };
     Ok(match kicksdk::dispatch::call(name, &args) {
         Ok(v) => (atoms::ok(), encode(env, &v)).encode(env),
         Err(e) => {
             let reason = match (e.kind, e.status) {
                 ("status", Some(status)) => (atoms::status(), status, e.message.as_str()).encode(env),
-                (kind, _) => (rustler::types::atom::Atom::from_str(env, kind)?, e.message.as_str()).encode(env),
+                (kind, _) => (Atom::from_str(env, kind)?, e.message.as_str()).encode(env),
             };
             (atoms::error(), reason).encode(env)
         }
@@ -371,3 +562,22 @@ fn call<'a>(env: Env<'a>, name: &str, args_json: &str) -> NifResult<Term<'a>> {
 }
 
 rustler::init!("Elixir.Kicksdk.Native");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_poisoned_session_is_refused_until_reset() {
+        let m = std::sync::Arc::new(Mutex::new(realtime::Session::new(realtime::SessionOptions::new(vec![]))));
+        let m2 = m.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = m2.lock().unwrap();
+            panic!("poison it");
+        })
+        .join();
+        assert!(m.lock().is_err());
+        let _ = lock_to_reset(&m).closed();
+        assert!(m.lock().is_ok());
+    }
+}

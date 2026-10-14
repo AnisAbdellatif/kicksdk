@@ -11,15 +11,19 @@ defmodule Kicksdk.Events do
   A `Kicksdk.Realtime.Session` already does this for every event it receives.
   """
 
-  @doc "Reads one event."
-  @spec parse(String.t(), String.t()) :: map()
+  @doc """
+  Reads one event. `data_json` that is not JSON (or not UTF-8) is read as
+  text, which gives an event with what could be read; the name must be
+  UTF-8 (else `ArgumentError`).
+  """
+  @spec parse(String.t(), binary()) :: map()
   def parse(name, data_json), do: Kicksdk.Native.parse_event(name, data_json)
 
-  @doc "Splits message text into `\"text\"` and `\"emote\"` parts."
+  @doc "Splits message text into `\"text\"` and `\"emote\"` parts. `ArgumentError` if it is not UTF-8."
   @spec parse_content(String.t(), boolean()) :: [map()]
   def parse_content(text, combine \\ false), do: Kicksdk.Native.parse_content(text, combine)
 
-  @doc "An emote's image URL."
-  @spec emote_url(String.t()) :: String.t()
+  @doc "An emote's image URL: `{:ok, url}`, or `{:error, {:invalid, what}}` for an id that is not digits."
+  @spec emote_url(String.t()) :: Kicksdk.result(String.t())
   def emote_url(id), do: Kicksdk.Native.emote_url(id)
 end

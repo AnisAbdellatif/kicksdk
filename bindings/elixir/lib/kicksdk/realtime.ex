@@ -19,6 +19,7 @@ defmodule Kicksdk.Realtime do
   @origin "https://kick.com"
 
   @doc "The Origin Kick's realtime server accepts."
+  @spec required_origin() :: String.t()
   def required_origin, do: @origin
 
   @doc """
@@ -32,20 +33,25 @@ defmodule Kicksdk.Realtime do
   def chat_channels(chatroom_id, channel_id \\ nil), do: Kicksdk.Native.chat_channels(chatroom_id, channel_id)
 
   @doc "Where a channel's chat is served."
+  @spec chat_connection_request(non_neg_integer(), String.t(), Kicksdk.endpoints()) :: Kicksdk.request()
   def chat_connection_request(channel_id, client_id, endpoints \\ nil),
     do: request(Kicksdk.Native.chat_connection_request(encode_endpoints(endpoints), channel_id, client_id))
 
   @doc "Where Kick's realtime is served in general."
+  @spec connection_request(String.t(), Kicksdk.endpoints()) :: Kicksdk.request()
   def connection_request(client_id, endpoints \\ nil),
     do: request(Kicksdk.Native.connection_request(encode_endpoints(endpoints), client_id))
 
   @doc "Reads a connection answer: `{:ok, [%{\"provider\" => \"centrifugo\", \"url\" => url} | …]}`."
+  @spec parse_connection(integer(), binary()) :: Kicksdk.result([map()])
   def parse_connection(status, body), do: Kicksdk.Native.parse_connection(status, body)
 
   @doc "A guest token request for `client_id`."
+  @spec token_request(String.t(), Kicksdk.endpoints()) :: Kicksdk.request()
   def token_request(client_id, endpoints \\ nil),
     do: request(Kicksdk.Native.token_request(encode_endpoints(endpoints), client_id))
 
   @doc "The token from a token answer."
+  @spec parse_token(integer(), binary()) :: Kicksdk.result(String.t())
   def parse_token(status, body), do: Kicksdk.Native.parse_token(status, body)
 end

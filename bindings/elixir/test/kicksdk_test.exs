@@ -32,7 +32,7 @@ defmodule KicksdkTest do
     assert r["method"] == "POST"
     assert r["url"] == "http://localhost:9/rt/channels/668/chat/connection"
     assert {"origin", "https://kick.com"} in r["headers"]
-    assert length(PublicApi.livestreams_requests("t", Enum.to_list(1..120))) == 3
+    assert {:ok, [_, _, _]} = PublicApi.livestreams_requests("t", Enum.to_list(1..120))
     assert {:error, {:invalid, _}} = PublicApi.channels_by_ids_request("t", [])
   end
 

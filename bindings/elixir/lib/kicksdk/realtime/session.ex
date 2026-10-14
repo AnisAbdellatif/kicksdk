@@ -28,6 +28,13 @@ defmodule Kicksdk.Realtime.Session do
   The session is a reference to native state; it is not safe to share between
   processes that call it concurrently in a meaningful order. Keep it in the
   process that owns the socket.
+
+  If a call ever panicked inside the NIF (a bug), the session's state can no
+  longer be trusted: every call but `closed/1` raises `RuntimeError` until
+  `closed/1` resets it.
+
+  A frame's lines that are not UTF-8 are skipped, like lines that are not
+  JSON. A token or feed name that is not UTF-8 raises `ArgumentError`.
   """
 
   @type t :: reference()
