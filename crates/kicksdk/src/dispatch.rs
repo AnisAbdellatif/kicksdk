@@ -161,7 +161,7 @@ pub fn call(name: &str, args: &Value) -> Out {
         }
         "public_api.livestreams_requests" => {
             let ids: Vec<UserId> = a.ids("user_ids")?.into_iter().map(UserId).collect();
-            to(public_api::livestreams_requests(&a.endpoints()?, a.str("token")?, &ids))
+            ok(public_api::livestreams_requests(&a.endpoints()?, a.str("token")?, &ids))
         }
         "public_api.top_livestreams_request" => {
             let sort = match a.opt_str("sort").unwrap_or("viewer_count") {
@@ -219,7 +219,7 @@ pub fn call(name: &str, args: &Value) -> Out {
                 &refs,
             ))
         }
-        "public_api.subscriptions_request" => to(public_api::subscriptions_request(&a.endpoints()?, a.str("token")?)),
+        "public_api.subscriptions_request" => ok(public_api::subscriptions_request(&a.endpoints()?, a.str("token")?)),
         "public_api.parse_subscriptions" => {
             let (s, b) = a.status_body()?;
             ok(public_api::parse_subscriptions(s, b))
@@ -227,10 +227,10 @@ pub fn call(name: &str, args: &Value) -> Out {
         "public_api.unsubscribe_requests" => {
             let ids = a.strings("ids")?;
             let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
-            to(public_api::unsubscribe_requests(&a.endpoints()?, a.str("token")?, &refs))
+            ok(public_api::unsubscribe_requests(&a.endpoints()?, a.str("token")?, &refs))
         }
 
-        "website.channel_request" => to(website::channel_request(&a.endpoints()?, a.str("slug")?)),
+        "website.channel_request" => ok(website::channel_request(&a.endpoints()?, a.str("slug")?)),
         "website.parse_channel" => {
             let (s, b) = a.status_body()?;
             ok(website::parse_channel(s, b))
@@ -241,19 +241,19 @@ pub fn call(name: &str, args: &Value) -> Out {
             ok(website::parse_history(s, b))
         }
         "website.channel_user_request" => {
-            to(website::channel_user_request(&a.endpoints()?, a.str("channel_slug")?, a.str("username")?))
+            ok(website::channel_user_request(&a.endpoints()?, a.str("channel_slug")?, a.str("username")?))
         }
         "website.parse_channel_user" => {
             let (s, b) = a.status_body()?;
             ok(website::parse_channel_user(s, b))
         }
-        "website.me_request" => to(website::me_request(&a.endpoints()?, a.str("session")?, a.str("channel_slug")?)),
+        "website.me_request" => ok(website::me_request(&a.endpoints()?, a.str("session")?, a.str("channel_slug")?)),
         "website.parse_me" => {
             let (s, b) = a.status_body()?;
             ok(website::parse_me(s, b))
         }
         "website.ban_request" => {
-            to(website::ban_request(&a.endpoints()?, a.str("session")?, a.str("channel_slug")?, a.str("username")?))
+            ok(website::ban_request(&a.endpoints()?, a.str("session")?, a.str("channel_slug")?, a.str("username")?))
         }
         "website.timeout_request" => ok(website::timeout_request(
             &a.endpoints()?,
@@ -263,9 +263,9 @@ pub fn call(name: &str, args: &Value) -> Out {
             a.u32("minutes")?,
         )),
         "website.unban_request" => {
-            to(website::unban_request(&a.endpoints()?, a.str("session")?, a.str("channel_slug")?, a.str("username")?))
+            ok(website::unban_request(&a.endpoints()?, a.str("session")?, a.str("channel_slug")?, a.str("username")?))
         }
-        "website.delete_message_request" => to(website::delete_message_request(
+        "website.delete_message_request" => ok(website::delete_message_request(
             &a.endpoints()?,
             a.str("session")?,
             ChatroomId(a.u64("chatroom_id")?),
@@ -279,7 +279,7 @@ pub fn call(name: &str, args: &Value) -> Out {
             a.u32("minutes")?,
         )),
         "website.unpin_request" => {
-            to(website::unpin_request(&a.endpoints()?, a.str("session")?, a.str("channel_slug")?))
+            ok(website::unpin_request(&a.endpoints()?, a.str("session")?, a.str("channel_slug")?))
         }
         "website.send_request" => {
             let reply = match a.0.get("reply_to") {

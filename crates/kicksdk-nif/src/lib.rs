@@ -59,6 +59,12 @@ fn error_term<'a>(env: Env<'a>, e: &kicksdk::Error) -> Term<'a> {
     }
 }
 
+/// Arguments the core refused before building a request: raised, so a
+/// builder's success value keeps its shape.
+fn raise(e: kicksdk::Error) -> rustler::Error {
+    rustler::Error::RaiseTerm(Box::new((atoms::invalid(), e.to_string())))
+}
+
 /// `{:ok, value}` or `{:error, reason}`.
 fn result<'a, T: Serialize>(env: Env<'a>, r: Result<T, kicksdk::Error>) -> NifResult<Term<'a>> {
     Ok(match r {
@@ -210,7 +216,7 @@ fn parse_app_token<'a>(env: Env<'a>, status: u16, body: &str) -> NifResult<Term<
 #[rustler::nif]
 fn livestreams_requests<'a>(env: Env<'a>, e: &str, token: &str, ids: Vec<u64>) -> NifResult<Term<'a>> {
     let ids: Vec<UserId> = ids.into_iter().map(UserId).collect();
-    term(env, &public_api::livestreams_requests(&endpoints(e)?, token, &ids))
+    term(env, &public_api::livestreams_requests(&endpoints(e)?, token, &ids).map_err(raise)?)
 }
 
 #[rustler::nif]
@@ -259,7 +265,7 @@ fn subscribe_request<'a>(
 
 #[rustler::nif]
 fn subscriptions_request<'a>(env: Env<'a>, e: &str, token: &str) -> NifResult<Term<'a>> {
-    term(env, &public_api::subscriptions_request(&endpoints(e)?, token))
+    term(env, &public_api::subscriptions_request(&endpoints(e)?, token).map_err(raise)?)
 }
 
 #[rustler::nif]
@@ -270,14 +276,14 @@ fn parse_subscriptions<'a>(env: Env<'a>, status: u16, body: &str) -> NifResult<T
 #[rustler::nif]
 fn unsubscribe_requests<'a>(env: Env<'a>, e: &str, token: &str, ids: Vec<String>) -> NifResult<Term<'a>> {
     let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
-    term(env, &public_api::unsubscribe_requests(&endpoints(e)?, token, &refs))
+    term(env, &public_api::unsubscribe_requests(&endpoints(e)?, token, &refs).map_err(raise)?)
 }
 
 // ---- Website API -------------------------------------------------------------
 
 #[rustler::nif]
 fn channel_request<'a>(env: Env<'a>, e: &str, slug: &str) -> NifResult<Term<'a>> {
-    term(env, &website::channel_request(&endpoints(e)?, slug))
+    term(env, &website::channel_request(&endpoints(e)?, slug).map_err(raise)?)
 }
 
 #[rustler::nif]
@@ -297,7 +303,7 @@ fn parse_history<'a>(env: Env<'a>, status: u16, body: &str) -> NifResult<Term<'a
 
 #[rustler::nif]
 fn channel_user_request<'a>(env: Env<'a>, e: &str, slug: &str, username: &str) -> NifResult<Term<'a>> {
-    term(env, &website::channel_user_request(&endpoints(e)?, slug, username))
+    term(env, &website::channel_user_request(&endpoints(e)?, slug, username).map_err(raise)?)
 }
 
 #[rustler::nif]

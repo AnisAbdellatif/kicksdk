@@ -17,6 +17,9 @@
 //! - There is **no livestream id**: a stream is `(channel, started_at)`, and
 //!   `started_at` is string-identical to the status webhook's.
 //! - No rate-limit headers; back off on 429.
+//!
+//! Every builder that takes a `token` refuses one with a control character
+//! ([`Error::Invalid`]): it goes into a header.
 
 use crate::http::{self, Endpoints, Error, Method, Request, encode};
 use crate::ids::UserId;
@@ -124,16 +127,18 @@ pub struct Livestream {
 pub fn livestreams_request(endpoints: &Endpoints, token: &str, ids: &[UserId]) -> Result<Request, Error> {
     batch(ids)?;
     let q = query("broadcaster_user_id", ids.iter().map(|i| i.to_string()));
-    Ok(Request::new(Method::Get, format!("{}/livestreams?{q}", endpoints.api)).bearer(token))
+    Request::new(Method::Get, format!("{}/livestreams?{q}", endpoints.api)).bearer(token)
 }
 
-/// [`livestreams_request`] for any number of ids, [`BATCH`] at a time.
-pub fn livestreams_requests(endpoints: &Endpoints, token: &str, ids: &[UserId]) -> Vec<Request> {
-    ids.chunks(BATCH).filter_map(|c| livestreams_request(endpoints, token, c).ok()).collect()
+/// [`livestreams_request`] for any number of ids, [`BATCH`] at a time. No
+/// ids, no requests.
+pub fn livestreams_requests(endpoints: &Endpoints, token: &str, ids: &[UserId]) -> Result<Vec<Request>, Error> {
+    ids.chunks(BATCH).map(|c| livestreams_request(endpoints, token, c)).collect()
 }
 
 /// How to sort a top-streams query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Sort {
     /// Most viewers first.
     ViewerCount,
@@ -169,7 +174,7 @@ pub fn top_livestreams_request(
     if let Some(l) = language {
         q.push(format!("language={}", encode(l)));
     }
-    Ok(Request::new(Method::Get, format!("{}/livestreams?{}", endpoints.api, q.join("&"))).bearer(token))
+    Request::new(Method::Get, format!("{}/livestreams?{}", endpoints.api, q.join("&"))).bearer(token)
 }
 
 /// Reads a `/livestreams` answer. Offline is `[]`, not an error.
@@ -243,7 +248,7 @@ pub struct Channel {
 pub fn channels_by_ids_request(endpoints: &Endpoints, token: &str, ids: &[UserId]) -> Result<Request, Error> {
     batch(ids)?;
     let q = query("broadcaster_user_id", ids.iter().map(|i| i.to_string()));
-    Ok(Request::new(Method::Get, format!("{}/channels?{q}", endpoints.api)).bearer(token))
+    Request::new(Method::Get, format!("{}/channels?{q}", endpoints.api)).bearer(token)
 }
 
 /// Channels by slug, up to [`BATCH`]. One unknown slug fails the whole
@@ -252,7 +257,7 @@ pub fn channels_by_ids_request(endpoints: &Endpoints, token: &str, ids: &[UserId
 pub fn channels_by_slugs_request(endpoints: &Endpoints, token: &str, slugs: &[&str]) -> Result<Request, Error> {
     batch(slugs)?;
     let q = query("slug", slugs.iter().map(|s| s.to_string()));
-    Ok(Request::new(Method::Get, format!("{}/channels?{q}", endpoints.api)).bearer(token))
+    Request::new(Method::Get, format!("{}/channels?{q}", endpoints.api)).bearer(token)
 }
 
 /// Reads a `/channels` answer.
@@ -322,12 +327,12 @@ pub fn subscribe_request(
     }
     let events: Vec<Value> = events.iter().map(|(name, version)| json!({ "name": name, "version": version })).collect();
     Ok(Request::new(Method::Post, format!("{}/events/subscriptions", endpoints.api))
-        .bearer(token)
+        .bearer(token)?
         .json(&json!({ "broadcaster_user_id": broadcaster.0, "events": events, "method": "webhook" })))
 }
 
 /// Every subscription the app has.
-pub fn subscriptions_request(endpoints: &Endpoints, token: &str) -> Request {
+pub fn subscriptions_request(endpoints: &Endpoints, token: &str) -> Result<Request, Error> {
     Request::new(Method::Get, format!("{}/events/subscriptions", endpoints.api)).bearer(token)
 }
 
@@ -350,7 +355,7 @@ pub fn parse_subscriptions(status: u16, body: &str) -> Result<Vec<Subscription>,
 
 /// Removes subscriptions, [`BATCH`] per request: a request removing ~330
 /// failed every time, 50 works (the real limit is undocumented).
-pub fn unsubscribe_requests(endpoints: &Endpoints, token: &str, ids: &[&str]) -> Vec<Request> {
+pub fn unsubscribe_requests(endpoints: &Endpoints, token: &str, ids: &[&str]) -> Result<Vec<Request>, Error> {
     ids.chunks(BATCH)
         .map(|c| {
             let q = query("id", c.iter().map(|s| s.to_string()));
@@ -369,13 +374,26 @@ mod tests {
         let ids: Vec<UserId> = (1..=120).map(UserId).collect();
         assert!(livestreams_request(&e, "t", &ids).is_err());
         assert!(livestreams_request(&e, "t", &[]).is_err());
-        let reqs = livestreams_requests(&e, "t", &ids);
+        let reqs = livestreams_requests(&e, "t", &ids).unwrap();
         assert_eq!(reqs.len(), 3);
         assert!(reqs[0].url.ends_with("broadcaster_user_id=50"));
         assert!(reqs[0].headers.contains(&("authorization".into(), "Bearer t".into())));
         let ids: Vec<String> = (0..120).map(|i| format!("s{i}")).collect();
         let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
-        assert_eq!(unsubscribe_requests(&e, "t", &refs).len(), 3);
+        assert_eq!(unsubscribe_requests(&e, "t", &refs).unwrap().len(), 3);
+        assert_eq!(livestreams_requests(&e, "t", &[]).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn a_token_cannot_add_headers() {
+        let e = Endpoints::default();
+        let bad = "t\r\nx-evil: 1";
+        assert!(livestreams_requests(&e, bad, &[UserId(1)]).is_err());
+        assert!(subscriptions_request(&e, bad).is_err());
+        assert!(unsubscribe_requests(&e, bad, &["a"]).is_err());
+        assert!(channels_by_slugs_request(&e, bad, &["somechannel"]).is_err());
+        assert!(top_livestreams_request(&e, bad, None, None, Sort::ViewerCount, 10).is_err());
+        assert!(subscribe_request(&e, bad, UserId(1), &[("channel.followed", 1)]).is_err());
     }
 
     #[test]

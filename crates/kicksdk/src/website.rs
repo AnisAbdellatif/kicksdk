@@ -10,12 +10,16 @@
 //! in the `session_token` cookie and sends it as a bearer token, and so do the
 //! `*_request` builders that take a `session`. Never log or store it.
 //!
+//! Builders that put a slug, a username or a message id in the URL's path
+//! refuse an empty one, `.` and `..` ([`Error::Invalid`]): those would
+//! move the path to another endpoint.
+//!
 //! The channel answer carries a `playback_url` with a signed token. It is
 //! passed on ([`WebsiteChannel::playback_url`]) because a player needs it;
 //! treat it like a credential - never log or store it.
 
 use crate::events::{self, ChatMessage, KickEvent};
-use crate::http::{self, Endpoints, Error, Method, Request, encode};
+use crate::http::{self, Endpoints, Error, Method, Request, segment};
 use crate::ids::{ChannelId, ChatroomId, UserId};
 use crate::lenient::{array, boolean, get, int, string, uint};
 use serde::Serialize;
@@ -25,10 +29,10 @@ fn v2(endpoints: &Endpoints, path: &str) -> String {
     format!("{}/api/v2{path}", endpoints.website)
 }
 
-fn acting(req: Request, session: &str) -> Request {
+fn acting(req: Request, session: &str) -> Result<Request, Error> {
     // Kick's frontend sends this on every call; the moderation endpoints
     // have been seen to want it.
-    req.bearer(session).header("x-app-platform", "web")
+    Ok(req.bearer(session)?.header("x-app-platform", "web"))
 }
 
 /// A subscriber badge tier of a channel.
@@ -77,8 +81,8 @@ pub struct WebsiteChannel {
 }
 
 /// A channel by slug. A rename makes the old slug 404 until the new one is known.
-pub fn channel_request(endpoints: &Endpoints, slug: &str) -> Request {
-    Request::new(Method::Get, v2(endpoints, &format!("/channels/{}", encode(slug))))
+pub fn channel_request(endpoints: &Endpoints, slug: &str) -> Result<Request, Error> {
+    Ok(Request::new(Method::Get, v2(endpoints, &format!("/channels/{}", segment("slug", slug)?))))
 }
 
 /// Reads a [`channel_request`] answer (not enveloped in `data`).
@@ -174,8 +178,9 @@ pub struct ChannelUser {
 
 /// A user as `channel` sees them. A 404 means the channel does not know the
 /// name: it answers whether an `@word` is a real user.
-pub fn channel_user_request(endpoints: &Endpoints, channel_slug: &str, username: &str) -> Request {
-    Request::new(Method::Get, v2(endpoints, &format!("/channels/{}/users/{}", encode(channel_slug), encode(username))))
+pub fn channel_user_request(endpoints: &Endpoints, channel_slug: &str, username: &str) -> Result<Request, Error> {
+    let path = format!("/channels/{}/users/{}", segment("slug", channel_slug)?, segment("username", username)?);
+    Ok(Request::new(Method::Get, v2(endpoints, &path)))
 }
 
 /// Reads a [`channel_user_request`] answer.
@@ -222,8 +227,9 @@ impl Me {
 }
 
 /// The signed-in viewer's standing on a channel. 401/403: not signed in.
-pub fn me_request(endpoints: &Endpoints, session: &str, channel_slug: &str) -> Request {
-    acting(Request::new(Method::Get, v2(endpoints, &format!("/channels/{}/me", encode(channel_slug)))), session)
+pub fn me_request(endpoints: &Endpoints, session: &str, channel_slug: &str) -> Result<Request, Error> {
+    let url = v2(endpoints, &format!("/channels/{}/me", segment("slug", channel_slug)?));
+    acting(Request::new(Method::Get, url), session)
 }
 
 /// Reads a [`me_request`] answer.
@@ -237,10 +243,10 @@ pub fn parse_me(status: u16, body: &str) -> Result<Me, Error> {
 }
 
 /// Bans `username` from a channel for good.
-pub fn ban_request(endpoints: &Endpoints, session: &str, channel_slug: &str, username: &str) -> Request {
-    let url = v2(endpoints, &format!("/channels/{}/bans", encode(channel_slug)));
-    acting(Request::new(Method::Post, url), session)
-        .json(&json!({ "permanent": true, "banned_username": username, "reason": null }))
+pub fn ban_request(endpoints: &Endpoints, session: &str, channel_slug: &str, username: &str) -> Result<Request, Error> {
+    let url = v2(endpoints, &format!("/channels/{}/bans", segment("slug", channel_slug)?));
+    Ok(acting(Request::new(Method::Post, url), session)?
+        .json(&json!({ "permanent": true, "banned_username": username, "reason": null })))
 }
 
 /// Times `username` out for `minutes`.
@@ -254,20 +260,30 @@ pub fn timeout_request(
     if !(1..=10_080).contains(&minutes) {
         return Err(Error::Invalid(format!("{minutes} minutes; 1 to 10080 (a week)")));
     }
-    let url = v2(endpoints, &format!("/channels/{}/bans", encode(channel_slug)));
-    Ok(acting(Request::new(Method::Post, url), session)
+    let url = v2(endpoints, &format!("/channels/{}/bans", segment("slug", channel_slug)?));
+    Ok(acting(Request::new(Method::Post, url), session)?
         .json(&json!({ "permanent": false, "banned_username": username, "reason": null, "duration": minutes })))
 }
 
 /// Lifts a ban or timeout.
-pub fn unban_request(endpoints: &Endpoints, session: &str, channel_slug: &str, username: &str) -> Request {
-    let url = v2(endpoints, &format!("/channels/{}/bans/{}", encode(channel_slug), encode(username)));
-    acting(Request::new(Method::Delete, url), session)
+pub fn unban_request(
+    endpoints: &Endpoints,
+    session: &str,
+    channel_slug: &str,
+    username: &str,
+) -> Result<Request, Error> {
+    let path = format!("/channels/{}/bans/{}", segment("slug", channel_slug)?, segment("username", username)?);
+    acting(Request::new(Method::Delete, v2(endpoints, &path)), session)
 }
 
 /// Deletes a message. Needs the chatroom id, not the channel's.
-pub fn delete_message_request(endpoints: &Endpoints, session: &str, chatroom: ChatroomId, message_id: &str) -> Request {
-    let url = v2(endpoints, &format!("/chatrooms/{chatroom}/messages/{}", encode(message_id)));
+pub fn delete_message_request(
+    endpoints: &Endpoints,
+    session: &str,
+    chatroom: ChatroomId,
+    message_id: &str,
+) -> Result<Request, Error> {
+    let url = v2(endpoints, &format!("/chatrooms/{chatroom}/messages/{}", segment("message id", message_id)?));
     acting(Request::new(Method::Delete, url), session)
 }
 
@@ -284,13 +300,13 @@ pub fn pin_request(
     if !(1..=10_080).contains(&minutes) {
         return Err(Error::Invalid(format!("{minutes} minutes; 1 to 10080 (a week)")));
     }
-    let url = v2(endpoints, &format!("/channels/{}/pinned-message", encode(channel_slug)));
-    Ok(acting(Request::new(Method::Post, url), session).json(&json!({ "message": message, "duration": minutes })))
+    let url = v2(endpoints, &format!("/channels/{}/pinned-message", segment("slug", channel_slug)?));
+    Ok(acting(Request::new(Method::Post, url), session)?.json(&json!({ "message": message, "duration": minutes })))
 }
 
 /// Removes the channel's pin (there is only ever one).
-pub fn unpin_request(endpoints: &Endpoints, session: &str, channel_slug: &str) -> Request {
-    let url = v2(endpoints, &format!("/channels/{}/pinned-message", encode(channel_slug)));
+pub fn unpin_request(endpoints: &Endpoints, session: &str, channel_slug: &str) -> Result<Request, Error> {
+    let url = v2(endpoints, &format!("/channels/{}/pinned-message", segment("slug", channel_slug)?));
     acting(Request::new(Method::Delete, url), session)
 }
 
@@ -335,7 +351,7 @@ pub fn send_request(
         }),
     };
     let url = v2(endpoints, &format!("/messages/send/{chatroom}"));
-    Ok(acting(Request::new(Method::Post, url), session).json(&body))
+    Ok(acting(Request::new(Method::Post, url), session)?.json(&body))
 }
 
 /// Whether an acting call worked: Kick's answer to these carries nothing else
@@ -370,8 +386,8 @@ mod tests {
     #[test]
     fn acting_carries_the_session() {
         let e = Endpoints::default();
-        let r = timeout_request(&e, "sess", "xqc", "bob", 5).unwrap();
-        assert_eq!(r.url, "https://kick.com/api/v2/channels/xqc/bans");
+        let r = timeout_request(&e, "sess", "somechannel", "bob", 5).unwrap();
+        assert_eq!(r.url, "https://kick.com/api/v2/channels/somechannel/bans");
         assert!(r.headers.contains(&("authorization".into(), "Bearer sess".into())));
         assert!(timeout_request(&e, "s", "x", "b", 0).is_err());
         let reply = ReplyTarget { message_id: "m1", content: "hi", sender_id: 9, sender_username: "Ann" };
@@ -380,5 +396,29 @@ mod tests {
         assert_eq!(body["thread_parent_id"], "m1");
         assert_eq!(body["metadata"]["original_sender"]["id"], 9);
         assert!(send_request(&e, "s", ChatroomId(3), "  ", "1", None).is_err());
+        assert!(send_request(&e, "s\r\nx: y", ChatroomId(3), "yo", "1", None).is_err());
+    }
+
+    #[test]
+    fn path_segments_cannot_move_the_path() {
+        let e = Endpoints::default();
+        for bad in ["", ".", ".."] {
+            assert!(matches!(channel_request(&e, bad), Err(Error::Invalid(_))), "{bad:?}");
+            assert!(channel_user_request(&e, bad, "bob").is_err());
+            assert!(channel_user_request(&e, "somechannel", bad).is_err());
+            assert!(me_request(&e, "s", bad).is_err());
+            assert!(ban_request(&e, "s", bad, "bob").is_err());
+            assert!(timeout_request(&e, "s", bad, "bob", 5).is_err());
+            assert!(unban_request(&e, "s", bad, "bob").is_err());
+            assert!(unban_request(&e, "s", "somechannel", bad).is_err());
+            assert!(delete_message_request(&e, "s", ChatroomId(1), bad).is_err());
+            assert!(pin_request(&e, "s", bad, &json!({}), 5).is_err());
+            assert!(unpin_request(&e, "s", bad).is_err());
+        }
+        // A dot inside a name is fine, and other characters are encoded.
+        let r = channel_user_request(&e, "some.channel", "a/b").unwrap();
+        assert_eq!(r.url, "https://kick.com/api/v2/channels/some.channel/users/a%2Fb");
+        let r = delete_message_request(&e, "s", ChatroomId(1), "m-1").unwrap();
+        assert_eq!(r.url, "https://kick.com/api/v2/chatrooms/1/messages/m-1");
     }
 }

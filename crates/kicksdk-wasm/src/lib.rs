@@ -212,7 +212,7 @@ pub fn parse_app_token(status: u16, body: &str) -> Result<JsValue, JsValue> {
 /// `/livestreams` for any number of user ids: one request per 50.
 #[wasm_bindgen(js_name = livestreamsRequests)]
 pub fn livestreams_requests(token: &str, user_ids: Vec<f64>, endpoints_: JsValue) -> Result<JsValue, JsValue> {
-    out(&public_api::livestreams_requests(&endpoints(endpoints_)?, token, &ids::<UserId>(user_ids)))
+    result(public_api::livestreams_requests(&endpoints(endpoints_)?, token, &ids::<UserId>(user_ids)))
 }
 
 /// Reads a `/livestreams` answer.
@@ -257,7 +257,7 @@ pub fn parse_public_key(status: u16, body: &str) -> Result<String, JsValue> {
 /// A channel by slug (`kick.com/api/v2`): chatroom id, followers, live state.
 #[wasm_bindgen(js_name = channelRequest)]
 pub fn channel_request(slug: &str, endpoints_: JsValue) -> Result<JsValue, JsValue> {
-    out(&website::channel_request(&endpoints(endpoints_)?, slug))
+    result(website::channel_request(&endpoints(endpoints_)?, slug))
 }
 
 /// Reads a website channel answer.
@@ -281,7 +281,7 @@ pub fn parse_history(status: u16, body: &str) -> Result<JsValue, JsValue> {
 /// A user as a channel sees them.
 #[wasm_bindgen(js_name = channelUserRequest)]
 pub fn channel_user_request(channel_slug: &str, username: &str, endpoints_: JsValue) -> Result<JsValue, JsValue> {
-    out(&website::channel_user_request(&endpoints(endpoints_)?, channel_slug, username))
+    result(website::channel_user_request(&endpoints(endpoints_)?, channel_slug, username))
 }
 
 /// Reads a channel user answer.
@@ -293,7 +293,7 @@ pub fn parse_channel_user(status: u16, body: &str) -> Result<JsValue, JsValue> {
 /// The signed-in viewer's standing on a channel.
 #[wasm_bindgen(js_name = meRequest)]
 pub fn me_request(session: &str, channel_slug: &str, endpoints_: JsValue) -> Result<JsValue, JsValue> {
-    out(&website::me_request(&endpoints(endpoints_)?, session, channel_slug))
+    result(website::me_request(&endpoints(endpoints_)?, session, channel_slug))
 }
 
 /// Reads a `me` answer.
@@ -305,7 +305,7 @@ pub fn parse_me(status: u16, body: &str) -> Result<JsValue, JsValue> {
 /// Bans a user for good.
 #[wasm_bindgen(js_name = banRequest)]
 pub fn ban_request(session: &str, channel_slug: &str, username: &str, endpoints_: JsValue) -> Result<JsValue, JsValue> {
-    out(&website::ban_request(&endpoints(endpoints_)?, session, channel_slug, username))
+    result(website::ban_request(&endpoints(endpoints_)?, session, channel_slug, username))
 }
 
 /// Times a user out.
@@ -328,7 +328,7 @@ pub fn unban_request(
     username: &str,
     endpoints_: JsValue,
 ) -> Result<JsValue, JsValue> {
-    out(&website::unban_request(&endpoints(endpoints_)?, session, channel_slug, username))
+    result(website::unban_request(&endpoints(endpoints_)?, session, channel_slug, username))
 }
 
 /// Deletes a message.
@@ -339,7 +339,12 @@ pub fn delete_message_request(
     message_id: &str,
     endpoints_: JsValue,
 ) -> Result<JsValue, JsValue> {
-    out(&website::delete_message_request(&endpoints(endpoints_)?, session, ChatroomId(chatroom_id as u64), message_id))
+    result(website::delete_message_request(
+        &endpoints(endpoints_)?,
+        session,
+        ChatroomId(chatroom_id as u64),
+        message_id,
+    ))
 }
 
 /// Pins a message (the feed's data for it, whole) for `minutes`.
@@ -357,7 +362,7 @@ pub fn pin_request(
 /// Removes the pin.
 #[wasm_bindgen(js_name = unpinRequest)]
 pub fn unpin_request(session: &str, channel_slug: &str, endpoints_: JsValue) -> Result<JsValue, JsValue> {
-    out(&website::unpin_request(&endpoints(endpoints_)?, session, channel_slug))
+    result(website::unpin_request(&endpoints(endpoints_)?, session, channel_slug))
 }
 
 /// Sends a message, or a reply when `replyTo` is
@@ -454,7 +459,7 @@ pub fn subscribe_request(
 /// Every webhook subscription the app has.
 #[wasm_bindgen(js_name = subscriptionsRequest)]
 pub fn subscriptions_request(token: &str, endpoints_: JsValue) -> Result<JsValue, JsValue> {
-    out(&public_api::subscriptions_request(&endpoints(endpoints_)?, token))
+    result(public_api::subscriptions_request(&endpoints(endpoints_)?, token))
 }
 
 /// Reads a subscriptions answer.
@@ -467,7 +472,7 @@ pub fn parse_subscriptions(status: u16, body: &str) -> Result<JsValue, JsValue> 
 #[wasm_bindgen(js_name = unsubscribeRequests)]
 pub fn unsubscribe_requests(token: &str, ids: Vec<String>, endpoints_: JsValue) -> Result<JsValue, JsValue> {
     let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
-    out(&public_api::unsubscribe_requests(&endpoints(endpoints_)?, token, &refs))
+    result(public_api::unsubscribe_requests(&endpoints(endpoints_)?, token, &refs))
 }
 
 // ---- Webhooks ----------------------------------------------------------------
