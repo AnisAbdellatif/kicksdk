@@ -38,4 +38,8 @@ gh release download "$tag" --repo "$repo" --pattern 'kicksdk_ffi-*' --dir "$tmp"
 scripts/dart-checksums.sh "$version" "$tmp"
 scripts/vendor-native.sh bindings/dart kicksdk-ffi
 scripts/package-files.sh bindings/dart
-(cd bindings/dart && dart pub get && dart pub publish)
+# The source fallback, from the archive pub would upload (pub leaves out
+# files the checkout has), before anything is published.
+(cd bindings/dart && dart pub get && dart pub publish --to-archive="$tmp/kicksdk.tar.gz")
+scripts/check-dart-archive.sh "$tmp/kicksdk.tar.gz"
+(cd bindings/dart && dart pub publish)

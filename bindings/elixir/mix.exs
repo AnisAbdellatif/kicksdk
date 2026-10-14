@@ -40,10 +40,12 @@ defmodule Kicksdk.MixProject do
     [
       licenses: ["MIT", "Apache-2.0"],
       links: %{"GitHub" => @source},
-      # native/ and the checksum file are written by the release workflow
-      # (scripts/vendor-native.sh, mix rustler_precompiled.download).
+      # native/, the checksum file, LICENSE and CHANGELOG.md are written by
+      # the release workflow (scripts/vendor-native.sh,
+      # mix rustler_precompiled.download, scripts/package-files.sh).
       files: ~w(lib native/Cargo.toml native/Cargo.lock native/crates native/LICENSE-MIT
-        native/LICENSE-APACHE native/README.md checksum-Elixir.Kicksdk.Native.exs mix.exs README.md)
+        native/LICENSE-APACHE native/README.md checksum-Elixir.Kicksdk.Native.exs mix.exs README.md
+        LICENSE CHANGELOG.md)
     ]
   end
 end

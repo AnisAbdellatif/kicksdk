@@ -47,7 +47,8 @@ on:
 permissions: {}
 
 # One run per tag at a time: a second one waits rather than racing the first
-# to the release and the registries.
+# to the release and the registries. GitHub keeps one waiting run per group:
+# a third run started meanwhile cancels the waiting second.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -240,15 +241,34 @@ jobs:
           VERSION: ${{ needs.plan.outputs.version }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
         run: |
+          # Whether the crates.io index lists crate $1 at $VERSION.
+          listed() {
+            code=$(curl -sS -o "$RUNNER_TEMP/index" -w '%{http_code}' "https://index.crates.io/ki/ck/$1")
+            case "$code" in
+              200) grep -qF "\"vers\":\"$VERSION\"" "$RUNNER_TEMP/index" ;;
+              404) return 1 ;;
+              *) echo "::error::the crates.io index answered $code for $1"; exit 1 ;;
+            esac
+          }
           for crate in kicksdk kicksdk-ffi; do
-            code=$(curl -sS -o "$RUNNER_TEMP/index" -w '%{http_code}' "https://index.crates.io/ki/ck/$crate")
-            if [ "$code" = 200 ] && grep -qF "\"vers\":\"$VERSION\"" "$RUNNER_TEMP/index"; then
+            if listed "$crate"; then
               echo "$crate $VERSION is on crates.io already"
-            elif [ "$code" = 200 ] || [ "$code" = 404 ]; then
-              cargo publish --locked -p "$crate"
             else
-              echo "::error::the crates.io index answered $code for $crate"
-              exit 1
+              cargo publish --locked -p "$crate"
+            fi
+            # kicksdk-ffi needs this kicksdk, which cargo looks up in the
+            # index, and the index can lag a publish (cargo's own wait gives
+            # up after a minute): wait for it there, 10 minutes at most.
+            if [ "$crate" = kicksdk ]; then
+              tries=0
+              until listed kicksdk; do
+                tries=$((tries + 1))
+                if [ "$tries" -ge 60 ]; then
+                  echo "::error::kicksdk $VERSION is not in the crates.io index after 10 minutes; re-run this job to publish kicksdk-ffi"
+                  exit 1
+                fi
+                sleep 10
+              done
             fi
           done
 
@@ -341,6 +361,7 @@ jobs:
             *) echo "::error::hex.pm answered $code"; exit 1 ;;
           esac
       - run: ../../scripts/vendor-native.sh bindings/elixir kicksdk-nif
+      - run: ../../scripts/package-files.sh bindings/elixir
       - run: mix deps.get
       # Writes checksum-Elixir.Kicksdk.Native.exs from the release's own NIFs,
       # every target's (--all fails on a missing one).
@@ -353,6 +374,10 @@ jobs:
         env:
           MIX_ENV: test
         run: ../../scripts/without-rust.sh mix test
+      # The source fallback, from the package as hex will serve it.
+      - name: The hex package, built from source
+        if: steps.published.outputs.yes != 'true'
+        run: ../../scripts/check-hex-package.sh
       - if: steps.published.outputs.yes != 'true'
         run: mix hex.publish --yes
         env:
@@ -404,5 +429,12 @@ jobs:
         run: dart pub get && ../../scripts/without-rust.sh dart test
       - run: ../../scripts/vendor-native.sh bindings/dart kicksdk-ffi
       - run: ../../scripts/package-files.sh bindings/dart
+      # The source fallback, from the archive pub.dev will serve: pub leaves
+      # out files the checkout has, so the checkout building proves nothing.
+      - name: The pub archive, built from source
+        if: steps.published.outputs.yes != 'true'
+        run: |
+          dart pub publish --to-archive="$RUNNER_TEMP/kicksdk.tar.gz"
+          ../../scripts/check-dart-archive.sh "$RUNNER_TEMP/kicksdk.tar.gz"
       - if: steps.published.outputs.yes != 'true'
         run: dart pub publish --force

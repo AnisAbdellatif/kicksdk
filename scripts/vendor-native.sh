@@ -46,18 +46,32 @@ cargo fetch --locked
 # room for them, so a NIF source build fetches its crates.
 if [ "$crate" = kicksdk-ffi ]; then
   (cd "$dest" && cargo vendor --locked --versioned-dirs --quiet vendor >/dev/null)
-  # The crates' own tests, examples and benches are never built here, and
-  # some carry test private keys that pub refuses as leaks: drop them, and
-  # their entries in each crate's checksum list so cargo still accepts the
-  # rest.
+  # Each crate's .cargo-checksum.json lists its files, and cargo refuses a
+  # crate with a listed file missing. Dropped here, with their entries:
+  # - the crates' own tests, examples and benches, never built here; some
+  #   carry test private keys that pub refuses as leaks;
+  # - every dotfile and dot-directory (.github/, .travis.yml, ...): pub
+  #   never publishes them. The checksum file itself is one, which
+  #   bindings/dart/.pubignore lets through.
   python3 - "$dest/vendor" <<'PY'
 import json, pathlib, shutil, sys
+
+def dropped(rel):
+    parts = rel.split("/")
+    return parts[0] in ("tests", "examples", "benches") or any(p.startswith(".") for p in parts)
+
 for crate in pathlib.Path(sys.argv[1]).iterdir():
     sums = crate / ".cargo-checksum.json"
     meta = json.loads(sums.read_text())
-    for d in ("tests", "examples", "benches"):
-        shutil.rmtree(crate / d, ignore_errors=True)
-        meta["files"] = {f: h for f, h in meta["files"].items() if not f.startswith(d + "/")}
+    # Deepest first, so a directory's contents go before it.
+    for path in sorted(crate.rglob("*"), reverse=True):
+        if path == sums or not dropped(path.relative_to(crate).as_posix()):
+            continue
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    meta["files"] = {f: h for f, h in meta["files"].items() if not dropped(f)}
     sums.write_text(json.dumps(meta))
 PY
 fi

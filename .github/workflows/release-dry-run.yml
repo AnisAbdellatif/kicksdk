@@ -1,6 +1,7 @@
 # Everything a release builds and checks, uploading and publishing nothing:
 # on pull requests that touch the release (its workflows, scripts, manifests,
-# the packages' download code), and weekly, so a runner image or toolchain
+# the Rust sources every binary and vendored workspace is built from, the
+# packages' download and build code and packaging rules), and weekly, so a runner image or toolchain
 # change shows up before a tag does. release.yml run on a branch is the same
 # dry run, on demand.
 
@@ -15,15 +16,18 @@ on:
       - scripts/**
       - Cargo.toml
       - Cargo.lock
-      - crates/*/Cargo.toml
-      - crates/*/build.rs
-      - bindings/dart/hook/**
+      - .cargo/**
+      - crates/**
+      - bindings/**/hook/**
+      - bindings/dart/.pubignore
       - bindings/dart/pubspec.yaml
+      - bindings/dart/lib/src/native.dart
       - bindings/elixir/mix.exs
       - bindings/elixir/mix.lock
       - bindings/elixir/lib/kicksdk/native.ex
       - bindings/python/Cargo.toml
       - bindings/python/pyproject.toml
+      - bindings/python/src/**
       - bindings/js/package.json
   schedule:
     - cron: "17 5 * * 1"

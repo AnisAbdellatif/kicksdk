@@ -10,7 +10,8 @@
 #             installed and tested on a machine it is for
 #   js        the npm package's tarball (artifact js-package)
 #   vendored  the hex and pub packages' vendored native/ workspaces, built
-#             --locked --offline, and each package built from them
+#             --locked --offline, and each package built from them; the pub
+#             package also from the archive pub would upload
 #   packages  the hex, pub and crates.io packages as they would be published,
 #             from this run's nif and ffi artifacts; the Dart package's
 #             precompiled download, served locally (needs nif and ffi first)
@@ -432,6 +433,14 @@ jobs:
         env:
           CARGO_NET_OFFLINE: "true"
         run: dart pub get && dart test
+      # pub leaves out files the checkout has (every dotfile, for one): the
+      # package as pub would upload it, extracted, has to build too, offline.
+      - name: The pub archive, built from source
+        if: matrix.package == 'dart'
+        run: |
+          scripts/package-files.sh bindings/dart
+          (cd bindings/dart && dart pub publish --to-archive="$RUNNER_TEMP/kicksdk.tar.gz")
+          scripts/check-dart-archive.sh "$RUNNER_TEMP/kicksdk.tar.gz"
       - name: The hex package, built from native/
         if: matrix.package == 'elixir'
         working-directory: bindings/elixir
@@ -474,6 +483,7 @@ jobs:
             echo "RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH=$RUNNER_TEMP/rustler-cache"
           } >> "$GITHUB_ENV"
       - run: ../../scripts/vendor-native.sh bindings/elixir kicksdk-nif
+      - run: ../../scripts/package-files.sh bindings/elixir
       - run: mix deps.get
       # As the hex job does it: every target's NIF must be there (--all).
       - name: Checksums of every NIF
@@ -484,7 +494,10 @@ jobs:
         env:
           MIX_ENV: test
         run: ../../scripts/without-rust.sh mix test
-      - run: mix hex.build
+      # The package as hex would upload it (mix hex.build --unpack), built
+      # from source in an app that depends on it.
+      - name: The hex package, built from source
+        run: ../../scripts/check-hex-package.sh
 
   pub-package:
     name: pub package (dry run)
@@ -510,6 +523,11 @@ jobs:
       - run: scripts/package-files.sh bindings/dart
       - run: dart pub get && dart pub publish --dry-run
         working-directory: bindings/dart
+      # The source fallback, from the archive pub would upload.
+      - name: The pub archive, built from source
+        run: |
+          (cd bindings/dart && dart pub publish --to-archive="$RUNNER_TEMP/kicksdk.tar.gz")
+          scripts/check-dart-archive.sh "$RUNNER_TEMP/kicksdk.tar.gz"
       # The precompiled path: the hook downloads this run's library for this
       # machine from a local server and checks it against checksums.json.
       # Without Rust on PATH, a fallback to building would fail the tests.

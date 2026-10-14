@@ -10,9 +10,9 @@
 #   DRY_RUN   true to build and check everything, upload and publish nothing
 #
 # A run on a tag releases that tag, with the workflow and scripts of that same
-# commit. A run on a branch is always a dry run. An unknown job in ONLY, a tag
-# that is not v<semver>, or a tag that is not the packages' version fails the
-# plan, and with it the whole run.
+# commit. A run on a branch is always a dry run. An unknown job in ONLY, an
+# ONLY that names no job (","), a tag that is not v<semver>, or a tag that is
+# not the packages' version fails the plan, and with it the whole run.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -58,6 +58,12 @@ else
     fi
     want[$j]=1
   done
+  # "," or " , " is not empty, but names no job: refuse it rather than run
+  # a release that does nothing.
+  if [ "${#want[@]}" -eq 0 ]; then
+    echo "::error::only ('$only') names no job; the jobs are: ${all// /, }, or empty for all"
+    exit 1
+  fi
 fi
 has() { [ -n "${want[$1]:-}" ]; }
 

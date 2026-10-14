@@ -3,3 +3,7 @@
 .dart_tool/
 pubspec.lock
 native/target/
+# pub leaves out every dotfile, but cargo needs each vendored crate's
+# checksum list (native/vendor/*/.cargo-checksum.json); scripts/vendor-native.sh
+# drops the other dotfiles, and their entries in that list.
+!.cargo-checksum.json
