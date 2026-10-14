@@ -24,7 +24,7 @@ fn main() {
     let http: ureq::Agent =
         ureq::Agent::config_builder().http_status_as_error(false).user_agent("Mozilla/5.0").build().into();
 
-    let (s, b) = send(&http, &website::channel_request(&e, &slug));
+    let (s, b) = send(&http, &website::channel_request(&e, &slug).expect("not a channel name"));
     let channel = website::parse_channel(s, &b).expect("no such channel");
     let mut session = Session::new(SessionOptions::new(realtime::chat_channels(channel.chatroom_id, Some(channel.id))));
     let mut backoff = Backoff::default();
@@ -43,12 +43,14 @@ fn main() {
         let (mut ws, _) = tungstenite::connect(req).expect("connect failed");
 
         let mut actions = session.open(&token, now());
+        let mut reconnect = true;
         'socket: loop {
             for action in std::mem::take(&mut actions) {
                 match action {
                     Action::Send { text } => ws.send(text.into()).unwrap(),
-                    Action::Close { reason } => {
+                    Action::Close { reason, reconnect: again, .. } => {
                         eprintln!("[{reason}]");
+                        reconnect = again;
                         break 'socket;
                     }
                     Action::RefreshToken => {
@@ -71,6 +73,12 @@ fn main() {
             actions.extend(session.tick(now()));
         }
         session.closed();
-        std::thread::sleep(std::time::Duration::from_millis(backoff.next_delay()));
+        if !reconnect {
+            // A terminal close: the same connection would be refused again.
+            return;
+        }
+        // Any number in [0, 1) spreads the wait; the clock's milliseconds will do here.
+        let jitter = (now() % 1000) as f64 / 1000.0;
+        std::thread::sleep(std::time::Duration::from_millis(backoff.next_delay_jittered(jitter)));
     }
 }
