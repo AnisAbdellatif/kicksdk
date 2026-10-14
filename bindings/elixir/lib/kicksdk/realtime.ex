@@ -13,9 +13,11 @@ defmodule Kicksdk.Realtime do
        make up (a UUID). It lasts 45 minutes; refresh it for the **same** id.
     3. Open the WebSocket and drive a `Kicksdk.Realtime.Session`.
 
-  When the socket closes, reconnect with a `Kicksdk.Realtime.Backoff` unless
-  the close says not to (`should_reconnect?/1`, or the session's `"close"`
-  action's `"reconnect"`). `examples/elixir/chat.exs` does all of it.
+  When the socket closes, reconnect with a `Kicksdk.Realtime.Backoff`, after
+  at least the session's `"close"` action's `"retry_after_ms"` (or
+  `retry_after_ms/1` of the socket's close code); a terminal close waits
+  minutes and reconnects with a new client id. `examples/elixir/chat.exs`
+  does all of it.
   """
 
   import Kicksdk, only: [encode_endpoints: 1, request: 1]
@@ -62,16 +64,17 @@ defmodule Kicksdk.Realtime do
     do: request(Kicksdk.Native.token_request(encode_endpoints(endpoints), client_id))
 
   @doc """
-  Whether a connection that closed with this code is worth opening again, by
-  Centrifugo's convention: false for 3500-3999 and 4500-4999 (the server does
-  not want this client back as it is: a bad token, a ban), true for anything
-  else - 3000-3499, 4000-4499, and the WebSocket codes below 3000 (a network
-  drop is 1006). For the code your socket reports; a session's `"close"`
-  action already carries the answer in `"reconnect"`.
+  The least to wait, in ms, before reconnecting after the socket closed with
+  this code, by Centrifugo's convention: 300_000 (5 minutes) for 3500-3999
+  and 4500-4999 (terminal: a bad token, a ban, a connection limit; reconnect
+  after the wait with a new client id), 0 (the ordinary backoff) for
+  anything else - 3000-3499, 4000-4499, and the WebSocket codes below 3000
+  (a network drop is 1006). For the code your socket reports; a session's
+  `"close"` action already carries it in `"retry_after_ms"`.
   """
-  @spec should_reconnect?(0..65_535) :: boolean()
-  def should_reconnect?(code) when is_integer(code) and code in 0..65_535,
-    do: Kicksdk.Native.should_reconnect(code)
+  @spec retry_after_ms(0..65_535) :: non_neg_integer()
+  def retry_after_ms(code) when is_integer(code) and code in 0..65_535,
+    do: Kicksdk.Native.retry_after_ms(code)
 
   @doc "The token from a token answer."
   @spec parse_token(integer(), binary()) :: Kicksdk.result(String.t())

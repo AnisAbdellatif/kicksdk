@@ -196,8 +196,12 @@ Details worth knowing:
   - keep the message ids it has seen for at least that window and drop
     repeats (needed for Kick's own duplicates anyway);
   - read the body by its own shape, not only the type header (kicksdk
-    refuses a body that is not the claimed type's shape; `.new` and
-    `.renewal` subscriptions share one shape and cannot be told apart);
+    refuses a body that lacks the claimed type's own field - `is_live`,
+    `metadata` with a title/language/category, `follower`, `subscriber`,
+    `giftees`, `gift` - which no other type's body has; fields it does not
+    know are ignored, so a field Kick adds does not break deliveries;
+    `.new` and `.renewal` subscriptions share one shape and cannot be told
+    apart);
   - expect the message id to be a ULID and the timestamp RFC 3339: neither
     can then contain the `.` that separates the signed parts.
 - **Fast**: 0.6 to 0.9s on average from Kick's timestamp to our receipt, for
@@ -210,6 +214,13 @@ Details worth knowing:
   exist, and none arrived afterwards (checked two hours later).
   *(production, once)* Treat a failed delivery as lost; the ingress
   Worker retries on the backup receiver itself (KickTracker's project.md §15.2).
+  **If Kick does retry**, the retry most likely carries the original message
+  id and timestamp (they are what is signed), so a freshness check refuses
+  one that comes later than its tolerance (kicksdk: `Stale`). 5 minutes
+  suits a receiver that is up; one that would rather take late retries
+  than lose them can widen the tolerance (to a day, say) and must then
+  remember message ids for as long, since that window is also how long a
+  captured delivery can be replayed. *(inference, unverified)*
 - **Missed webhooks are lost.** Stream state and metadata can be recovered
   by polling; follows, subs, gifts and Kicks cannot.
 - No viewer-count event and **no raid/host event** among webhooks.
@@ -348,10 +359,30 @@ key 32cbd69e4b950bf97679 not in this cluster…"}}` and closes. Noticed
   `push.disconnect`, or the WebSocket close frame's code) of 3000-3499 or
   4000-4499 is worth a reconnect, **3500-3999 and 4500-4999 are terminal**
   (reconnecting as before would be refused again). A refused connect or
-  refresh is worth retrying only for 109 (token expired), an error marked
-  `temporary`, or a transport error. An `unsub` push with a code from
-  **2500 to 2999 asks the client to subscribe again**; kicksdk's session
-  does so itself. None of these has been seen from Kick yet.
+  refresh is worth retrying at once only for 109 (token expired), an error
+  marked `temporary`, or a transport error. An `unsub` push with a code
+  from **2500 to 2999 asks the client to subscribe again**; kicksdk's
+  session does so itself. None of these has been seen from Kick yet.
+- **Terminal is not for good** *(kicksdk's choice)*: for a guest reading
+  chat, what makes a close terminal - a refused guest token, a connection
+  or rate limit, an IP briefly blocked - usually passes, and a reader that
+  stops for good on one goes quiet until someone restarts it. So kicksdk
+  never stops on its own: a terminal close waits **5 minutes**, then
+  reconnects as a **new client** (a new client id, so a new guest token,
+  and a new connection request). Terminal closes in a row, with no chat
+  feed subscribed in between, wait longer each time: **5, 10, 20, then 30
+  minutes**, each plus up to a quarter, at random, so readers refused
+  together do not return together. The chat feed subscribing ends the
+  streak. How every driver does it:
+
+  | Event | What the driver calls |
+  |---|---|
+  | The session says `close` | close the socket, `session.closed()`, then wait `backoff.next_delay_for(close.retry_after_ms, random)`; if `close.terminal`, make a new client id |
+  | The socket closes by itself with a code | `session.closed()`, then wait `backoff.next_delay_for(realtime::retry_after_ms(code), random)`; more than 0 is terminal: new client id |
+  | The socket fails without a code, a request fails | wait `backoff.next_delay_for(0, random)` (the ordinary 1 s → 30 s) |
+  | `subscribed` for the chat feed (the first in `chat_channels`) | `backoff.reset()` |
+
+  A driver stops only when its host asks it to.
 - **No `ping` in the connect reply** means the server will not ping (a
   Centrifugo server can be set up so); the 25 s silence rule then does not
   apply, and kicksdk does not close a quiet feed. Kick has always sent

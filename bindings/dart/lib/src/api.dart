@@ -82,12 +82,13 @@ abstract final class Realtime {
 
   static String parseToken(int status, String body) => _parse('realtime.parse_token', status, body);
 
-  /// Whether a connection whose socket closed with `code` is worth opening
-  /// again: false for Centrifugo's terminal codes (3500-3999, 4500-4999: a
-  /// bad token, a ban, a refused request), true for anything else (a
-  /// network drop is 1006). For a session's `close` action, read its
-  /// `reconnect` instead.
-  static bool shouldReconnect(int code) => native.call('realtime.should_reconnect', {'code': code}) as bool;
+  /// The least to wait, in ms, before reconnecting after the socket closed
+  /// with `code`: 300000 (5 minutes) for Centrifugo's terminal codes
+  /// (3500-3999, 4500-4999: a bad token, a ban, a refused request; then
+  /// reconnect with a new client id), 0 (the ordinary backoff) for anything
+  /// else (a network drop is 1006). For a session's `close` action, read its
+  /// `retry_after_ms` instead.
+  static int retryAfterMs(int code) => native.call('realtime.retry_after_ms', {'code': code}) as int;
 }
 
 /// One connection's worth of Kick's Centrifugo protocol. Each method returns

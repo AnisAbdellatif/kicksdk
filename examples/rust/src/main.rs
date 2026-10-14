@@ -26,12 +26,16 @@ fn main() {
 
     let (s, b) = send(&http, &website::channel_request(&e, &slug).expect("not a channel name"));
     let channel = website::parse_channel(s, &b).expect("no such channel");
-    let mut session = Session::new(SessionOptions::new(realtime::chat_channels(channel.chatroom_id, Some(channel.id))));
+    let feeds = realtime::chat_channels(channel.chatroom_id, Some(channel.id));
+    let chat_feed = feeds[0].clone();
+    let mut session = Session::new(SessionOptions::new(feeds));
     let mut backoff = Backoff::default();
     let start = Instant::now();
     let now = || start.elapsed().as_millis() as u64;
 
     loop {
+        // A new client id (and so a new guest token) for every connection,
+        // which a terminal close needs.
         let client_id = uuid::Uuid::new_v4().to_string();
         let (s, b) = send(&http, &realtime::chat_connection_request(&e, channel.id, &client_id));
         let url = realtime::parse_connection(s, &b).unwrap()[0].centrifugo_url().unwrap().to_owned();
@@ -43,21 +47,22 @@ fn main() {
         let (mut ws, _) = tungstenite::connect(req).expect("connect failed");
 
         let mut actions = session.open(&token, now());
-        let mut reconnect = true;
+        // How long at least to wait before the next connection.
+        let mut retry_after_ms = 0;
         'socket: loop {
             for action in std::mem::take(&mut actions) {
                 match action {
                     Action::Send { text } => ws.send(text.into()).unwrap(),
-                    Action::Close { reason, reconnect: again, .. } => {
-                        eprintln!("[{reason}]");
-                        reconnect = again;
+                    Action::Close { reason, terminal, retry_after_ms: wait, .. } => {
+                        eprintln!("[{reason}{}]", if terminal { "; Kick refused us, waiting long" } else { "" });
+                        retry_after_ms = wait;
                         break 'socket;
                     }
                     Action::RefreshToken => {
                         let (s, b) = send(&http, &realtime::token_request(&e, &client_id));
                         actions.extend(session.refresh(&realtime::parse_token(s, &b).unwrap(), now()));
                     }
-                    Action::Subscribed { .. } => backoff.reset(),
+                    Action::Subscribed { channel } if channel == chat_feed => backoff.reset(),
                     Action::Event { event: KickEvent::ChatMessage(m), .. } => {
                         println!("{}: {}", m.sender.username, m.content)
                     }
@@ -67,18 +72,20 @@ fn main() {
             // Kick pings every 25 s, so a frame always comes to wake the loop.
             match ws.read() {
                 Ok(tungstenite::Message::Text(t)) => actions.extend(session.receive(&t, now())),
+                Ok(tungstenite::Message::Close(frame)) => {
+                    // Kick can close with a terminal code without a disconnect push.
+                    retry_after_ms = frame.map_or(0, |f| realtime::retry_after_ms(f.code.into()));
+                    break;
+                }
                 Ok(_) => {}
                 Err(_) => break,
             }
             actions.extend(session.tick(now()));
         }
         session.closed();
-        if !reconnect {
-            // A terminal close: the same connection would be refused again.
-            return;
-        }
         // Any number in [0, 1) spreads the wait; the clock's milliseconds will do here.
+        // A terminal close waits 5 minutes, then longer if it happens again.
         let jitter = (now() % 1000) as f64 / 1000.0;
-        std::thread::sleep(std::time::Duration::from_millis(backoff.next_delay_jittered(jitter)));
+        std::thread::sleep(std::time::Duration::from_millis(backoff.next_delay_for(retry_after_ms, jitter)));
     }
 }

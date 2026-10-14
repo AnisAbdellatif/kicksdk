@@ -44,13 +44,15 @@ def parse_token(status: int, body: str) -> str:
     return _call("realtime.parse_token", status=status, body=body)
 
 
-def should_reconnect(code: int) -> bool:
-    """Whether a connection that closed with this WebSocket close code is
-    worth opening again: false for Centrifugo's terminal codes (3500-3999 and
-    4500-4999: a bad token, a ban, a refused request), true otherwise (a
-    network drop is 1006). For the code the socket reports; a session's
-    ``close`` action already carries the answer in ``reconnect``."""
-    return _call("realtime.should_reconnect", code=code)
+def retry_after_ms(code: int) -> int:
+    """The least to wait, in ms, before reconnecting after the socket closed
+    with this WebSocket close code: 300000 (5 minutes) for Centrifugo's
+    terminal codes (3500-3999 and 4500-4999: a bad token, a ban, a refused
+    request; reconnect after the wait with a new client id), 0 (the ordinary
+    backoff) otherwise (a network drop is 1006). For the code the socket
+    reports; a session's ``close`` action already carries it in
+    ``retry_after_ms``."""
+    return _call("realtime.retry_after_ms", code=code)
 
 
 class Session:

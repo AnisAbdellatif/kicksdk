@@ -31,7 +31,10 @@ use serde_json::{Value, json};
 pub const BATCH: usize = 50;
 
 /// An app access token.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+///
+/// Its `Debug` hides [`access_token`](Self::access_token); `Serialize`, what
+/// a binding hands on, does not.
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct AppToken {
     /// The token.
@@ -40,6 +43,17 @@ pub struct AppToken {
     pub expires_in: Option<i64>,
     /// `Bearer`.
     pub token_type: Option<String>,
+}
+
+impl std::fmt::Debug for AppToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self { access_token: _, expires_in, token_type } = self;
+        f.debug_struct("AppToken")
+            .field("access_token", &"[redacted]")
+            .field("expires_in", expires_in)
+            .field("token_type", token_type)
+            .finish()
+    }
 }
 
 /// An app token, by the OAuth client-credentials grant.
@@ -394,6 +408,15 @@ mod tests {
         assert!(channels_by_slugs_request(&e, bad, &["somechannel"]).is_err());
         assert!(top_livestreams_request(&e, bad, None, None, Sort::ViewerCount, 10).is_err());
         assert!(subscribe_request(&e, bad, UserId(1), &[("channel.followed", 1)]).is_err());
+    }
+
+    #[test]
+    fn debug_hides_the_app_token() {
+        let t = parse_token(200, r#"{"access_token":"sekrit","expires_in":5184000,"token_type":"Bearer"}"#).unwrap();
+        let shown = format!("{t:?}");
+        assert!(!shown.contains("sekrit") && shown.contains("[redacted]") && shown.contains("5184000"), "{shown}");
+        assert_eq!(t.access_token, "sekrit");
+        assert!(serde_json::to_string(&t).unwrap().contains("sekrit"), "what a binding hands on is untouched");
     }
 
     #[test]

@@ -17,11 +17,14 @@
 //!   least that long and drop repeats - which Kick sends anyway (below).
 //!   [`Freshness::Skip`] is for re-checking deliveries stored earlier.
 //! - **The type, version and subscription-id headers are not signed.**
-//!   [`parse`] reads the body by the type header and refuses a body that is
-//!   not that type's shape, so a delivery cannot be passed off as another
-//!   kind. Two cases it cannot tell apart: `channel.subscription.new` and
-//!   `.renewal` have one shape, and a type this crate does not know comes
-//!   out as [`WebhookEvent::Other`] with the header's claim unchecked.
+//!   [`parse`] reads the body by the type header and refuses a body that
+//!   lacks that type's own field, so a delivery cannot be passed off as
+//!   another kind (no known type's body has another known type's own
+//!   field). Fields it does not know are ignored, so a field Kick adds
+//!   later does not break deliveries. Two cases it cannot tell apart:
+//!   `channel.subscription.new` and `.renewal` have one shape, and a type
+//!   this crate does not know comes out as [`WebhookEvent::Other`] with the
+//!   header's claim unchecked.
 //! - The message id must be a ULID and the timestamp RFC 3339
 //!   ([`WebhookError::MalformedHeader`]). Neither can then hold the `.`
 //!   that separates them in the signed text, so no header can move bytes
@@ -32,6 +35,18 @@
 //! retried, so treat it as lost; metadata and follow bodies carry **no time**
 //! (use the timestamp header); a renewal's `created_at` is when the
 //! subscription first started.
+//!
+//! **Retries and freshness.** Kick's docs imply retries "for over a day"
+//! though none has been seen. If Kick does retry, a retry very likely keeps
+//! the original message id and timestamp (they are what is signed), so one
+//! that comes more than the tolerance later is refused as
+//! [`WebhookError::Stale`]. The default (5 minutes) suits a receiver that
+//! is up: live deliveries arrive within a second or two, and a short window
+//! keeps the set of message ids to remember small. A receiver that would
+//! rather take late retries than lose them can pass a longer tolerance
+//! ([`Freshness::Within`]), up to a day or more, and must then remember
+//! message ids for that long, since the window is also how long a captured
+//! delivery can be replayed.
 //!
 //! The RSA here is the `rsa` crate's, used for verifying only.
 //! RUSTSEC-2023-0071 (the Marvin timing attack) is about operations with the
@@ -50,7 +65,9 @@ use serde_json::Value;
 use std::fmt;
 
 /// How far a delivery's timestamp may be from now, either way, by default:
-/// 5 minutes. Kick's deliveries arrive within a second or two.
+/// 5 minutes. Kick's deliveries arrive within a second or two; a retry, if
+/// Kick sends one, may carry the original timestamp and be refused as
+/// stale (see the module docs on choosing a tolerance).
 pub const DEFAULT_TOLERANCE_SECS: u64 = 300;
 
 const NAMES: [&str; 6] = [
@@ -456,6 +473,8 @@ pub enum WebhookEvent {
 }
 
 /// The kinds of body this crate reads, by the field only that kind has.
+/// No known type's body has another known type's own field, so checking the
+/// claimed type's alone refuses every re-typing between them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Shape {
     Status,
@@ -467,9 +486,6 @@ enum Shape {
 }
 
 impl Shape {
-    const ALL: [Shape; 6] =
-        [Shape::Status, Shape::Metadata, Shape::Followed, Shape::Subscription, Shape::Gifts, Shape::Kicks];
-
     fn of_type(event_type: &str) -> Option<Shape> {
         Some(match event_type {
             "livestream.status.updated" => Shape::Status,
@@ -502,9 +518,10 @@ impl Shape {
 
 /// Reads a delivery's body (raw bytes or text) by its type header.
 ///
-/// The type header is not signed, so the body must be that type's shape:
-/// have the type's own field (`follower` for a follow, `is_live` for a
-/// status, …) and no other type's. Otherwise [`Error::Shape`]; not JSON,
+/// The type header is not signed, so the body must have the type's own
+/// field (`follower` for a follow, `is_live` for a status, `gift` for
+/// Kicks, …); other fields, known or not, are ignored, so a field Kick adds
+/// later does not break a delivery. Otherwise [`Error::Shape`]; not JSON,
 /// [`Error::Json`]. A type this crate does not read comes out as
 /// [`WebhookEvent::Other`], unchecked.
 pub fn parse(event_type: &str, body: impl AsRef<[u8]>) -> Result<WebhookEvent, Error> {
@@ -512,11 +529,10 @@ pub fn parse(event_type: &str, body: impl AsRef<[u8]>) -> Result<WebhookEvent, E
     if !v.is_object() {
         return Err(Error::shape("a webhook body is an object"));
     }
-    if let Some(claimed) = Shape::of_type(event_type) {
-        let fits: Vec<Shape> = Shape::ALL.into_iter().filter(|s| s.fits(&v)).collect();
-        if fits != [claimed] {
-            return Err(Error::shape(format!("the body is not a {event_type}")));
-        }
+    if let Some(claimed) = Shape::of_type(event_type)
+        && !claimed.fits(&v)
+    {
+        return Err(Error::shape(format!("the body is not a {event_type}")));
     }
     let broadcaster = || Person::from(get(&v, "broadcaster"));
     Ok(match event_type {
@@ -667,14 +683,80 @@ mod tests {
         ] {
             assert!(matches!(parse(other, follow), Err(Error::Shape(_))), "{other}");
         }
-        let status = r#"{"broadcaster":{},"is_live":true,"started_at":"x","follower":{}}"#;
-        assert!(matches!(parse("livestream.status.updated", status), Err(Error::Shape(_))), "two shapes at once");
         let banned = r#"{"broadcaster":{},"moderator":{},"banned_user":{},"metadata":{"reason":"x"}}"#;
         assert!(matches!(parse("livestream.metadata.updated", banned), Err(Error::Shape(_))));
         assert!(matches!(parse("moderation.banned", banned), Ok(WebhookEvent::Other { .. })));
         assert!(matches!(parse("channel.followed", "[]"), Err(Error::Shape(_))));
         assert!(matches!(parse("channel.followed", "{"), Err(Error::Json(_))));
         assert!(matches!(parse("channel.followed", b"\xff"), Err(Error::Json(_))));
+    }
+
+    /// One body of each type this crate reads, with the fields Kick sends
+    /// (KICK.md §4.1).
+    const BODIES: [(&str, &str); 7] = [
+        (
+            "livestream.status.updated",
+            r#"{"broadcaster":{"user_id":1},"is_live":true,"title":"t","started_at":"2026-09-24T03:01:11Z","ended_at":null}"#,
+        ),
+        (
+            "livestream.metadata.updated",
+            r#"{"broadcaster":{"user_id":1},"metadata":{"title":"t","language":"en","has_mature_content":false,"category":{"id":15},"Category":{"id":15}}}"#,
+        ),
+        ("channel.followed", r#"{"broadcaster":{"user_id":1},"follower":{"user_id":2}}"#),
+        (
+            "channel.subscription.new",
+            r#"{"broadcaster":{"user_id":1},"subscriber":{"user_id":2},"duration":1,"created_at":"x","expires_at":"y"}"#,
+        ),
+        (
+            "channel.subscription.renewal",
+            r#"{"broadcaster":{"user_id":1},"subscriber":{"user_id":2},"duration":3,"created_at":"x","expires_at":"y"}"#,
+        ),
+        (
+            "channel.subscription.gifts",
+            r#"{"broadcaster":{"user_id":1},"gifter":{"is_anonymous":true,"user_id":null},"giftees":[{"user_id":3}],"created_at":"x","expires_at":"y"}"#,
+        ),
+        (
+            "kicks.gifted",
+            r#"{"broadcaster":{"user_id":1},"sender":{"user_id":2},"gift":{"amount":10,"name":"n","type":"BASIC","tier":"BASIC","message":"m","pinned_time_seconds":0},"created_at":"x"}"#,
+        ),
+    ];
+
+    #[test]
+    fn no_known_body_passes_as_another_known_type() {
+        let subscription = |t: &str| t.starts_with("channel.subscription.") && !t.ends_with("gifts");
+        for (own, body) in BODIES {
+            assert!(parse(own, body).is_ok(), "{own}");
+            for (other, _) in BODIES {
+                // `.new` and `.renewal` are one shape (see the module docs).
+                if other == own || (subscription(own) && subscription(other)) {
+                    continue;
+                }
+                assert!(matches!(parse(other, body), Err(Error::Shape(_))), "a {own} passed as a {other}");
+            }
+        }
+        // The unread types' bodies do not pass as a read one either.
+        for body in [
+            r#"{"broadcaster":{},"moderator":{},"banned_user":{},"metadata":{"reason":"x","created_at":"x","expires_at":null}}"#,
+            r#"{"id":"r","user_input":"u","status":"accepted","redeemed_at":"x","reward":{"id":"1","title":"t","cost":5},"redeemer":{},"broadcaster":{}}"#,
+            r#"{"message_id":"m","replies_to":null,"broadcaster":{},"sender":{},"content":"hi","emotes":[],"created_at":"x"}"#,
+        ] {
+            for (claimed, _) in BODIES {
+                assert!(matches!(parse(claimed, body), Err(Error::Shape(_))), "{claimed}: {body}");
+            }
+        }
+    }
+
+    #[test]
+    fn fields_kick_adds_later_are_ignored() {
+        // Even a field another type owns: only the claimed type's own field
+        // is required.
+        let status = r#"{"broadcaster":{},"is_live":true,"started_at":"x","follower":{},"gift":{},"new_field":[1]}"#;
+        assert!(matches!(
+            parse("livestream.status.updated", status),
+            Ok(WebhookEvent::LivestreamStatus { is_live: true, .. })
+        ));
+        let follow = r#"{"broadcaster":{"user_id":1},"follower":{"user_id":2},"followed_at":"2026-10-01T00:00:00Z"}"#;
+        assert!(matches!(parse("channel.followed", follow), Ok(WebhookEvent::Followed { .. })));
     }
 
     /// A throwaway 1024-bit key made for this test alone, so a delivery can

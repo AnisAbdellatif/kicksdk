@@ -61,7 +61,10 @@ fn a_refused_refresh_closes() {
 fn a_disconnect_push_closes_and_closed_reports_every_feed() {
     let mut s = connected(2700);
     let out = s.receive(r#"{"push":{"disconnect":{"code":3001,"reason":"shutdown","reconnect":true}}}"#, 5_000);
-    assert!(matches!(out.as_slice(), [Action::Close { reason, reconnect: true, .. }] if reason.contains("3001")));
+    assert!(matches!(
+        out.as_slice(),
+        [Action::Close { reason, terminal: false, retry_after_ms: 0, .. }] if reason.contains("3001")
+    ));
     let out = s.closed();
     assert_eq!(
         out,
@@ -79,7 +82,10 @@ fn a_refused_connect_closes() {
     let mut s = Session::new(SessionOptions::new(vec![]));
     s.open("bad", 0);
     let out = s.receive(r#"{"id":1,"error":{"code":101,"message":"unauthorized"}}"#, 10);
-    assert!(matches!(out.as_slice(), [Action::Close { reason, reconnect: false, .. }] if reason.contains("101")));
+    assert!(matches!(
+        out.as_slice(),
+        [Action::Close { reason, terminal: true, retry_after_ms: 300_000, .. }] if reason.contains("101")
+    ));
 }
 
 #[test]
@@ -108,40 +114,98 @@ fn several_replies_in_one_frame() {
     assert!(s.is_subscribed("a") && s.is_subscribed("b"));
 }
 
+/// (code, terminal), checking that `retry_after_ms` goes with `terminal`.
 fn close_of(out: &[Action]) -> (i64, bool) {
     match out {
-        [Action::Close { code, reconnect, .. }] => (*code, *reconnect),
+        [Action::Close { code, terminal, retry_after_ms, .. }] => {
+            assert_eq!(*retry_after_ms, if *terminal { 300_000 } else { 0 });
+            (*code, *terminal)
+        }
         other => panic!("not a close: {other:?}"),
     }
 }
 
 #[test]
-fn close_says_whether_to_reconnect() {
+fn close_says_how_long_to_wait() {
     let push = |code: i64| format!(r#"{{"push":{{"disconnect":{{"code":{code},"reason":"x"}}}}}}"#);
-    for (code, reconnect) in [(3001, true), (3501, false), (4004, true), (4501, false)] {
+    for (code, terminal) in [(3001, false), (3499, false), (3501, true), (4004, false), (4501, true), (4999, true)] {
         let mut s = connected(2700);
-        assert_eq!(close_of(&s.receive(&push(code), 1)), (code, reconnect), "{code}");
+        assert_eq!(close_of(&s.receive(&push(code), 1)), (code, terminal), "{code}");
     }
-    // Outside Centrifugo's ranges, the push's own flag.
-    let mut s = connected(2700);
-    assert_eq!(
-        close_of(&s.receive(r#"{"push":{"disconnect":{"code":1,"reason":"x","reconnect":false}}}"#, 1)),
-        (1, false)
-    );
+    // Outside Centrifugo's ranges, the push's own flag: `reconnect: false`
+    // is terminal, true or absent is not.
+    for (flag, terminal) in [(",\"reconnect\":false", true), (",\"reconnect\":true", false), ("", false)] {
+        let mut s = connected(2700);
+        let frame = format!(r#"{{"push":{{"disconnect":{{"code":1,"reason":"x"{flag}}}}}}}"#);
+        assert_eq!(close_of(&s.receive(&frame, 1)), (1, terminal), "{frame}");
+    }
     // A refused connect: an expired token or a temporary error is worth
-    // another try, being unauthorized is not.
+    // another try at once, being unauthorized is terminal.
     for (error, expected) in [
-        (r#"{"code":101,"message":"unauthorized"}"#, (101, false)),
-        (r#"{"code":109,"message":"token expired"}"#, (109, true)),
-        (r#"{"code":111,"message":"too many requests","temporary":true}"#, (111, true)),
+        (r#"{"code":101,"message":"unauthorized"}"#, (101, true)),
+        (r#"{"code":109,"message":"token expired"}"#, (109, false)),
+        (r#"{"code":111,"message":"too many requests","temporary":true}"#, (111, false)),
+        (r#"{"code":3,"message":"transport"}"#, (3, false)),
     ] {
         let mut s = Session::new(SessionOptions::new(vec![]));
         s.open("t", 0);
         assert_eq!(close_of(&s.receive(&format!(r#"{{"id":1,"error":{error}}}"#), 1)), expected);
     }
-    // Silence: the session gave up itself, code 0, worth a reconnect.
+    // The same for a refused refresh.
     let mut s = connected(2700);
-    assert_eq!(close_of(&s.tick(1_000_000)), (0, true));
+    s.refresh("t2", 1);
+    assert_eq!(close_of(&s.receive(r#"{"id":3,"error":{"code":101,"message":"unauthorized"}}"#, 2)), (101, true));
+    // Silence: the session gave up itself, code 0, the ordinary backoff.
+    let mut s = connected(2700);
+    assert_eq!(close_of(&s.tick(1_000_000)), (0, false));
+}
+
+#[test]
+fn a_close_serializes_with_the_wait() {
+    let mut s = connected(2700);
+    let out = s.receive(r#"{"push":{"disconnect":{"code":3501,"reason":"banned"}}}"#, 1);
+    assert_eq!(
+        serde_json::to_value(&out).unwrap(),
+        serde_json::json!([{"action": "close", "code": 3501, "reason": "Kick disconnected: 3501 banned",
+            "terminal": true, "retry_after_ms": 300_000}])
+    );
+}
+
+/// A host's loop, as every driver runs it: terminal closes wait 5, 10, 20,
+/// 30 minutes, and the chat feed subscribing starts over.
+#[test]
+fn terminal_closes_escalate_until_the_chat_feed_subscribes() {
+    use kicksdk::realtime::{Backoff, retry_after_ms};
+    let mut backoff = Backoff::default();
+    let mut waits = vec![];
+    let mut s = Session::new(SessionOptions::new(vec!["chatrooms.1.v2".into()]));
+    for _ in 0..2 {
+        // Refused at connect: Action::Close.
+        s.open("t", 0);
+        let out = s.receive(r#"{"id":1,"error":{"code":101,"message":"unauthorized"}}"#, 1);
+        let [Action::Close { retry_after_ms: wait, .. }] = out.as_slice() else { panic!("{out:?}") };
+        waits.push(backoff.next_delay_for(*wait, 0.0));
+        s.closed();
+        // Connected, then the socket closed with a terminal code.
+        s.open("t", 0);
+        s.receive(r#"{"id":1,"connect":{"ping":25}}"#, 1);
+        s.closed();
+        waits.push(backoff.next_delay_for(retry_after_ms(4501), 0.0));
+    }
+    assert_eq!(waits, [300_000, 600_000, 1_200_000, 1_800_000]);
+    // A connection that got as far as `connected` did not reset it; the
+    // chat feed subscribing does.
+    s.open("t", 0);
+    s.receive(r#"{"id":1,"connect":{"ping":25}}"#, 1);
+    let out = s.receive(r#"{"id":2,"subscribe":{}}"#, 2);
+    for a in &out {
+        if matches!(a, Action::Subscribed { channel } if channel == "chatrooms.1.v2") {
+            backoff.reset();
+        }
+    }
+    assert_eq!(backoff.next_delay_for(retry_after_ms(3501), 0.0), 300_000);
+    // An ordinary drop still waits the ordinary backoff.
+    assert_eq!(backoff.next_delay_for(retry_after_ms(1006), 0.0), 500);
 }
 
 #[test]
@@ -254,4 +318,19 @@ fn signed_urls_never_reach_the_host() {
         matches!(event, kicksdk::KickEvent::HostingOut { hosted } if hosted.slug.as_deref() == Some("otherchannel"))
     );
     assert!(!format!("{out:?}").contains("sekrit"));
+}
+
+#[test]
+fn a_chat_message_that_mentions_playback_url_is_passed_on_untouched() {
+    let mut s = Session::new(SessionOptions::new(vec!["chatrooms.1.v2".into()]));
+    s.open("t", 0);
+    s.receive(r#"{"id":1,"connect":{"ping":25}}"#, 0);
+    // As Kick encodes it: `\/` and `é` escapes, its own key order.
+    let data = r##"{"id":"m1","chatroom_id":1,"content":"where is the playback_url? café \/ ok","type":"message","created_at":"2026-10-01T00:00:00+00:00","sender":{"id":2,"username":"somechannel","slug":"somechannel","identity":{"color":"#fff","badges":[]}}}"##;
+    let frame = serde_json::json!({"push": {"channel": "chatrooms.1.v2", "pub": {"data": {
+        "event": "App\\Events\\ChatMessageEvent", "data": data}}}});
+    let out = s.receive(&frame.to_string(), 1);
+    let [Action::Event { data: got, event, .. }] = out.as_slice() else { panic!("{out:?}") };
+    assert_eq!(got.as_str(), Some(data), "byte for byte");
+    assert!(matches!(event, kicksdk::KickEvent::ChatMessage(m) if m.content == "where is the playback_url? café / ok"));
 }

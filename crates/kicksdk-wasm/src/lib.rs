@@ -293,15 +293,17 @@ pub fn parse_token(status: u16, body: &str) -> Result<String, JsValue> {
     realtime::parse_token(status, body).map_err(fail)
 }
 
-/// Whether a connection whose socket closed with this code is worth opening
-/// again: false for Kick's terminal codes (3500-3999 and 4500-4999: a bad
-/// token, a ban, a refused request), true for the rest (1006, a network
+/// The least to wait, ms, before reconnecting after the socket closed with
+/// this code: 300000 (5 minutes) for Kick's terminal codes (3500-3999 and
+/// 4500-4999: a bad token, a ban, a refused request), then reconnect with a
+/// new client id; 0, the ordinary backoff, for the rest (1006, a network
 /// drop, among them).
-#[wasm_bindgen(js_name = shouldReconnect)]
-pub fn should_reconnect(code: f64) -> Result<bool, JsValue> {
+#[wasm_bindgen(js_name = retryAfterMs)]
+pub fn retry_after_ms(code: f64) -> Result<f64, JsValue> {
     // In range: `whole` checked it.
     let code = whole("code", code, u16::MAX.into())? as u16;
-    Ok(realtime::should_reconnect(code))
+    // At most 300000: exact as a JS number.
+    Ok(realtime::retry_after_ms(code) as f64)
 }
 
 fn now_ms(now: f64) -> Result<u64, JsValue> {
