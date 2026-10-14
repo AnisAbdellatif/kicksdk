@@ -38,6 +38,15 @@ feed subscribing again ends the streak. `docs/KICK.md` §6.1 has the rules.
 A callback that throws is reported to `onError` (or `console.error`) without
 disturbing the connection; none fires after `close()`.
 
+A mistake in the options throws from `connectChat` at once: a bad id or
+endpoint, a `timeoutMs` that is not a number of ms above 0 and at most
+2147483647 (setTimeout's limit), an option that should be a function and is
+not. The backoff resets when the first of `channels` (the chat feed, by
+default) subscribes, or, with `channels: []`, when Kick accepts the
+connection. A `now` clock that returns anything but a number of ms from 0
+to `Number.MAX_SAFE_INTEGER` is reported to `onError` once, and
+`performance.now()` takes over.
+
 Node 22 and later have a `WebSocket`. On older Node, pass one:
 `connectChat({ ..., WebSocket })` with the `ws` package's class. Without
 one, `connectChat` throws.
@@ -51,8 +60,11 @@ Everything else - `channelRequest` / `parseChannel`, `historyRequest`,
 `livestreamsRequests`, `verifyWebhook`, `parseEvent`, `parseContent`, … -
 returns plain request objects for your `fetch` and parses what comes back.
 Parsers throw an `Error` with a `status` when Kick answered with an error.
-Ids and counts must be whole numbers (ids at most `Number.MAX_SAFE_INTEGER`);
-anything else throws rather than being rounded into another id.
+Every number must be a JS number - a numeric string or a boolean throws a
+`TypeError` rather than being converted - and ids, statuses, times and
+counts whole ones in range (ids at most `Number.MAX_SAFE_INTEGER`), or a
+`RangeError` is thrown rather than the number being rounded into another
+id.
 
 **Webhooks.** Read Kick's key once and check each delivery against the raw
 body (text or bytes), its headers (pairs, a fetch `Headers`, or an object),
