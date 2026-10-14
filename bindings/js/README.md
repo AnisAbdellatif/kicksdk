@@ -18,10 +18,24 @@ const chat = kick.connectChat({
   onEvent: ({ event }) => {
     if (event.type === 'chat_message') console.log(`${event.sender.username}: ${event.content}`);
   },
-  onState: ({ connected, subscribed }) => {},
+  onState: ({ connected, subscribed, stopped }) => {},
+  onDrop: (reason, { code, reconnect }) => {
+    if (!reconnect) console.error(`Kick ended the connection for good: ${reason}`);
+  },
 });
 chat.close();
 ```
+
+`connectChat` reconnects with a jittered backoff whenever a connection ends
+(Kick went quiet, the socket closed, a request or the handshake took longer
+than `timeoutMs`, 10 s by default), and stops for good on Kick's terminal
+codes: `onDrop` then says `reconnect: false` and `onState` `stopped: true`.
+A callback that throws is reported to `onError` (or `console.error`) without
+disturbing the connection; none fires after `close()`.
+
+Node 22 and later have a `WebSocket`. On older Node, pass one:
+`connectChat({ ..., WebSocket })` with the `ws` package's class. Without
+one, `onDrop` says so once and the driver stops.
 
 **Where the feed works.** Kick's realtime server only accepts a WebSocket whose
 Origin is `https://kick.com`. Node: works (the driver sets the header). Browser:
