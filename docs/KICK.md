@@ -311,9 +311,13 @@ key 32cbd69e4b950bf97679 not in this cluster…"}}` and closes. Noticed
 - Answer: `{"data": {"connections": [{"provider": "centrifugo", "credentials": {"url": "wss://realtime.<region>.platform.kick.com/connection/websocket"}}], "mode": "websocket"}, "message": "success"}`.
   Only Centrifugo is offered now; Kick's client would still accept
   `{"provider": "pusher", "credentials": {"app_key", "cluster"}}`.
-- **Each channel's chat has a region**: one channel answered `us-west-2`,
-  another `us-east-1`, while the general endpoint answered `us-east-1`. Ask
-  per channel.
+- **The region is load balancing, not where a chat lives**: the
+  per-channel endpoint answered `us-west-2` for one channel and `us-east-1`
+  for another, and the same channel's answer changed between requests; the
+  general endpoint answered `us-east-1`. A connection to either region, from
+  either endpoint, subscribed to and received any channel's chat (seen
+  2026-10-13). Asking per channel is what kick.com does and costs nothing,
+  but the general endpoint works for every chat.
 
 **The token**
 
