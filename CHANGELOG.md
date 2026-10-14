@@ -105,6 +105,102 @@ version stays 0.1.1 until release.
   the workspace: the `dispatch` feature and the WebAssembly crate enable
   it, so binding output keeps its key order.
 
+### JavaScript (kicksdk-js)
+
+- New: `shouldReconnect(code)`, `Backoff.nextDelayJittered(random)`,
+  `new WebhookPublicKey(pem).verify(...)`. **Breaking**: `verifyWebhook(pem,
+  headers, body, {now, toleranceSecs} | {skipFreshness: true})` checks
+  freshness (default: this machine's clock, 5 minutes; `now` in seconds);
+  bodies may be a string, `Uint8Array` or `ArrayBuffer`; `parseWebhook`
+  takes bytes too.
+- **Breaking**: ids, `now`, Backoff bounds, `minutes`, `limit` and event
+  versions must be whole, non-negative safe-integer numbers (`TypeError` /
+  `RangeError` otherwise); an unknown endpoint key or `sort`, or a malformed
+  `replyTo`, throws instead of being replaced or dropped.
+- `connectChat`:
+  - reconnects as soon as the session gives up on a quiet socket, without
+    waiting for the old socket to close (in Node it never did);
+  - stops on a terminal close (`reconnect: false`, or a socket close code
+    `shouldReconnect` refuses): `onDrop(reason, {code, reconnect: false})`,
+    then `onState({..., stopped: true})`. **Breaking**: `onDrop` gets a
+    second argument, `onState` a `stopped` field;
+  - new options: `onError(error)` (default `console.error`) for exceptions
+    thrown by your callbacks, which no longer break the driver;
+    `timeoutMs` (default 10 s) for each request and the handshake;
+    `WebSocket` for runtimes without a global one (Node 20, or the `ws`
+    package);
+  - `onDrop` also fires when the socket closes or the handshake is refused,
+    and nothing fires after `close()`, which may be called twice or from
+    inside a callback;
+  - reconnect waits are jittered; the session clock is `performance.now()`.
+- `init()` retries after a failed load instead of returning the same
+  rejection forever; it resolves to `undefined`.
+- Types: `endpoints` optional everywhere, user ids `readonly number[]`,
+  `ChatState`, `ChatDrop`, `ChatSocket` exported; checked by a strict
+  TypeScript consumer in the tests.
+- The npm package includes `LICENSE-MIT` and `LICENSE-APACHE`.
+
+### Python (kicksdk-py)
+
+- New: `kicksdk.realtime.should_reconnect(code)`; `Backoff` wraps the core's,
+  with `next_delay()` and `next_delay_jittered(random)` (ms). `Backoff(0)`
+  now waits 1 ms.
+- **Breaking**: `webhooks.verify(pem, headers, body, *, now=None,
+  tolerance_secs=None, skip_freshness=False)` checks freshness by default
+  (`now` defaults to `time.time()`); `bytes` bodies are verified as bytes.
+  `webhooks.parse` takes bytes too.
+- **Breaking**: `kicksdk.aio`:
+  - `import kicksdk.aio` without the `[aio]` extra raises an `ImportError`
+    that says to install it (it used to hang the iterator);
+  - the iterator raises `ChatClosed` (a terminal close), `ChatRefused`
+    (`max_refusals` refusals in a row, default 5, e.g. a 403 handshake) or
+    an unexpected error, instead of retrying forever, and ends when the
+    `async with` block exits; `chat.error`, `chat.done`;
+  - a failed token refresh keeps the connection, and the refresh no longer
+    blocks ping replies; a normal exit closes with 1000, not 1011;
+  - `max_queue` and `overflow` (`"drop_oldest"`, counted in `chat.dropped`,
+    or `"backpressure"`) replace the silent drop at 10,000 events;
+  - `http=` takes your own `httpx.AsyncClient`; reconnect waits are
+    jittered.
+- Wheels and the sdist include `LICENSE-MIT` and `LICENSE-APACHE`.
+
+### Dart (kicksdk) and the C ABI (kicksdk-ffi)
+
+- C: `#define KICKSDK_ABI_VERSION 1u` in `kicksdk.h`; the header documents
+  that `kicksdk_session_new` may return NULL and one call at a time per
+  session. A panic inside a call no longer prints to stderr, and its
+  envelope carries the panic message.
+- New: `Realtime.shouldReconnect(code)`, `Backoff.nextDelayJittered`.
+  **Breaking**: `Webhooks.verify(pem, headers, Object body, {DateTime? now,
+  Duration? tolerance, bool skipFreshness = false})` checks freshness
+  (default: the machine clock); a `List<int>` body is verified as bytes.
+- `connectChat`: new `timeout` (default 10 s, each request and the
+  handshake), `onError`, `backoff`, and `ChatConnection.done`; stops on a
+  terminal close; nothing is called back after `close()`; exceptions in
+  your callbacks no longer lose the rest of a batch; a failed token refresh
+  is retried on the same socket; reconnect waits are jittered.
+- Build hook: the download has a connect and an overall timeout; any
+  network or TLS failure, or a `binary_base_url` that is not http(s), falls
+  back to a source build, while a checksum mismatch still fails the build.
+  Targets without a precompiled library (Linux arm, riscv64 and musl,
+  Windows ia32, Android ia32/riscv64) build from source instead of failing.
+  New user defines `cargo_path`, `cargo_home`, `rustup_home` for toolchains
+  outside the default location; Android source builds link for the app's
+  minimum NDK API.
+
+### Release
+
+- The Linux libraries are built with `cross` and checked against a glibc
+  floor (2.17, 2.18 for the arm64 C library, 2.27 for riscv64); 0.1.1's
+  x86_64 NIF and x86_64/arm64 C libraries needed glibc 2.34.
+- Release assets are never replaced once uploaded; NIF tarballs are
+  reproducible; hex and pub checksum the release's own files, and pub
+  requires all 12 libraries.
+- Libraries are stripped, macOS ones get `@rpath` install names, and the
+  Windows MSVC builds link the C runtime statically.
+- Re-runs run from the tag; a dry run builds and checks everything on pull
+  requests that touch the release, and weekly. See `docs/releasing.md`.
+
 ### For binding authors
 
 - `dispatch`:
@@ -122,17 +218,8 @@ version stays 0.1.1 until release.
   - Builders listed above under Requests can now fail with kind `invalid`;
     `content.emote_url` too.
   - Session actions: `close` has `code` and `reconnect`; see Realtime.
-- WebAssembly and the NIF got compile fixes only: their `verifyWebhook`
-  checks freshness against the machine clock (5 minutes) until they expose
-  `now`/`tolerance`/skip; the NIF raises `{:invalid, message}` from the
-  builders that became fallible (its own `channel_request`,
-  `channel_user_request`, `livestreams_requests`, `subscriptions_request`,
-  `unsubscribe_requests`) and `ArgumentError` from `emote_url`; JS throws.
-  Still to expose: `PublicKey` reuse, `Freshness`, `body` as bytes,
-  `Backoff.nextDelayJittered`, `should_reconnect`, and `Close`'s new fields
-  in the language-side drivers (stop reconnecting when `reconnect` is
-  false). The WebAssembly crate's own `getrandom` dependency is now
-  redundant with the core's.
+- Every binding now exposes all of the above; see its section.
+
 
 ## 0.1.1
 

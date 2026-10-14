@@ -6,6 +6,10 @@ version: 0.1.1
 repository: https://github.com/AnisAbdellatif/kicksdk
 issue_tracker: https://github.com/AnisAbdellatif/kicksdk/issues
 topics: [kick, chat, streaming, ffi]
+# native/vendor/ holds the Rust crates' sources for an offline source build
+# (scripts/vendor-native.sh); their docs include example keys, not secrets.
+false_secrets:
+  - /native/vendor/
 
 environment:
   sdk: ^3.10.0

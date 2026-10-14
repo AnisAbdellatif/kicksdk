@@ -19,7 +19,7 @@ time takes `now` in milliseconds.
   server answered to (`realtime_recordings_replay`).
 
 The cost is a driver per host. It is small, and written once per language:
-`connectChat` in `bindings/js/index.js` is about 150 lines.
+`connectChat` in `bindings/js/index.js` is about 330 lines.
 
 ## Requests and parsers
 
@@ -167,6 +167,10 @@ the checksum files are committed. Without them, a checkout of the repository
 builds from the workspace itself. A binary whose checksum does not match is
 refused outright: falling back to a source build there would hide a
 tampered release.
+
+The Dart hook falls back to a source build on any network or TLS failure,
+and for targets with no precompiled library; only a checksum mismatch
+fails the build.
 
 ## Fixtures are the contract
 

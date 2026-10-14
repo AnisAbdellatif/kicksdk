@@ -679,7 +679,10 @@ mod tests {
 
     /// A throwaway 1024-bit key made for this test alone, so a delivery can
     /// be signed here: small, because only the arithmetic is under test.
-    const TEST_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIICdwIBADANBgkqhkiG9w0BAQEFAASCAmEwggJdAgEAAoGBAKTXCWzDTIcS22mQ\nfM9o95xMQjMdqRybYz//5F/Hb/jBkamd/N1C2HpGI/4Zuf9LPVdtsu5k9P3VSmFn\nrh1ajRF1FVv89Ak2ZmUhZ675KeRbJploDwf5rKvDWoKFkDo7ZDqrzZ1OicU5KTKD\nIUMtq6bzzxvNLqDn0w7eZXNd6yNzAgMBAAECgYEAnDH3CEx283b22azD13VLS5sn\nD3CHkkfbYAWFzQwaGcix0duWg8KXhiV4bYrLKBGPaozUA/k9/FhjRrEL11y6Vc7G\nDxc+1cSg/Vkqm2Uhd5GwrSUvymz074MPt3tbuQsEJTt72JR5Wcvmj0V3VmeD2wIS\nnHVjZ1gJdTSGRxnVgQECQQDWZ60FaLSBSByW575Bq/qMrINQRY6iFn0TFRL9MTtv\nAAnksnGIf8kQkQsiH2trNioJv/v10chlgdDpqfdhZd+TAkEAxNG9BvQ7rbg4s8G7\nMVzIb2nqNOMd55NtO74tlBDANZb19gwh3LAKrkHNMpQSkOYI/CQ0PSL7H3WUb3dR\ncWVYoQJBAJH3CTL6gpDVUCloYf2BoNRuigN3J1CwMLxyB3h6MPUzuIiK94IvROpT\nZJn5e/8EZAA5RMao6F46z8iUXwde/KMCQG82tMFBMJexCRlJ1yTFcNzD1Hud+j/o\npkij5c1Myc9+Re2KXXf+YYql0/VIhlUqJtmS+5GwOoZEQmPZ4ENbKQECQGWzNgyw\nzCq2MXXCjHhj/r8zXrq+05vASZIz1Qan9CSkoxnm3SR1DwPJK6msvrrC8qieLjYY\nGG1ADCau3QXMLV0=\n-----END PRIVATE KEY-----";
+    /// It lives in fixtures/signing rather than here, so no package that
+    /// ships this file's source carries a private key.
+    const TEST_PRIVATE_KEY: &str =
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/signing/throwaway-test-key.pem"));
 
     fn signed(id: &str, ts: &str, body: &[u8]) -> (PublicKey, Headers) {
         use rsa::pkcs8::DecodePrivateKey;
