@@ -13,11 +13,12 @@ defmodule Kicksdk.Realtime do
        make up (a UUID). It lasts 45 minutes; refresh it for the **same** id.
     3. Open the WebSocket and drive a `Kicksdk.Realtime.Session`.
 
-  When the socket closes, reconnect with a `Kicksdk.Realtime.Backoff`, after
-  at least the session's `"close"` action's `"retry_after_ms"` (or
-  `retry_after_ms/1` of the socket's close code); a terminal close waits
-  minutes and reconnects with a new client id. `examples/elixir/chat.exs`
-  does all of it.
+  When the socket closes, reconnect after
+  `Kicksdk.Realtime.Backoff.next_delay_for/3` of the session's `"close"`
+  action's `"retry_after_ms"` (or of `retry_after_ms/1` of the socket's close
+  code). Never stop because a close is terminal: wait the longer time (5
+  minutes, more if it happens again) and reconnect as a new client, with a
+  new client id and token. `examples/elixir/chat.exs` does all of it.
   """
 
   import Kicksdk, only: [encode_endpoints: 1, request: 1]

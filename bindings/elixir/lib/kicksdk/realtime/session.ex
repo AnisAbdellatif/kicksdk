@@ -6,13 +6,27 @@ defmodule Kicksdk.Realtime.Session do
   actions, maps with an `"action"`:
 
     * `"send"` - send `"text"` as a text frame.
-    * `"close"` - close the socket, call `closed/1`, and reconnect with a
-      `Kicksdk.Realtime.Backoff` if `"reconnect"` is true and the connection
-      is still wanted; `"reconnect"` false means the same connection would
-      be refused again. `"code"` is Kick's disconnect code (3000-4999),
-      Kick's error code for a refused connect or token refresh (101
-      unauthorized, 109 token expired, ...), or 0 when the session gave up
-      on a silent connection; `"reason"` is for a log line.
+    * `"close"` - close the socket, call `closed/1`, and, unless your
+      application is done with the chat, reconnect after
+      `Kicksdk.Realtime.Backoff.next_delay_for(backoff, action["retry_after_ms"], :rand.uniform())`.
+      The other fields:
+      * `"code"` - Kick's disconnect code (3000-4999), Kick's error code for
+        a refused connect or token refresh (101 unauthorized, 109 token
+        expired, ...), or 0 when the session gave up on a silent connection.
+      * `"reason"` - for a log line.
+      * `"terminal"` - Kick does not want this client back as it is (a
+        terminal disconnect code, a refused guest token, a connection limit,
+        a ban). Never a reason to stop: reconnect after the wait all the
+        same, as a **new client** - a new client id, so a new connection
+        request and token. Worth a warning in your log.
+      * `"retry_after_ms"` - the least to wait: 300_000 (5 minutes) when
+        terminal, else 0 (the ordinary backoff). The backoff escalates
+        terminal closes in a row to 30 minutes.
+
+      When the socket closes by itself instead, with a close code and no
+      `"close"` action first, do the same with
+      `Kicksdk.Realtime.retry_after_ms/1` of that code (more than 0 is
+      terminal). See `docs/KICK.md` §6.1 and `examples/elixir/chat.exs`.
     * `"refresh_token"` - fetch a new token for the same client id and pass it
       to `refresh/3`. If that fails, do nothing: Kick ends the connection when
       the old one runs out.
@@ -20,7 +34,8 @@ defmodule Kicksdk.Realtime.Session do
       the connection's state. An `"unsubscribed"` with a code from 2500 to
       2999 is Kick asking to subscribe again: the session has already sent
       it, and `"subscribed"` or `"subscribe_failed"` follows. Reset the
-      backoff when the chat feed (the first) is subscribed.
+      backoff (`Kicksdk.Realtime.Backoff.reset/1`) when the chat feed (the
+      first) is subscribed: that ends a streak of terminal closes too.
     * `"event"` - with `"channel"` (the feed), `"name"` (Kick's event name),
       `"data"` (as Kick sent it) and `"event"` (typed, as in `Kicksdk.Events`).
 

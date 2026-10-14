@@ -22,7 +22,8 @@ defmodule Kicksdk.Realtime.SessionTest do
     assert deadline == now + 10 + 45_000
     assert Session.tick(s, deadline - 1) == []
 
-    assert [%{"action" => "close", "code" => 0, "reconnect" => true}] = Session.tick(s, deadline)
+    assert [%{"action" => "close", "code" => 0, "terminal" => false, "retry_after_ms" => 0}] =
+             Session.tick(s, deadline)
   end
 
   test "works on any integer clock, and asks for a token before it runs out" do
@@ -41,19 +42,38 @@ defmodule Kicksdk.Realtime.SessionTest do
     end
   end
 
-  test "a close says whether to reconnect" do
+  test "a close says how long to wait at least, and whether it was terminal" do
     s = connected(0)
 
-    assert [%{"action" => "close", "code" => 3501, "reconnect" => false, "reason" => reason}] =
-             Session.receive(s, ~s({"push":{"disconnect":{"code":3501,"reason":"bad request"}}}), 20)
+    assert [
+             %{
+               "action" => "close",
+               "code" => 3501,
+               "reason" => reason,
+               "terminal" => true,
+               "retry_after_ms" => 300_000
+             } = close
+           ] = Session.receive(s, ~s({"push":{"disconnect":{"code":3501,"reason":"bad request"}}}), 20)
 
     assert reason =~ "3501"
+    # Exactly these fields: "reconnect" is gone.
+    assert Map.keys(close) |> Enum.sort() == ~w(action code reason retry_after_ms terminal)
     assert [%{"action" => "unsubscribed", "code" => 0}] = Session.closed(s)
+
+    # Terminal is not the end: the session opens again after closed/1.
+    assert [%{"action" => "send"}] = Session.open(s, "t2", 400_000)
 
     s = connected(0)
 
-    assert [%{"action" => "close", "code" => 3005, "reconnect" => true}] =
+    assert [%{"action" => "close", "code" => 3005, "terminal" => false, "retry_after_ms" => 0}] =
              Session.receive(s, ~s({"push":{"disconnect":{"code":3005,"reason":"shutdown"}}}), 20)
+
+    # A refused connect (101 unauthorized: a guest token Kick will not take).
+    s = Session.new(["chatrooms.1.v2"])
+    Session.open(s, "t", 0)
+
+    assert [%{"action" => "close", "code" => 101, "terminal" => true, "retry_after_ms" => 300_000}] =
+             Session.receive(s, ~s({"id":1,"error":{"code":101,"message":"unauthorized"}}), 5)
   end
 
   test "an earlier time than the first is not a wrap" do
