@@ -404,5 +404,12 @@ jobs:
         run: dart pub get && ../../scripts/without-rust.sh dart test
       - run: ../../scripts/vendor-native.sh bindings/dart kicksdk-ffi
       - run: ../../scripts/package-files.sh bindings/dart
+      # The source fallback, from the archive pub.dev will serve: pub leaves
+      # out files the checkout has, so the checkout building proves nothing.
+      - name: The pub archive, built from source
+        if: steps.published.outputs.yes != 'true'
+        run: |
+          dart pub publish --to-archive="$RUNNER_TEMP/kicksdk.tar.gz"
+          ../../scripts/check-dart-archive.sh "$RUNNER_TEMP/kicksdk.tar.gz"
       - if: steps.published.outputs.yes != 'true'
         run: dart pub publish --force
