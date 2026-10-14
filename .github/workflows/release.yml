@@ -1,378 +1,408 @@
 # Releases every package from one tag: git tag v0.2.0 && git push origin v0.2.0
 #
-# 1. The GitHub release is created first; every precompiled binary is
-#    uploaded to it.
-# 2. Binaries, per target: the Elixir NIF (rustler_precompiled's naming), the
-#    Dart/C library (kicksdk_ffi-v<version>-<triple>.<so|dylib|dll>), Python
-#    wheels, the WebAssembly.
-# 3. Each package is published once its binaries are up. The hex and pub
-#    packages get the checksums of exactly those binaries, and a vendored Cargo
-#    workspace (scripts/vendor-native.sh) to build from when no binary fits.
+# 1. plan (scripts/release-plan.sh) checks the tag and the versions, and
+#    decides which jobs run.
+# 2. build.yml builds, read-only, as artifacts of this run: the Elixir NIFs
+#    (rustler_precompiled's naming), the Dart/C library per target
+#    (kicksdk_ffi-v<version>-<triple>.<so|dylib|dll>), the Python wheels and
+#    the npm package; and checks the vendored source fallback.
+# 3. The GitHub release is created, and the NIFs and the FFI libraries are
+#    uploaded to it, never replacing a file it has
+#    (scripts/upload-release-assets.sh). The wheels and the npm package go to
+#    their registries only.
+# 4. Each package is published once what it needs is ready: hex and pub only
+#    after every one of their binaries is on the release. They record those
+#    files' checksums, and ship a vendored Cargo workspace
+#    (scripts/vendor-native.sh) to build from when no binary fits.
 #
 # Publishing needs, per registry (docs/releasing.md):
-#   crates.io  CARGO_REGISTRY_TOKEN secret, or trusted publishing once the
-#              crates exist
-#   PyPI       a trusted publisher (can be set up before the project exists)
-#   npm        NPM_TOKEN secret, or trusted publishing once the package exists
+#   crates.io  CARGO_REGISTRY_TOKEN secret, or trusted publishing
+#   PyPI       a trusted publisher
+#   npm        NPM_TOKEN secret, or trusted publishing
 #   hex        HEX_API_KEY secret
-#   pub.dev    trusted publishing, which needs the package to exist: the
-#              first version goes up with scripts/publish-dart.sh
+#   pub.dev    automated publishing, which takes tag pushes only
 # A registry that is not set up fails its own job and leaves the others alone.
+# A version a registry already has is skipped, so a re-run does what is left.
 
 name: Release
 
 on:
   push:
     tags: ["v*"]
-  # Re-runs part of a release from this workflow's current definition, against
-  # the tagged code: e.g. tag v0.1.1, only "nif,hex" after a fix to those jobs.
+  # Started on a tag ("Use workflow from" the tag, or gh workflow run
+  # release.yml --ref v0.2.0), it re-runs part of that release with the tag's
+  # own workflow and scripts. Started on a branch, it is a dry run.
+  # docs/releasing.md has when to use which.
   workflow_dispatch:
     inputs:
-      tag:
-        description: Existing tag to release, e.g. v0.1.1
-        required: true
       only:
         description: Jobs to run, comma separated (release, nif, ffi, wheels, crates, pypi, npm, hex, pub); empty for all
         required: false
         default: ""
+      dry_run:
+        description: Build and check everything; upload and publish nothing (always so on a branch)
+        type: boolean
+        default: false
 
-permissions:
-  contents: read
+permissions: {}
 
-env:
-  CARGO_TERM_COLOR: always
-  TAG: ${{ inputs.tag || github.ref_name }}
+# One run per tag at a time: a second one waits rather than racing the first
+# to the release and the registries.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      dry_run: ${{ steps.plan.outputs.dry_run }}
+      release: ${{ steps.plan.outputs.release }}
+      nif: ${{ steps.plan.outputs.nif }}
+      ffi: ${{ steps.plan.outputs.ffi }}
+      wheels: ${{ steps.plan.outputs.wheels }}
+      js: ${{ steps.plan.outputs.js }}
+      vendored: ${{ steps.plan.outputs.vendored }}
+      packages: ${{ steps.plan.outputs.packages }}
+      crates: ${{ steps.plan.outputs.crates }}
+      pypi: ${{ steps.plan.outputs.pypi }}
+      npm: ${{ steps.plan.outputs.npm }}
+      hex: ${{ steps.plan.outputs.hex }}
+      pub: ${{ steps.plan.outputs.pub }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          ONLY: ${{ inputs.only }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: scripts/release-plan.sh && cat "$GITHUB_OUTPUT"
+
+  # ---- Builds (read-only) -------------------------------------------------------
+
+  build-nif:
+    name: Build NIFs
+    needs: plan
+    if: needs.plan.outputs.nif == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build.yml
+    with:
+      part: nif
+
+  build-ffi:
+    name: Build FFI libraries
+    needs: plan
+    if: needs.plan.outputs.ffi == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build.yml
+    with:
+      part: ffi
+
+  build-wheels:
+    name: Build wheels
+    needs: plan
+    if: needs.plan.outputs.wheels == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build.yml
+    with:
+      part: wheels
+
+  build-js:
+    name: Build the npm package
+    needs: plan
+    if: needs.plan.outputs.js == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build.yml
+    with:
+      part: js
+
+  vendored:
+    name: Vendored sources
+    needs: plan
+    if: needs.plan.outputs.vendored == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build.yml
+    with:
+      part: vendored
+
+  # Dry runs only: the packages as they would be published, from this run's
+  # binaries.
+  packages:
+    name: Packages (dry run)
+    needs: [plan, build-nif, build-ffi]
+    if: needs.plan.outputs.packages == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build.yml
+    with:
+      part: packages
+
+  # ---- The GitHub release ---------------------------------------------------------
+
   release:
     name: Create the GitHub release
-    if: ${{ !inputs.only || contains(inputs.only, 'release') || contains(inputs.only, 'nif') || contains(inputs.only, 'ffi') || contains(inputs.only, 'hex') || contains(inputs.only, 'pub') }}
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    outputs:
-      version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-      - id: v
-        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
-      - run: scripts/release-check.sh "${{ steps.v.outputs.version }}"
-      - run: gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
-        env:
+      - env:
+          TAG: ${{ needs.plan.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
 
-  # ---- Elixir: precompiled NIFs -------------------------------------------------
-
-  nif:
-    name: NIF ${{ matrix.target }}
-    needs: release
-    if: ${{ !inputs.only || contains(inputs.only, 'nif') }}
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        # rustler_precompiled's default targets, which Kicksdk.Native lists.
-        include:
-          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
-          - { target: x86_64-unknown-linux-musl, os: ubuntu-22.04, cross: true }
-          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04, cross: true }
-          - { target: aarch64-unknown-linux-musl, os: ubuntu-22.04, cross: true }
-          - { target: arm-unknown-linux-gnueabihf, os: ubuntu-22.04, cross: true }
-          - { target: riscv64gc-unknown-linux-gnu, os: ubuntu-22.04, cross: true }
-          - { target: x86_64-apple-darwin, os: macos-latest }
-          - { target: aarch64-apple-darwin, os: macos-latest }
-          - { target: x86_64-pc-windows-msvc, os: windows-latest }
-          - { target: x86_64-pc-windows-gnu, os: windows-latest }
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - if: ${{ matrix.cross }}
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cross
-      - name: Build
-        shell: bash
-        env:
-          # musl links statically by default, and a NIF has to be a shared
-          # library. On macOS the NIF's enif_* symbols come from the VM that
-          # loads it, so they are left for the loader to resolve.
-          RUSTFLAGS: >-
-            ${{ contains(matrix.target, 'musl') && '-C target-feature=-crt-static' || '' }}
-            ${{ contains(matrix.target, 'apple') && '-C link-arg=-undefined -C link-arg=dynamic_lookup' || '' }}
-        run: |
-          tool=cargo
-          if [ "${{ matrix.cross }}" = "true" ]; then tool=cross; fi
-          $tool build --release --locked -p kicksdk_nif --target ${{ matrix.target }}
-      - name: Package as rustler_precompiled names it
-        shell: bash
-        run: |
-          v=${{ needs.release.outputs.version }}
-          t=${{ matrix.target }}
-          dir=target/$t/release
-          case "$t" in
-            *windows*) src=$dir/kicksdk_nif.dll;      name=kicksdk_nif-v$v-nif-2.15-$t.dll ;;
-            *apple*)   src=$dir/libkicksdk_nif.dylib; name=libkicksdk_nif-v$v-nif-2.15-$t.so ;;
-            *)         src=$dir/libkicksdk_nif.so;    name=libkicksdk_nif-v$v-nif-2.15-$t.so ;;
-          esac
-          cp "$src" "$name"
-          tar czf "$name.tar.gz" "$name"
-          gh release upload "$TAG" "$name.tar.gz" --clobber
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-  # ---- Dart (and C): the FFI library ------------------------------------------
-
-  ffi:
-    name: FFI ${{ matrix.target }}
-    needs: release
-    if: ${{ !inputs.only || contains(inputs.only, 'ffi') }}
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Built on the oldest Ubuntu runner, so the library asks for the
-          # oldest glibc.
-          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04, ext: so }
-          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm, ext: so }
-          - { target: x86_64-apple-darwin, os: macos-latest, ext: dylib }
-          - { target: aarch64-apple-darwin, os: macos-latest, ext: dylib }
-          - { target: aarch64-apple-ios, os: macos-latest, ext: dylib }
-          - { target: aarch64-apple-ios-sim, os: macos-latest, ext: dylib }
-          - { target: x86_64-apple-ios, os: macos-latest, ext: dylib }
-          - { target: x86_64-pc-windows-msvc, os: windows-latest, ext: dll }
-          - { target: aarch64-pc-windows-msvc, os: windows-latest, ext: dll }
-          - { target: aarch64-linux-android, os: ubuntu-22.04, ext: so, ndk: arm64-v8a }
-          - { target: armv7-linux-androideabi, os: ubuntu-22.04, ext: so, ndk: armeabi-v7a }
-          - { target: x86_64-linux-android, os: ubuntu-22.04, ext: so, ndk: x86_64 }
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - if: ${{ !matrix.ndk }}
-        run: cargo build --release --locked -p kicksdk-ffi --target ${{ matrix.target }}
-      - if: ${{ matrix.ndk }}
-        # The runner's ANDROID_NDK_ROOT is what cargo-ndk finds the NDK by.
-        run: |
-          cargo install cargo-ndk --locked
-          cargo ndk -t ${{ matrix.ndk }} -P 21 build --release --locked -p kicksdk-ffi
-      - name: Name it for the release
-        shell: bash
-        run: |
-          dir=target/${{ matrix.target }}/release
-          case "${{ matrix.ext }}" in
-            dll) src=$dir/kicksdk_ffi.dll ;;
-            *)   src=$dir/libkicksdk_ffi.${{ matrix.ext }} ;;
-          esac
-          out=kicksdk_ffi-v${{ needs.release.outputs.version }}-${{ matrix.target }}.${{ matrix.ext }}
-          cp "$src" "$out"
-          gh release upload "$TAG" "$out" --clobber
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-  # ---- Python: wheels ----------------------------------------------------------
-
-  wheels:
-    name: Wheels ${{ matrix.os }} ${{ matrix.target }}
-    needs: release
-    if: ${{ !inputs.only || contains(inputs.only, 'wheels') }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: ubuntu-22.04, target: x86_64, manylinux: auto }
-          - { os: ubuntu-22.04, target: aarch64, manylinux: auto }
-          - { os: ubuntu-22.04, target: x86_64, manylinux: musllinux_1_2 }
-          - { os: ubuntu-22.04, target: aarch64, manylinux: musllinux_1_2 }
-          - { os: macos-latest, target: x86_64 }
-          - { os: macos-latest, target: aarch64 }
-          - { os: windows-latest, target: x64 }
-          - { os: windows-latest, target: aarch64 }
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: PyO3/maturin-action@v1
-        with:
-          working-directory: bindings/python
-          target: ${{ matrix.target }}
-          manylinux: ${{ matrix.manylinux || 'auto' }}
-          args: --release --out dist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-${{ matrix.os }}-${{ matrix.target }}-${{ matrix.manylinux || 'native' }}
-          path: bindings/python/dist
-
-  sdist:
-    name: Python sdist
-    needs: release
-    if: ${{ !inputs.only || contains(inputs.only, 'wheels') }}
+  upload-nif:
+    name: Upload the NIFs
+    needs: [plan, release, build-nif]
+    if: needs.plan.outputs.release == 'true' && needs.plan.outputs.nif == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: PyO3/maturin-action@v1
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          working-directory: bindings/python
-          command: sdist
-          args: --out dist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-sdist
-          path: bindings/python/dist
+          name: nif-tarballs
+          path: dist
+      - env:
+          TAG: ${{ needs.plan.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/upload-release-assets.sh "$TAG" dist/*
 
-  # ---- Publishing --------------------------------------------------------------
+  upload-ffi:
+    name: Upload the FFI libraries
+    needs: [plan, release, build-ffi]
+    if: needs.plan.outputs.release == 'true' && needs.plan.outputs.ffi == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ffi-*
+          merge-multiple: true
+          path: dist
+      - env:
+          TAG: ${{ needs.plan.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/upload-release-assets.sh "$TAG" dist/*
+
+  # ---- Publishing -------------------------------------------------------------------
 
   crates:
     name: Publish to crates.io
-    needs: release
-    if: ${{ !inputs.only || contains(inputs.only, 'crates') }}
+    needs: plan
+    if: needs.plan.outputs.crates == 'true'
     runs-on: ubuntu-latest
+    environment: crates-io
     permissions:
+      contents: read
       id-token: write
-    env:
-      # Secrets cannot appear in `if:`; this says whether there is one.
-      HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: dtolnay/rust-toolchain@stable
-      - if: env.HAS_TOKEN != 'true'
-        uses: rust-lang/crates-io-auth-action@v1
-        id: auth
-      - run: |
-          cargo publish --locked -p kicksdk
-          cargo publish --locked -p kicksdk-ffi
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
+        with:
+          toolchain: stable
+      # Secrets cannot appear in `if:`; this says whether there is one.
+      - id: token
         env:
+          TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: if [ -n "$TOKEN" ]; then echo "has=true" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.token.outputs.has != 'true'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+        id: auth
+      # crates.io never takes a version twice: a crate that has this one is
+      # skipped, so a re-run publishes what is left (kicksdk-ffi after kicksdk).
+      - env:
+          VERSION: ${{ needs.plan.outputs.version }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
+        run: |
+          for crate in kicksdk kicksdk-ffi; do
+            code=$(curl -sS -o "$RUNNER_TEMP/index" -w '%{http_code}' "https://index.crates.io/ki/ck/$crate")
+            if [ "$code" = 200 ] && grep -qF "\"vers\":\"$VERSION\"" "$RUNNER_TEMP/index"; then
+              echo "$crate $VERSION is on crates.io already"
+            elif [ "$code" = 200 ] || [ "$code" = 404 ]; then
+              cargo publish --locked -p "$crate"
+            else
+              echo "::error::the crates.io index answered $code for $crate"
+              exit 1
+            fi
+          done
 
   pypi:
     name: Publish to PyPI
-    needs: [wheels, sdist]
-    if: ${{ !inputs.only || contains(inputs.only, 'pypi') }}
+    needs: [plan, build-wheels]
+    if: needs.plan.outputs.pypi == 'true'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: wheels-*
           merge-multiple: true
           path: dist
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           # A re-run after another registry failed must not fail here.
           skip-existing: true
 
   npm:
     name: Publish to npm
-    needs: release
-    if: ${{ !inputs.only || contains(inputs.only, 'npm') }}
+    needs: [plan, build-js]
+    if: needs.plan.outputs.npm == 'true'
     runs-on: ubuntu-latest
+    environment: npm
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - run: scripts/install-wasm-tools.sh
-      - uses: actions/setup-node@v5
+          name: js-package
+          path: dist
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-      - run: scripts/build-js.sh
-      - run: npm test
-        working-directory: bindings/js
-      # With NPM_TOKEN, a token publish (the first one); without, npm's
-      # trusted publishing through this workflow's OIDC token.
-      - run: npm publish --provenance --access public
-        working-directory: bindings/js
+      - id: published
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          if npm view "kicksdk-js@$VERSION" version >/dev/null 2>&1; then
+            echo "kicksdk-js $VERSION is on npm already"
+            echo "yes=true" >> "$GITHUB_OUTPUT"
+          fi
+      # The tarball build.yml packed and tested. With the NPM_TOKEN secret, a
+      # token publish; without it, npm's trusted publishing through this
+      # job's OIDC token (npm 11.5+, Node 24's). Provenance either way.
+      - if: steps.published.outputs.yes != 'true'
+        run: npm publish dist/*.tgz --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   hex:
     name: Publish to hex
-    needs: [release, nif]
-    # On a re-run with only "hex", nif is skipped: its NIFs are on the release already.
-    if: ${{ always() && needs.release.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.nif.result) && (!inputs.only || contains(inputs.only, 'hex')) }}
+    needs: [plan, release, build-nif, upload-nif, vendored]
+    # Waits for every NIF to be on the release. On a re-run with only "hex"
+    # the NIF jobs are skipped: the release has its NIFs already.
+    if: always() && needs.plan.outputs.hex == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-latest
+    environment: hex
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: bindings/elixir
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: erlef/setup-beam@v1
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
+        with:
+          toolchain: stable
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
           otp-version: "28"
           elixir-version: "1.19"
-      # The vendoring prunes the lock file offline: the crates must be in the
-      # cargo cache first.
-      - run: cargo fetch --locked
+      # hex lets a new version be replaced for a while after it is published;
+      # a re-run must not do that.
+      - id: published
+        run: |
+          code=$(curl -sS -o /dev/null -w '%{http_code}' "https://hex.pm/api/packages/kicksdk/releases/$VERSION")
+          case "$code" in
+            200) echo "kicksdk $VERSION is on hex already"; echo "yes=true" >> "$GITHUB_OUTPUT" ;;
+            404) ;;
+            *) echo "::error::hex.pm answered $code"; exit 1 ;;
+          esac
       - run: ../../scripts/vendor-native.sh bindings/elixir kicksdk-nif
       - run: mix deps.get
-      # Writes checksum-Elixir.Kicksdk.Native.exs from the release's own NIFs.
+      # Writes checksum-Elixir.Kicksdk.Native.exs from the release's own NIFs,
+      # every target's (--all fails on a missing one).
       - run: |
           KICKSDK_BUILD=1 mix compile
           mix rustler_precompiled.download Kicksdk.Native --all --print
-      - run: mix hex.publish --yes
+      # The package as its users get it: the NIF downloaded from the release,
+      # checked against those checksums, loaded and tested.
+      - name: The precompiled NIF loads (no Rust on PATH)
+        env:
+          MIX_ENV: test
+        run: ../../scripts/without-rust.sh mix test
+      - if: steps.published.outputs.yes != 'true'
+        run: mix hex.publish --yes
         env:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
 
   pub:
     name: Publish to pub.dev
-    needs: [release, ffi]
-    if: ${{ always() && needs.release.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.ffi.result) && (!inputs.only || contains(inputs.only, 'pub')) }}
+    needs: [plan, release, build-ffi, upload-ffi, vendored]
+    # Waits for every library to be on the release; see hex. pub.dev takes
+    # this job's token from tag pushes only (plan leaves pub out otherwise).
+    if: always() && needs.plan.outputs.pub == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-latest
+    environment: pub-dev
     permissions:
+      contents: read
       id-token: write
     defaults:
       run:
         working-directory: bindings/dart
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAG: ${{ needs.plan.outputs.tag }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: dart-lang/setup-dart@v1
-      - name: Checksums of the release's own libraries
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
+        with:
+          toolchain: stable
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
+      - id: published
         run: |
-          mkdir -p ../../ffi
-          gh release download "$TAG" --pattern 'kicksdk_ffi-*' --dir ../../ffi
-          (cd ../../ffi && sha256sum kicksdk_ffi-*) | python3 -c '
-          import json, sys
-          sums = {}
-          for line in sys.stdin:
-              digest, name = line.split()
-              sums[name.lstrip("*")] = digest
-          json.dump(sums, open("hook/checksums.json", "w"), indent=2, sort_keys=True)
-          '
-          cat hook/checksums.json
+          code=$(curl -sS -o /dev/null -w '%{http_code}' "https://pub.dev/api/packages/kicksdk/versions/$VERSION")
+          case "$code" in
+            200) echo "kicksdk $VERSION is on pub.dev already"; echo "yes=true" >> "$GITHUB_OUTPUT" ;;
+            404) ;;
+            *) echo "::error::pub.dev answered $code"; exit 1 ;;
+          esac
+      # Every library the hook can download, as the release serves it.
+      - name: Checksums of the release's own libraries
         env:
           GH_TOKEN: ${{ github.token }}
-      - run: cargo fetch --locked
+        run: |
+          gh release download "$TAG" --pattern 'kicksdk_ffi-*' --dir "$RUNNER_TEMP/ffi"
+          ../../scripts/dart-checksums.sh "$VERSION" "$RUNNER_TEMP/ffi"
+      # The package as its users get it: the library downloaded from the
+      # release, checked against checksums.json, loaded and tested.
+      - name: The precompiled download (no Rust on PATH)
+        run: dart pub get && ../../scripts/without-rust.sh dart test
       - run: ../../scripts/vendor-native.sh bindings/dart kicksdk-ffi
       - run: ../../scripts/package-files.sh bindings/dart
-      - run: dart pub get
-      - run: dart pub publish --force
+      - if: steps.published.outputs.yes != 'true'
+        run: dart pub publish --force
