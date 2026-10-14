@@ -82,6 +82,13 @@ def test_webhook_signatures():
     assert refused(now=sent + 60, tolerance_secs=10) == "webhook"
     assert refused() == "webhook"
     assert refused(now=-1) == "call"
+    # `now` is a finite number of seconds, at least 0, floored.
+    for bad in (float("inf"), float("-inf"), float("nan"), -0.5):
+        assert refused(now=bad) == "call", bad
+    for wrong in ("1790217342", b"1", True, [1]):
+        with pytest.raises(TypeError):
+            webhooks.verify(pem, headers, body, now=wrong)  # type: ignore[arg-type]
+    assert webhooks.verify(pem, headers, body, now=float(sent) + 0.99)["event"]["type"] == "followed"
     with pytest.raises(ValueError):
         webhooks.verify(pem, headers, body, now=sent, skip_freshness=True)
     with pytest.raises(TypeError):
