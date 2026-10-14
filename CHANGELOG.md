@@ -143,28 +143,40 @@ version stays 0.1.1 until release.
 ### JavaScript (kicksdk-js)
 
 - New: `retryAfterMs(code)` (replaces the unreleased `shouldReconnect`),
-  `Backoff.nextDelayJittered(random)`,
+  `Backoff.nextDelayJittered(random)`, `Backoff.nextDelayFor(retryAfterMs,
+  random)`,
   `new WebhookPublicKey(pem).verify(...)`. **Breaking**: `verifyWebhook(pem,
   headers, body, {now, toleranceSecs} | {skipFreshness: true})` checks
   freshness (default: this machine's clock, 5 minutes; `now` in seconds);
   bodies may be a string, `Uint8Array` or `ArrayBuffer`; `parseWebhook`
   takes bytes too.
-- **Breaking**: ids, `now`, Backoff bounds, `minutes`, `limit` and event
-  versions must be whole, non-negative safe-integer numbers (`TypeError` /
-  `RangeError` otherwise); an unknown endpoint key or `sort`, or a malformed
-  `replyTo`, throws instead of being replaced or dropped.
+- **Breaking**: every numeric argument (ids, `now`, Backoff bounds,
+  `minutes`, `limit`, event versions, parser statuses 0-65535, `random`,
+  `retryAfterMs`) must be a JS number, whole and non-negative where it is a
+  count (`TypeError` for a string, boolean or BigInt, `RangeError` out of
+  range); `parseContent`'s `combine` must be a boolean; an unknown
+  endpoint key or `sort`, or a malformed `replyTo`, throws instead of being
+  replaced or dropped.
 - `connectChat`:
   - reconnects as soon as the session gives up on a quiet socket, without
     waiting for the old socket to close (in Node it never did);
-  - stops on a terminal close (`reconnect: false`, or a socket close code
-    `shouldReconnect` refuses): `onDrop(reason, {code, reconnect: false})`,
-    then `onState({..., stopped: true})`. **Breaking**: `onDrop` gets a
-    second argument, `onState` a `stopped` field;
+  - never stops on its own: after a terminal close (a session `close`
+    action with `terminal`, or a socket close code `retryAfterMs` gives a
+    wait for) it reconnects as a new guest client after
+    `Backoff.nextDelayFor`'s long wait (KICK.md §6.1). **Breaking**:
+    `onDrop(reason, {code, terminal, waitMs})`, `waitMs` being the wait
+    actually scheduled;
   - new options: `onError(error)` (default `console.error`) for exceptions
     thrown by your callbacks, which no longer break the driver;
-    `timeoutMs` (default 10 s) for each request and the handshake;
-    `WebSocket` for runtimes without a global one (Node 20, or the `ws`
-    package);
+    `timeoutMs` (default 10 s, at most 2^31-1 ms) for each request and the
+    handshake; `WebSocket` for runtimes without a global one (Node 20, or
+    the `ws` package); without any, `connectChat` throws a `TypeError`;
+  - function options are checked up front (`TypeError`); a `now` reading
+    that is not a usable number is reported to `onError` once and
+    `performance.now()` carries on from the last good one;
+  - a feed listed twice is subscribed and reported once; with
+    `channels: []` the backoff resets when Kick accepts the connection;
+  - every optional option may be given as `undefined`;
   - `onDrop` also fires when the socket closes or the handshake is refused,
     and nothing fires after `close()`, which may be called twice or from
     inside a callback;
@@ -179,22 +191,34 @@ version stays 0.1.1 until release.
 ### Python (kicksdk-py)
 
 - New: `kicksdk.realtime.retry_after_ms(code)` (replaces the unreleased
-  `should_reconnect`); `Backoff` wraps the core's,
-  with `next_delay()` and `next_delay_jittered(random)` (ms). `Backoff(0)`
-  now waits 1 ms.
+  `should_reconnect`) and `realtime.TERMINAL_RETRY_MS`; `Backoff` wraps the
+  core's, with `next_delay()`, `next_delay_jittered(random)` and
+  `next_delay_for(retry_after_ms, random)` (ms); `initial` and `maximum`
+  stay settable. `Backoff(0)` now waits 1 ms. `NativeError.__module__` is
+  `kicksdk._native`, and the extension's stub matches it (stubtest).
 - **Breaking**: `webhooks.verify(pem, headers, body, *, now=None,
   tolerance_secs=None, skip_freshness=False)` checks freshness by default
-  (`now` defaults to `time.time()`); `bytes` bodies are verified as bytes.
+  (`now` defaults to `time.time()`; it must be an int or float, finite and
+  not negative, and is floored); `bytes` bodies are verified as bytes.
   `webhooks.parse` takes bytes too.
 - **Breaking**: `kicksdk.aio`:
   - `import kicksdk.aio` without the `[aio]` extra raises an `ImportError`
     that says to install it (it used to hang the iterator);
-  - the iterator raises `ChatClosed` (a terminal close), `ChatRefused`
-    (`max_refusals` refusals in a row, default 5, e.g. a 403 handshake) or
-    an unexpected error, instead of retrying forever, and ends when the
-    `async with` block exits; `chat.error`, `chat.done`;
+  - the feed never stops on its own: after a terminal close it reconnects
+    as a new client after `Backoff.next_delay_for`'s long wait (KICK.md
+    §6.1), whether the close code arrives on a receive or on a send; from
+    `max_refusals` refusals in a row (default 5, e.g. a 403 handshake; any
+    other outcome resets the count) each refusal waits as long as a
+    terminal close. `chat.last_drop` (a `ChatDrop`: reason, code,
+    terminal, retry_after_ms, wait, status, error) and `chat.retrying`
+    show what it is doing; `backoff=` takes your own `Backoff`;
+  - the iterator raises only unexpected errors (bugs, bad arguments), and
+    ends when the `async with` block exits; `chat.error`, `chat.done`.
+    Leaving the block no longer hangs on Python 3.9-3.11 with frames
+    queued (it could forever, since 0.1.1);
   - a failed token refresh keeps the connection, and the refresh no longer
-    blocks ping replies; a normal exit closes with 1000, not 1011;
+    blocks ping replies, and its errors are always handled; a normal exit
+    closes with 1000, not 1011;
   - `max_queue` and `overflow` (`"drop_oldest"`, counted in `chat.dropped`,
     or `"backpressure"`) replace the silent drop at 10,000 events;
   - `http=` takes your own `httpx.AsyncClient`; reconnect waits are
@@ -208,15 +232,22 @@ version stays 0.1.1 until release.
   session. A panic inside a call no longer prints to stderr, and its
   envelope carries the panic message.
 - New: `Realtime.retryAfterMs(code)` (replaces the unreleased
-  `shouldReconnect`), `Backoff.nextDelayJittered`.
+  `shouldReconnect`), `Backoff.nextDelayJittered`, `Backoff.nextDelayFor`
+  (a `Duration`; the core's formula, ported).
   **Breaking**: `Webhooks.verify(pem, headers, Object body, {DateTime? now,
   Duration? tolerance, bool skipFreshness = false})` checks freshness
   (default: the machine clock); a `List<int>` body is verified as bytes.
 - `connectChat`: new `timeout` (default 10 s, each request and the
-  handshake), `onError`, `backoff`, and `ChatConnection.done`; stops on a
-  terminal close; nothing is called back after `close()`; exceptions in
-  your callbacks no longer lose the rest of a batch; a failed token refresh
-  is retried on the same socket; reconnect waits are jittered.
+  handshake), `onError`, `backoff`, `onDropInfo` (a `ChatDrop`: reason,
+  code, terminal, retryIn) and `ChatConnection.done`, which completes only
+  after `close()`: the connection never stops on its own, and after a
+  terminal close it reconnects as a new client after
+  `Backoff.nextDelayFor`'s long wait (KICK.md §6.1). `onDrop(String)` is
+  unchanged. A socket the session gives up on is let go at once (no 5 s
+  wait on a half-open one), and every lost socket is closed. Nothing,
+  `onError` included, is called back after `close()`; exceptions in your
+  callbacks no longer lose the rest of a batch; a failed token refresh is
+  retried on the same socket; reconnect waits are jittered.
 - Build hook: the download has a connect and an overall timeout; any
   network or TLS failure, or a `binary_base_url` that is not http(s), falls
   back to a source build, while a checksum mismatch still fails the build.
@@ -224,7 +255,8 @@ version stays 0.1.1 until release.
   Windows ia32, Android ia32/riscv64) build from source instead of failing.
   New user defines `cargo_path`, `cargo_home`, `rustup_home` for toolchains
   outside the default location; Android source builds link for the app's
-  minimum NDK API.
+  minimum NDK API. A musl host is recognised by the mapped C library's
+  file name, not by "musl" anywhere in its path.
 
 ### Elixir (kicksdk)
 
@@ -305,6 +337,10 @@ version stays 0.1.1 until release.
   requires all 12 libraries.
 - Libraries are stripped, macOS ones get `@rpath` install names, and the
   Windows MSVC builds link the C runtime statically.
+- The pub package carries the Rust crates' sources (`native/vendor/`, with
+  their checksum lists), so a source build works offline; CI builds the
+  pub and hex packages from their own archives, as users get them. The hex
+  package ships LICENSE and CHANGELOG.
 - Re-runs run from the tag; a dry run builds and checks everything on pull
   requests that touch the release, and weekly. See `docs/releasing.md`.
 
@@ -349,20 +385,9 @@ version stays 0.1.1 until release.
     keeps a `Backoff` as `{initial_ms, max_ms, next_ms}`: add the fourth
     integer, `terminal_closes` (the serde field name), to the tuple and to
     `Kicksdk.Realtime.Backoff`, or the count is lost between calls.
-  - Done here (thin layers only): the wasm export `retryAfterMs`, the NIF
-    `retry_after_ms/1` (with its `Kicksdk.Native` stub), Python
-    `kicksdk.realtime.retry_after_ms`, Dart `Realtime.retryAfterMs`,
-    Elixir `Kicksdk.Realtime.retry_after_ms/1`; `shouldReconnect` /
-    `should_reconnect` / `should_reconnect?` were removed from those layers.
-    Still to update, and broken until then: `bindings/js/index.js` (imports
-    `shouldReconnect`), `index.d.ts`, its tests and README;
-    `bindings/python/python/kicksdk/aio.py` (`rt.should_reconnect`,
-    `close["reconnect"]`, `ChatClosed`), its tests; `bindings/dart/lib/io.dart`
-    (`Realtime.shouldReconnect`, `a['reconnect']`), its tests and README;
-    `bindings/elixir` session docs, tests (`should_reconnect?`,
-    `"reconnect"`) and `examples/elixir/chat.exs`; `examples/javascript`
-    and `examples/dart`; the Session doc comments in each language layer
-    that still describe `reconnect`. `examples/rust` is updated.
+  - Every binding's driver and example follows this: JS `connectChat`,
+    Python `kicksdk.aio`, Dart `connectChat`, `examples/rust` and
+    `examples/elixir/chat.exs` (Elixir has no driver of its own).
 - `dispatch`:
   - New function `realtime.retry_after_ms {code}` -> integer ms (0 or
     300000). The unreleased `realtime.should_reconnect` is removed; calling

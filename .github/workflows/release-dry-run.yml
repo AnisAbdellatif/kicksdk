@@ -25,6 +25,7 @@ on:
       - bindings/elixir/mix.exs
       - bindings/elixir/mix.lock
       - bindings/elixir/lib/kicksdk/native.ex
+      - bindings/elixir/lib/kicksdk/native/**
       - bindings/python/Cargo.toml
       - bindings/python/pyproject.toml
       - bindings/python/src/**
