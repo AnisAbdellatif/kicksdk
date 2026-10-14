@@ -56,6 +56,9 @@ jobs:
       - run: scripts/build-js.sh
       - run: npm test
         working-directory: bindings/js
+      # The package's types, from a strict TypeScript consumer.
+      - run: npx --yes -p typescript@5.9.3 tsc -p test/types/tsconfig.json
+        working-directory: bindings/js
 
   consistency:
     name: One version, every function in every language
@@ -147,6 +150,8 @@ jobs:
           elixir-version: "1.19"
       - run: mix deps.get
       - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - run: mix credo --strict
       - run: mix test
 
   # The hex and pub packages' source fallback: their vendored native/
