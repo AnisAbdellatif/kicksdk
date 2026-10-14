@@ -61,10 +61,36 @@ def test_webhook_signatures():
         "Kick-Event-Type": "channel.followed",
         "Kick-Event-Version": "1",
     }
-    assert webhooks.verify(pem, headers, body)["event"]["type"] == "followed"
+    sent = 1_790_217_342  # the timestamp header, in Unix seconds
+    out = webhooks.verify(pem, headers, body, now=sent + 2)
+    assert out["event"]["type"] == "followed"
+    assert out["headers"]["message_id"] == "01M38M9K3YRKV8E6Q68C18ZWG4"
+    # Bytes are verified byte for byte (sent as body_base64); a float clock is fine.
+    assert webhooks.verify(pem, list(headers.items()), body.encode(), now=sent + 0.9)["event"]["type"] == "followed"
+    assert webhooks.verify(pem, headers, bytearray(body.encode()), skip_freshness=True)["event"]["type"] == "followed"
+
+    def refused(**kw):
+        with pytest.raises(KickError) as e:
+            webhooks.verify(pem, headers, kw.pop("body", body), **kw)
+        return e.value.kind
+
+    assert refused(body=body + " ", now=sent) == "webhook"
+    assert refused(body=(body + " ").encode(), now=sent) == "webhook"
+    # Stale: an hour late, outside a given tolerance, and by default (the
+    # machine's clock, which is past the fixture's day).
+    assert refused(now=sent + 3_600) == "webhook"
+    assert refused(now=sent + 60, tolerance_secs=10) == "webhook"
+    assert refused() == "webhook"
+    assert refused(now=-1) == "call"
+    with pytest.raises(ValueError):
+        webhooks.verify(pem, headers, body, now=sent, skip_freshness=True)
+    with pytest.raises(TypeError):
+        webhooks.verify(pem, headers, 3)  # type: ignore[arg-type]
+
+    assert webhooks.parse("channel.followed", body.encode())["type"] == "followed"
     with pytest.raises(KickError) as e:
-        webhooks.verify(pem, headers, body + " ")
-    assert e.value.kind == "webhook"
+        webhooks.parse("kicks.gifted", body)
+    assert e.value.kind == "shape"
 
 
 def test_a_recorded_session_replays():
@@ -92,5 +118,31 @@ def test_a_recorded_session_replays():
         assert s.is_subscribed(channels[0])
 
 
+def test_reconnect_codes_and_backoff():
+    assert not realtime.should_reconnect(3501)
+    assert not realtime.should_reconnect(4500)
+    assert realtime.should_reconnect(1006) and realtime.should_reconnect(3000)
+    with pytest.raises(KickError) as e:
+        realtime.should_reconnect(70_000)
+    assert e.value.kind == "call"
+
+    b = realtime.Backoff()
+    assert [b.next_delay() for _ in range(7)] == [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]
+    b.reset()
+    assert (b.next_delay_jittered(0.0), b.next_delay_jittered(0.5), b.next()) == (500, 1_500, 4.0)
+    assert (b.initial, b.maximum) == (1.0, 30.0)
+    assert realtime.Backoff(0, 0).next_delay() == 1, "never a busy loop"
+
+
 def test_every_core_function_is_reachable():
     assert "website.channel_request" in kicksdk._native.FUNCTIONS
+
+
+def test_packaged_licenses_are_the_repositorys():
+    # pyproject's license-files cannot reach above the package directory,
+    # so the package keeps copies; they must not drift.
+    here, root = Path(__file__).resolve().parents[1], Path(__file__).resolve().parents[3]
+    for name in ("LICENSE-MIT", "LICENSE-APACHE"):
+        if not (root / name).exists():
+            pytest.skip("not in the repository (an sdist)")
+        assert (here / name).read_bytes() == (root / name).read_bytes(), name

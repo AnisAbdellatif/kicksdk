@@ -1,8 +1,10 @@
 //! kicksdk for Python: `kicksdk._native`, two entry points over the core's
-//! dispatcher. The Python package (`python/kicksdk`) is the interface; this
-//! only converts between Python objects and the dispatcher's JSON.
+//! dispatcher, and the core's reconnect `Backoff`. The Python package
+//! (`python/kicksdk`) is the interface; this only converts between Python
+//! objects and the dispatcher's JSON.
 
 use kicksdk::dispatch::{self, DispatchError, SessionHandle};
+use kicksdk::realtime::Backoff;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
@@ -54,10 +56,47 @@ impl NativeSession {
     }
 }
 
+/// The core's reconnect delays, in milliseconds. Not in `dispatch`, which is
+/// stateless functions and the session: the arithmetic lives in the core all
+/// the same, so every language waits the same way.
+#[pyclass(module = "kicksdk._native")]
+struct NativeBackoff(Backoff);
+
+#[pymethods]
+impl NativeBackoff {
+    #[new]
+    fn new(initial_ms: u64, max_ms: u64) -> Self {
+        Self(Backoff::new(initial_ms, max_ms))
+    }
+
+    #[getter]
+    fn initial_ms(&self) -> u64 {
+        self.0.initial_ms
+    }
+
+    #[getter]
+    fn max_ms(&self) -> u64 {
+        self.0.max_ms
+    }
+
+    fn next_delay(&mut self) -> u64 {
+        self.0.next_delay()
+    }
+
+    fn next_delay_jittered(&mut self, random: f64) -> u64 {
+        self.0.next_delay_jittered(random)
+    }
+
+    fn reset(&mut self) {
+        self.0.reset();
+    }
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(call, m)?)?;
     m.add_class::<NativeSession>()?;
+    m.add_class::<NativeBackoff>()?;
     m.add("NativeError", m.py().get_type::<NativeError>())?;
     m.add("FUNCTIONS", dispatch::FUNCTIONS.to_vec())?;
     Ok(())
