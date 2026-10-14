@@ -21,3 +21,6 @@ thiserror = "2"
 lto = true
 codegen-units = 1
 opt-level = "s"
+# Drops the symbol table and debug info from what ships. The exports stay:
+# they are the dynamic symbol table (nif_init, kicksdk_*, PyInit__native).
+strip = "symbols"
