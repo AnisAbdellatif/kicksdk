@@ -18,26 +18,21 @@ defmodule Kicksdk.Native do
   # message; set KICKSDK_BUILD=1 to build from source instead.
   #
   # KICKSDK_BASE_URL points the download at a mirror of the release assets
-  # (the checksums still apply).
+  # (the checksums still apply); "http://mirror:8080" and
+  # "http://mirror:8080/" both work.
   #
   # These are read when this module compiles, and a change to any of them
-  # recompiles it (`__mix_recompile__?/0`). As a dependency, Mix does not
-  # look again by itself: run `mix deps.compile kicksdk --force`.
+  # recompiles it: Kicksdk.Native.Build.__mix_recompile__?/0, which Mix asks
+  # even when this module cannot be loaded (after a cross build, whose NIF is
+  # for the other machine). As a dependency, Mix does not look again by
+  # itself: run `mix deps.compile kicksdk --force`.
+
+  alias Kicksdk.Native.Build
 
   version = Mix.Project.config()[:version]
   root = Path.expand("../..", __DIR__)
   nif_versions = ["2.15"]
   targets = RustlerPrecompiled.Config.default_targets()
-  checksum = Path.join(root, "checksum-Elixir.Kicksdk.Native.exs")
-
-  @env ~w(KICKSDK_BUILD KICKSDK_BASE_URL TARGET_ARCH TARGET_VENDOR TARGET_OS TARGET_ABI
-          RUSTLER_PRECOMPILED_FORCE_BUILD_ALL)
-  @checksum checksum
-  @inputs {Enum.map(@env, &System.get_env/1), File.exists?(checksum)}
-
-  @doc false
-  # Mix asks before reusing this module's compiled code.
-  def __mix_recompile__?, do: {Enum.map(@env, &System.get_env/1), File.exists?(@checksum)} != @inputs
 
   # native/ is the vendored Cargo workspace in a published package; in the
   # repository the crate is at the top level.
@@ -46,54 +41,16 @@ defmodule Kicksdk.Native do
       do: "native/crates/kicksdk-nif",
       else: "../../crates/kicksdk-nif"
 
-  # This machine as rustler_precompiled describes a target, TARGET_* applied
-  # (its own helpers for this are private). An architecture string that is
-  # not three or four parts cannot be read: build from source.
-  parts = :erlang.system_info(:system_architecture) |> List.to_string() |> String.split("-")
-  keys = [arch: "TARGET_ARCH", vendor: "TARGET_VENDOR", os: "TARGET_OS", abi: "TARGET_ABI"]
-
-  detected =
-    if length(parts) in [3, 4],
-      do: Map.new(Enum.zip(Keyword.keys(keys), parts)),
-      else: %{}
-
-  system =
-    Enum.reduce(keys, detected, fn {key, var}, acc ->
-      case System.get_env(var) do
-        nil -> acc
-        value -> Map.put(acc, key, value)
-      end
-    end)
-
-  # As rustler_precompiled does: a Linux target set through TARGET_* without
-  # a vendor is "unknown".
-  system =
-    if system != detected and system[:vendor] == detected[:vendor] and system[:os] == "linux",
-      do: Map.put(system, :vendor, "unknown"),
-      else: system
-
-  here = %{
-    os_type: :os.type(),
-    target_system: system,
-    word_size: :erlang.system_info(:wordsize),
-    nif_version: hd(nif_versions)
-  }
-
-  supported? =
-    Map.has_key?(system, :arch) and Map.has_key?(system, :os) and
-      try do
-        match?({:ok, _}, RustlerPrecompiled.target(here, targets, nif_versions))
-      rescue
-        _ -> false
-      end
+  supported? = Build.supported?(Build.here(hd(nif_versions)), targets, nif_versions)
 
   # force_build only when this package needs it, so that rustler_precompiled's
   # own `config :rustler_precompiled, :force_build, kicksdk: true` still
   # applies otherwise.
   force =
-    if System.get_env("KICKSDK_BUILD") in ["1", "true"] or not File.exists?(checksum) or not supported?,
-      do: [force_build: true],
-      else: []
+    if System.get_env("KICKSDK_BUILD") in ["1", "true"] or not File.exists?(Build.checksum()) or
+         not supported?,
+       do: [force_build: true],
+       else: []
 
   use RustlerPrecompiled,
       [
@@ -101,8 +58,10 @@ defmodule Kicksdk.Native do
         crate: "kicksdk_nif",
         path: source,
         base_url:
-          System.get_env("KICKSDK_BASE_URL") ||
-            "https://github.com/AnisAbdellatif/kicksdk/releases/download/v#{version}",
+          Build.base_url(
+            System.get_env("KICKSDK_BASE_URL"),
+            "https://github.com/AnisAbdellatif/kicksdk/releases/download/v#{version}"
+          ),
         version: version,
         targets: targets,
         nif_versions: nif_versions

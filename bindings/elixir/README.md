@@ -27,11 +27,15 @@ with `KICKSDK_BUILD=1`, it is built from the Rust sources shipped in the
 package, which needs a Rust toolchain and adding `{:rustler, "~> 0.38",
 optional: true}` to your deps. rustler_precompiled's own switch works too:
 `config :rustler_precompiled, :force_build, kicksdk: true`.
-`KICKSDK_BASE_URL` points the download at a mirror. Nerves' `TARGET_ARCH`,
-`TARGET_VENDOR`, `TARGET_OS` and `TARGET_ABI` choose the target.
+`KICKSDK_BASE_URL` points the download at a mirror of the release assets
+(a directory URL, such as `http://localhost:8080` or
+`https://mirror.example/kicksdk/v0.1.1/`; the checksums still apply).
+Nerves' `TARGET_ARCH`, `TARGET_VENDOR`, `TARGET_OS` and `TARGET_ABI` choose
+the target.
 
 These variables are read when the package compiles. Mix does not recompile a
-dependency when they change: run `mix deps.compile kicksdk --force`.
+dependency when they change: run `mix deps.compile kicksdk --force`. (In the
+package's own checkout a change recompiles it, after a cross build too.)
 
 On Alpine and other musl systems the precompiled NIF links against
 `libgcc_s` for unwinding, which a slim image may lack: `apk add libgcc` (in

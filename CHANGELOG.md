@@ -257,9 +257,15 @@ version stays 0.1.1 until release.
   `ArgumentError`; HTTP statuses outside 0..65535 are `{:error, {:invalid, _}}`.
 - NIFs whose work grows with the input run on a dirty scheduler above 4 KiB.
 - `config :rustler_precompiled, :force_build, kicksdk: true` works; changing
-  `KICKSDK_BUILD`, `KICKSDK_BASE_URL` or `TARGET_*` recompiles the module;
-  an unrecognised system architecture or a `TARGET_*` cross build falls back
-  to a source build instead of failing.
+  `KICKSDK_BUILD`, `KICKSDK_BASE_URL` or `TARGET_*` recompiles the module,
+  also after a cross build (whose NIF does not load on the build machine;
+  the check now lives in `Kicksdk.Native.Build`, which always loads). As a
+  dependency, Mix does not look: `mix deps.compile kicksdk --force`. An
+  unrecognised Unix system architecture or a `TARGET_*` target without a
+  precompiled NIF falls back to a source build instead of failing; Windows
+  (architecture `win32`) gets the precompiled NIF as before.
+- `KICKSDK_BASE_URL` without a path (`http://localhost:8080`) works: a `/`
+  is added (rustler_precompiled asked for `http://localhost:8080kicksdk_nif-…`).
 - `examples/elixir/chat.exs` ticks, refreshes its token, and reconnects or
   stops as the session says.
 - Integers beyond 64 bits in Kick's JSON still arrive as floats (the core
