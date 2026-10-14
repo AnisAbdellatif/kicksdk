@@ -467,15 +467,22 @@ export function connectChat(o) {
     });
     socket.onclose = guard((e) => {
       if (ws !== socket) return;
-      // A refused handshake ends here too (1006), with no open before it.
-      const code = e && Number.isInteger(e.code) && e.code >= 0 && e.code <= 65535 ? e.code : 1006;
+      // A refused handshake ends here too, with no open before it. A close
+      // without a code a peer can send (1000-4999) is 1006, abnormal
+      // closure: Node 22's WebSocket reports a refused handshake as 0.
+      const code = e && Number.isInteger(e.code) && e.code >= 1000 && e.code <= 4999 ? e.code : 1006;
       const why = e && e.reason ? `: ${e.reason}` : '';
       // 3500-3999 and 4500-4999 are terminal: a long wait, then a new client.
       const after = retryAfterMs(code);
       end(`WebSocket closed (${code})${why}`, code, after, after > 0);
     });
-    // A close event follows an error.
-    socket.onerror = noop;
+    // After the handshake a close event follows an error. A refused
+    // handshake may end with the error alone (Node 22's WebSocket fires no
+    // close then), so an error before the open ends the socket here, as a
+    // close would have, rather than at the handshake timeout.
+    socket.onerror = guard(() => {
+      if (ws === socket && handshake !== null) end('WebSocket handshake failed (1006)', 1006, 0, false);
+    });
   }
 
   retry = setTimeout(start, 0);
