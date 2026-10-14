@@ -12,6 +12,17 @@
 //! as in the Rust signatures; optional ones may be left out. `endpoints`, on
 //! every request builder, is a partial [`Endpoints`] override.
 //!
+//! `webhooks.verify` takes `public_key_pem`, `headers` (`[[name, value]]` or
+//! an object), the body as `body` (text) or `body_base64` (the raw bytes,
+//! for a body that is not UTF-8), and `now` (Unix seconds) with an optional
+//! `tolerance_secs` (default 300) - or `skip_freshness: true` instead, to
+//! re-check a stored delivery. `webhooks.parse` takes `event_type` and the
+//! body the same two ways.
+//!
+//! Numbers must be integers in range: `1.0` is 1, but `1.5`, `-1`, `1e30`
+//! or a value too big for its argument is a `call` error, never rounded or
+//! clamped.
+//!
 //! Failures come back as a [`DispatchError`]: `kind` is `status` (Kick
 //! answered an error status, in `status`), `shape`, `json`, `invalid`
 //! (refused before sending), `webhook` (a delivery that does not verify), or
@@ -315,11 +326,40 @@ pub fn call(name: &str, args: &Value) -> Out {
         #[cfg(feature = "webhooks")]
         "webhooks.verify" => webhook_verify(&a),
         #[cfg(feature = "webhooks")]
-        "webhooks.parse" => crate::webhooks::parse(a.str("event_type")?, a.str("body")?)
-            .map_err(|e| DispatchError { kind: "json", status: None, message: e.to_string() })
-            .and_then(to),
+        "webhooks.parse" => ok(crate::webhooks::parse(a.str("event_type")?, a.body()?)),
 
         other => Err(DispatchError::call(format!("no function `{other}`"))),
+    }
+}
+
+#[cfg(feature = "webhooks")]
+impl Args<'_> {
+    /// A webhook body: `body` as text, or `body_base64` for the raw bytes
+    /// (a body that is not UTF-8 must come that way to verify).
+    fn body(&self) -> Result<Vec<u8>, DispatchError> {
+        use base64::Engine;
+        match (self.opt_str("body"), self.opt_str("body_base64")) {
+            (Some(text), None) => Ok(text.as_bytes().to_vec()),
+            (None, Some(b64)) => base64::engine::general_purpose::STANDARD
+                .decode(b64.trim())
+                .map_err(|_| DispatchError::call("`body_base64` is not base64")),
+            (Some(_), Some(_)) => Err(DispatchError::call("give `body` or `body_base64`, not both")),
+            (None, None) => Err(DispatchError::call("missing `body` (or `body_base64`)")),
+        }
+    }
+
+    /// `now` (Unix seconds) and `tolerance_secs` (default 300), or
+    /// `skip_freshness: true` and neither.
+    fn freshness(&self) -> Result<crate::webhooks::Freshness, DispatchError> {
+        use crate::webhooks::{DEFAULT_TOLERANCE_SECS, Freshness};
+        if self.bool("skip_freshness") {
+            return Ok(Freshness::Skip);
+        }
+        let now = self.u64("now").map_err(|_| {
+            DispatchError::call("missing `now` (Unix seconds); pass `skip_freshness: true` to replay a stored delivery")
+        })?;
+        let tolerance_secs = self.opt_u64("tolerance_secs")?.unwrap_or(DEFAULT_TOLERANCE_SECS);
+        Ok(Freshness::Within { now, tolerance_secs })
     }
 }
 
@@ -336,9 +376,10 @@ fn webhook_verify(a: &Args<'_>) -> Out {
     let refuse = |e: String| DispatchError { kind: "webhook", status: None, message: e };
     let headers = webhooks::Headers::from_pairs(pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         .map_err(|e| refuse(e.to_string()))?;
-    let body = a.str("body")?;
-    webhooks::verify(a.str("public_key_pem")?, &headers, body.as_bytes()).map_err(|e| refuse(e.to_string()))?;
-    let event = webhooks::parse(&headers.event_type, body).map_err(|e| refuse(e.to_string()))?;
+    let body = a.body()?;
+    let freshness = a.freshness()?;
+    webhooks::verify_pem(a.str("public_key_pem")?, &headers, &body, freshness).map_err(|e| refuse(e.to_string()))?;
+    let event = webhooks::parse(&headers.event_type, &body).map_err(|e| refuse(e.to_string()))?;
     Ok(json!({ "headers": to(&headers)?, "event": to(event)? }))
 }
 
@@ -450,6 +491,47 @@ mod tests {
             call("realtime.token_request", &json!({"client_id": "c", "endpoints": {"realtime": "http://x"}})).unwrap();
         assert_eq!(r["url"], "http://x/auth/connection");
         assert_eq!(r["method"], "POST");
+    }
+
+    #[cfg(feature = "webhooks")]
+    #[test]
+    fn webhooks_verify_fresh_deliveries_as_text_or_bytes() {
+        use base64::Engine;
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/signing");
+        let pem = std::fs::read_to_string(dir.join("test-public-key.pem")).unwrap();
+        let body = std::fs::read_to_string(dir.join("body.json")).unwrap();
+        let signature = std::fs::read_to_string(dir.join("signature.b64")).unwrap();
+        let headers = json!({
+            "kick-event-message-id": "01M38M9K3YRKV8E6Q68C18ZWG4",
+            "kick-event-message-timestamp": "2026-09-24T02:35:42Z",
+            "kick-event-signature": signature.trim(),
+            "kick-event-type": "channel.followed",
+            "kick-event-version": "1",
+        });
+        let args = |extra: Value| {
+            let mut a = json!({"public_key_pem": pem, "headers": headers});
+            a.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            a
+        };
+        let ok = call("webhooks.verify", &args(json!({"body": body, "now": 1_790_217_344}))).unwrap();
+        assert_eq!(ok["event"]["type"], "followed");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&body);
+        assert!(call("webhooks.verify", &args(json!({"body_base64": b64, "now": 1_790_217_344}))).is_ok());
+        assert!(call("webhooks.verify", &args(json!({"body": body, "skip_freshness": true}))).is_ok());
+        let e = call("webhooks.verify", &args(json!({"body": body}))).unwrap_err();
+        assert_eq!(e.kind, "call", "now is required: {}", e.message);
+        let e = call("webhooks.verify", &args(json!({"body": body, "now": 1_790_300_000}))).unwrap_err();
+        assert_eq!(e.kind, "webhook", "stale: {}", e.message);
+        let e = call("webhooks.verify", &args(json!({"body": body, "now": 1_790_217_400, "tolerance_secs": 10})))
+            .unwrap_err();
+        assert_eq!(e.kind, "webhook");
+        let e = call("webhooks.verify", &args(json!({"body": body, "body_base64": b64, "now": 0}))).unwrap_err();
+        assert_eq!(e.kind, "call");
+
+        let parsed = call("webhooks.parse", &json!({"event_type": "channel.followed", "body": body})).unwrap();
+        assert_eq!(parsed["type"], "followed");
+        let e = call("webhooks.parse", &json!({"event_type": "kicks.gifted", "body": body})).unwrap_err();
+        assert_eq!(e.kind, "shape");
     }
 
     #[test]

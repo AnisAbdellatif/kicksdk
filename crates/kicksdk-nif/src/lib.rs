@@ -322,7 +322,9 @@ fn verify_webhook<'a>(env: Env<'a>, pem: &str, headers: Vec<(String, String)>, b
         Ok(h) => h,
         Err(e) => return refuse(e.to_string()),
     };
-    if let Err(e) = webhooks::verify(pem, &h, body.as_bytes()) {
+    // The delivery must be fresh: within 5 minutes of this machine's clock.
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    if let Err(e) = webhooks::verify_pem(pem, &h, body.as_bytes(), webhooks::Freshness::at(now)) {
         return refuse(e.to_string());
     }
     let event = match webhooks::parse(&h.event_type, body) {
@@ -343,7 +345,7 @@ fn verify_webhook<'a>(env: Env<'a>, pem: &str, headers: Vec<(String, String)>, b
 fn parse_webhook<'a>(env: Env<'a>, event_type: &str, body: &str) -> NifResult<Term<'a>> {
     Ok(match webhooks::parse(event_type, body) {
         Ok(event) => (atoms::ok(), term(env, &event)?).encode(env),
-        Err(e) => (atoms::error(), (atoms::json(), e.to_string())).encode(env),
+        Err(e) => (atoms::error(), error_term(env, &e)).encode(env),
     })
 }
 

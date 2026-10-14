@@ -480,7 +480,7 @@ pub fn unsubscribe_requests(token: &str, ids: Vec<String>, endpoints_: JsValue) 
 /// Reads a delivery's body by its type header, without checking anything.
 #[wasm_bindgen(js_name = parseWebhook)]
 pub fn parse_webhook(event_type: &str, body: &str) -> Result<JsValue, JsValue> {
-    out(&webhooks::parse(event_type, body).map_err(|e| JsValue::from(js_sys::Error::new(&e.to_string())))?)
+    result(webhooks::parse(event_type, body))
 }
 
 /// Checks a delivery: `headers` as `[[name, value]…]` or an object, `body` the
@@ -498,9 +498,11 @@ pub fn verify_webhook(public_key_pem: &str, headers: JsValue, body: &str) -> Res
     };
     let h = webhooks::Headers::from_pairs(pairs.iter().map(|(a, b)| (a.as_str(), b.as_str())))
         .map_err(|e| JsValue::from(js_sys::Error::new(&e.to_string())))?;
-    webhooks::verify(public_key_pem, &h, body.as_bytes())
+    // The delivery must be fresh: within 5 minutes of this machine's clock.
+    let now = (js_sys::Date::now() / 1000.0) as u64;
+    webhooks::verify_pem(public_key_pem, &h, body.as_bytes(), webhooks::Freshness::at(now))
         .map_err(|e| JsValue::from(js_sys::Error::new(&e.to_string())))?;
-    let event = webhooks::parse(&h.event_type, body).map_err(|e| JsValue::from(js_sys::Error::new(&e.to_string())))?;
+    let event = webhooks::parse(&h.event_type, body).map_err(fail)?;
     #[derive(Serialize)]
     struct Verified<'a> {
         headers: &'a webhooks::Headers,

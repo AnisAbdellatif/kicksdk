@@ -4,6 +4,7 @@
 
 use kicksdk::events::KickEvent;
 use kicksdk::realtime::{self, Action, Session, SessionOptions};
+use kicksdk::webhooks::Freshness;
 use kicksdk::{public_api, webhooks, website};
 use serde_json::Value;
 use std::fs;
@@ -149,15 +150,29 @@ fn webhook_signatures_verify() {
         ("kick-event-version", "1"),
     ])
     .unwrap();
-    assert_eq!(webhooks::verify(&pem, &headers, &body), Ok(()));
+    let key = webhooks::PublicKey::from_pem(&pem).unwrap();
+    // Received two seconds after Kick's timestamp, 2026-09-24T02:35:42Z.
+    let received = Freshness::at(1_790_217_344);
+    assert_eq!(webhooks::verify(&key, &headers, &body, received), Ok(()));
+    assert_eq!(webhooks::verify_pem(&pem, &headers, &body, received), Ok(()));
+    // The same delivery an hour later is a replay.
+    assert_eq!(
+        webhooks::verify(&key, &headers, &body, Freshness::at(1_790_220_942)),
+        Err(webhooks::WebhookError::Stale { offset_secs: -3_600 })
+    );
 
     let mut tampered = body.clone();
     tampered[10] ^= 1;
-    assert_eq!(webhooks::verify(&pem, &headers, &tampered), Err(webhooks::WebhookError::Mismatch));
+    assert_eq!(webhooks::verify(&key, &headers, &tampered, Freshness::Skip), Err(webhooks::WebhookError::Mismatch));
     let mut later = headers.clone();
     later.timestamp = "2026-09-24T02:35:43Z".into();
-    assert_eq!(webhooks::verify(&pem, &later, &body), Err(webhooks::WebhookError::Mismatch));
-    assert_eq!(webhooks::verify("nope", &headers, &body), Err(webhooks::WebhookError::BadKey));
+    assert_eq!(webhooks::verify(&key, &later, &body, Freshness::Skip), Err(webhooks::WebhookError::Mismatch));
+    assert_eq!(webhooks::verify_pem("nope", &headers, &body, received), Err(webhooks::WebhookError::BadKey));
+
+    // The type header is not signed: the body has to agree with it.
+    let event = webhooks::parse(&headers.event_type, &body).unwrap();
+    assert!(matches!(event, webhooks::WebhookEvent::Followed { .. }));
+    assert!(webhooks::parse("livestream.status.updated", &body).is_err());
 }
 
 /// Chat payloads recorded off Pusher: the data is the same on Centrifugo.
