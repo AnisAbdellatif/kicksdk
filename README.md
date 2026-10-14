@@ -39,9 +39,11 @@ Kick changes something, it is fixed once.
 Precompiled binaries come from the GitHub release of the package's version and
 are checked against checksums published with the package; a binary that does
 not match is refused. Where none fits, every package builds from the Rust
-sources it ships with. The Linux (glibc) binaries load on glibc 2.17 and later
-(2.18 for the aarch64 Dart/C library); on musl (Alpine), the Elixir NIF needs
-libgcc at run time: `apk add libgcc`. docs/releasing.md has the details.
+sources it ships with. The Linux (glibc) binaries need, at least: glibc 2.17
+for the x86_64, aarch64 and arm NIFs and the x86_64 Dart/C library, 2.18 for
+the aarch64 Dart/C library, and 2.27 for the riscv64 NIF (the port's first);
+on musl (Alpine), the Elixir NIF needs libgcc at run time: `apk add libgcc`.
+docs/releasing.md has the details.
 
 ## What it covers
 

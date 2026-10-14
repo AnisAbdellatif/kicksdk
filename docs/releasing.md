@@ -30,15 +30,20 @@ and the sources all taken from the tagged commit.
    glibc floor (below). Every wheel is installed and tested on a machine it
    is for.
 3. **The GitHub release** is created, and the NIF tarballs and the FFI
-   libraries are uploaded to it. The wheels and the npm package go to their
-   registries only.
+   libraries are uploaded to it afterwards, by other jobs (which is why
+   GitHub's immutable releases must stay off: see the setup below). The
+   wheels and the npm package go to their registries only.
 4. **Publishing.** crates.io, PyPI and npm publish as soon as their own
    builds are done. hex and pub wait for every one of their binaries to be
    on the release (and for the vendored-source check), record those files'
    SHA-256s in the package (`checksum-Elixir.Kicksdk.Native.exs`,
    `hook/checksums.json`), test the package as a user gets it (the binary
    downloaded from the release and checked, with no Rust on `PATH` to fall
-   back to), then publish.
+   back to), check that the package as the registry will serve it builds
+   from source (`scripts/check-dart-archive.sh` on the archive pub uploads,
+   `scripts/check-hex-package.sh` on hex's), then publish. CI and every dry
+   run make the same check on the pub archive, so a file pub leaves out of
+   the package fails a pull request rather than a release.
 
 A registry that is not set up fails its own job and leaves the others alone.
 
@@ -104,7 +109,10 @@ re-run therefore does only what is left.
   scripts/publish-dart.sh <version>`.
 - **Hazards**: hex and pub need every binary on the release; with `only=hex`
   or `only=pub` they take what the release has and fail if a target is
-  missing. Two runs of one tag never overlap: the second waits.
+  missing. Two runs of one tag never overlap: the second waits for the
+  first. GitHub keeps only one waiting run per tag, though: a third run
+  started while the second waits cancels the second, so start one re-run
+  at a time, or start the cancelled one again once the others are done.
 
 ## Publishing the Dart package by hand
 
@@ -119,9 +127,11 @@ the tag's code with the checksums of the files the release serves.
 
 | Binary | Floor |
 |---|---|
-| Linux glibc, x86_64 and arm (NIF, FFI) | glibc 2.17 (built in cross's CentOS 7 and crosstool images) |
+| Linux glibc, x86_64 (NIF, FFI library) | glibc 2.17 (built in cross's CentOS 7 image) |
+| Linux glibc, arm hard-float (NIF only) | glibc 2.17 (cross's crosstool image) |
 | Linux glibc, aarch64 | glibc 2.17 (NIF), 2.18 (FFI library) |
-| Linux glibc, riscv64 (NIF) | glibc 2.27, the port's first |
+| Linux glibc, riscv64 (NIF only) | glibc 2.27, the port's first |
+| Linux glibc, Python wheels | the wheel's manylinux tag (maturin's default) |
 | Linux musl (NIFs, wheels) | the NIF needs `libgcc_s` at run time: on Alpine, `apk add libgcc` |
 | macOS, iOS | install name `@rpath/<file>`, not the build machine's path |
 | Windows MSVC | C runtime linked in: no VC++ redistributable needed |
@@ -131,6 +141,12 @@ functions (`nif_init`, `kicksdk_*`, `PyInit__native`) are in the dynamic
 symbol table and stay.
 
 ## One-time setup, per registry
+
+Keep GitHub's immutable releases off (Settings → General → Releases →
+release immutability): the workflow creates the release first and uploads
+the binaries to it afterwards, from other jobs, which an immutable release
+refuses once it is published. The workflow never replaces a release file
+anyway (above), and the protected tags below keep a version's code fixed.
 
 Each registry is independent: one that is not set up fails its own job and
 the rest still publish. Each publish job runs in a GitHub environment

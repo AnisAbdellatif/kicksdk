@@ -47,7 +47,8 @@ on:
 permissions: {}
 
 # One run per tag at a time: a second one waits rather than racing the first
-# to the release and the registries.
+# to the release and the registries. GitHub keeps one waiting run per group:
+# a third run started meanwhile cancels the waiting second.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
