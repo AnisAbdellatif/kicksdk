@@ -25,11 +25,27 @@ async def main():
 asyncio.run(main())
 ```
 
+`connect_chat` reconnects by itself (jittered backoff) after network errors,
+5xx answers and dropped sockets; a failed token refresh keeps the connection.
+The `async for` raises `kicksdk.aio.ChatClosed` when Kick ends the chat for
+good (a ban, a terminal close code) and `kicksdk.aio.ChatRefused` after
+`max_refusals` (5) refused attempts in a row (a 403, say), then ends; it also
+ends with the `async with` block, which closes the socket normally. Events
+the consumer has not read wait in a buffer of `max_queue` (10,000); when it
+is full, `overflow="drop_oldest"` (the default) drops the oldest and counts
+them in `chat.dropped`, and `overflow="backpressure"` stops reading the
+socket until there is room. The `kicksdk.aio` module docs have the details.
+
 Everything else returns `kicksdk.Request` objects for any HTTP client and
 parses what comes back (`kicksdk.website.channel_request` /
 `parse_channel`, `kicksdk.public_api.livestreams_requests`,
 `kicksdk.webhooks.verify`, …). Errors are `kicksdk.KickError` with `kind` and
 `status`.
+
+`kicksdk.webhooks.verify(public_key_pem, headers, body)` takes the body as
+received (`bytes`, or `str`) and refuses a delivery more than 5 minutes from
+now (`now=` in Unix seconds, `tolerance_secs=`), so an old one cannot be
+replayed; `skip_freshness=True` re-checks a stored one.
 
 Wheels are built for Linux, macOS and Windows (CPython 3.9+, one abi3 wheel
 per platform). Anywhere else pip builds from the source distribution, which
