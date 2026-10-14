@@ -500,7 +500,9 @@ pub fn verify_webhook(public_key_pem: &str, headers: JsValue, body: &str) -> Res
         .map_err(|e| JsValue::from(js_sys::Error::new(&e.to_string())))?;
     // The delivery must be fresh: within 5 minutes of this machine's clock.
     let now = (js_sys::Date::now() / 1000.0) as u64;
-    webhooks::verify_pem(public_key_pem, &h, body.as_bytes(), webhooks::Freshness::at(now))
+    let key =
+        webhooks::PublicKey::from_pem(public_key_pem).map_err(|e| JsValue::from(js_sys::Error::new(&e.to_string())))?;
+    webhooks::verify(&key, &h, body.as_bytes(), webhooks::Freshness::at(now))
         .map_err(|e| JsValue::from(js_sys::Error::new(&e.to_string())))?;
     let event = webhooks::parse(&h.event_type, body).map_err(fail)?;
     #[derive(Serialize)]
