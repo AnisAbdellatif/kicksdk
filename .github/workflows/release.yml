@@ -341,6 +341,7 @@ jobs:
             *) echo "::error::hex.pm answered $code"; exit 1 ;;
           esac
       - run: ../../scripts/vendor-native.sh bindings/elixir kicksdk-nif
+      - run: ../../scripts/package-files.sh bindings/elixir
       - run: mix deps.get
       # Writes checksum-Elixir.Kicksdk.Native.exs from the release's own NIFs,
       # every target's (--all fails on a missing one).
@@ -353,6 +354,10 @@ jobs:
         env:
           MIX_ENV: test
         run: ../../scripts/without-rust.sh mix test
+      # The source fallback, from the package as hex will serve it.
+      - name: The hex package, built from source
+        if: steps.published.outputs.yes != 'true'
+        run: ../../scripts/check-hex-package.sh
       - if: steps.published.outputs.yes != 'true'
         run: mix hex.publish --yes
         env:

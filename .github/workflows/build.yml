@@ -483,6 +483,7 @@ jobs:
             echo "RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH=$RUNNER_TEMP/rustler-cache"
           } >> "$GITHUB_ENV"
       - run: ../../scripts/vendor-native.sh bindings/elixir kicksdk-nif
+      - run: ../../scripts/package-files.sh bindings/elixir
       - run: mix deps.get
       # As the hex job does it: every target's NIF must be there (--all).
       - name: Checksums of every NIF
@@ -493,7 +494,10 @@ jobs:
         env:
           MIX_ENV: test
         run: ../../scripts/without-rust.sh mix test
-      - run: mix hex.build
+      # The package as hex would upload it (mix hex.build --unpack), built
+      # from source in an app that depends on it.
+      - name: The hex package, built from source
+        run: ../../scripts/check-hex-package.sh
 
   pub-package:
     name: pub package (dry run)
