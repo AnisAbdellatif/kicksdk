@@ -64,8 +64,25 @@ void main() {
       ('kick-event-type', 'channel.followed'),
       ('kick-event-version', '1'),
     ];
-    expect(Webhooks.verify(pem, headers, body)['event']['type'], 'followed');
-    expect(() => Webhooks.verify(pem, headers, '$body '), throwsA(isA<KickException>()));
+    final sent = DateTime.utc(2026, 9, 24, 2, 35, 42);
+    final now = sent.add(const Duration(seconds: 100));
+    expect(Webhooks.verify(pem, headers, body, now: now)['event']['type'], 'followed');
+    expect(Webhooks.verify(pem, headers, utf8.encode(body), now: now)['event']['type'], 'followed');
+    expect(Webhooks.verify(pem, headers, body, skipFreshness: true)['event']['type'], 'followed');
+    final refused = throwsA(isA<KickException>().having((e) => e.kind, 'kind', 'webhook'));
+    expect(() => Webhooks.verify(pem, headers, '$body ', now: now), refused);
+    expect(() => Webhooks.verify(pem, headers, utf8.encode('$body '), now: now), refused);
+    // Stale: an hour later, or past a tighter tolerance; and the default
+    // `now` is this machine's clock, long after the fixture was signed.
+    expect(() => Webhooks.verify(pem, headers, body, now: sent.add(const Duration(hours: 1))), refused);
+    expect(() => Webhooks.verify(pem, headers, body, now: now, tolerance: const Duration(seconds: 10)), refused);
+    expect(() => Webhooks.verify(pem, headers, body), refused);
+    expect(() => Webhooks.verify(pem, headers, 42, now: now), throwsArgumentError);
+    expect(Webhooks.parse('channel.followed', utf8.encode(body))['type'], 'followed');
+    expect(
+      () => Webhooks.parse('kicks.gifted', body),
+      throwsA(isA<KickException>().having((e) => e.kind, 'kind', 'shape')),
+    );
   });
 
   test('a recorded realtime session replays', () {
@@ -99,5 +116,35 @@ void main() {
   test('backoff doubles to the cap', () {
     final b = Backoff();
     expect([for (var i = 0; i < 7; i++) b.next().inSeconds], [1, 2, 4, 8, 16, 30, 30]);
+    b.reset();
+    expect(b.next(), const Duration(seconds: 1));
+    final zero = Backoff(initial: Duration.zero, max: Duration.zero);
+    expect([zero.next(), zero.next()], [const Duration(milliseconds: 1), const Duration(milliseconds: 1)]);
+    expect(Backoff(initial: const Duration(seconds: 5), max: const Duration(seconds: 1)).max.inSeconds, 5);
+  });
+
+  test('jittered backoff spreads each delay over its second half', () {
+    final b = Backoff();
+    expect(b.nextDelayJittered(0).inMilliseconds, 500);
+    expect(b.nextDelayJittered(0.5).inMilliseconds, 1500);
+    expect(b.nextDelayJittered(0.999999).inMilliseconds, 3999);
+    expect(b.nextDelayJittered(double.nan).inMilliseconds, 4000);
+    expect(b.nextDelayJittered(7).inMilliseconds, 16000);
+    expect(b.nextDelayJittered(-1).inMilliseconds, 15000);
+    expect(Backoff(initial: const Duration(milliseconds: 1)).nextDelayJittered(0).inMilliseconds, 1);
+  });
+
+  test('close codes: terminal ones are not worth a reconnect', () {
+    expect(Realtime.shouldReconnect(1006), isTrue);
+    expect(Realtime.shouldReconnect(3000), isTrue);
+    expect(Realtime.shouldReconnect(3501), isFalse);
+    expect(Realtime.shouldReconnect(4499), isTrue);
+    expect(Realtime.shouldReconnect(4500), isFalse);
+    expect(() => Realtime.shouldReconnect(70000), throwsA(isA<KickException>().having((e) => e.kind, 'kind', 'call')));
+  });
+
+  test('arguments JSON cannot hold are refused before the call', () {
+    expect(() => Events.parse('x', Object()), throwsA(isA<JsonUnsupportedObjectError>()));
+    expect(() => Website.historyRequest(-1), throwsA(isA<KickException>().having((e) => e.kind, 'kind', 'call')));
   });
 }

@@ -2,6 +2,8 @@
 // snake_case keys, as Kick writes them), except requests, which are
 // [KickRequest]s ready for an HTTP client.
 
+import 'dart:convert';
+
 import 'native.dart' as native;
 
 typedef Json = Map<String, dynamic>;
@@ -79,11 +81,22 @@ abstract final class Realtime {
       _req('realtime.token_request', {'client_id': clientId}, endpoints);
 
   static String parseToken(int status, String body) => _parse('realtime.parse_token', status, body);
+
+  /// Whether a connection whose socket closed with `code` is worth opening
+  /// again: false for Centrifugo's terminal codes (3500-3999, 4500-4999: a
+  /// bad token, a ban, a refused request), true for anything else (a
+  /// network drop is 1006). For a session's `close` action, read its
+  /// `reconnect` instead.
+  static bool shouldReconnect(int code) => native.call('realtime.should_reconnect', {'code': code}) as bool;
 }
 
 /// One connection's worth of Kick's Centrifugo protocol. Each method returns
-/// the actions to carry out: `{"action": "send", "text": ...}`, `close`,
-/// `refresh_token`, `connected`, `subscribed`, `unsubscribed`,
+/// the actions to carry out: `{"action": "send", "text": ...}`,
+/// `{"action": "close", "code", "reason", "reconnect"}` (close the socket,
+/// call [closed], and reconnect only if `reconnect` is true),
+/// `refresh_token` (fetch a token for the same client id and pass it to
+/// [refresh]; if that fails, carry on: Kick ends the connection when the old
+/// token runs out), `connected`, `subscribed`, `unsubscribed`,
 /// `subscribe_failed`, `event`. Times are milliseconds.
 class Session {
   final native.NativeSession _s;
@@ -105,14 +118,22 @@ class Session {
   void dispose() => _s.close();
 }
 
-/// Reconnect delays: 1 s doubling to 30 s, back to 1 s once connected.
+/// Reconnect delays: 1 s doubling to 30 s, back to 1 s once connected. The
+/// core's `realtime::Backoff`, in milliseconds: a first wait under 1 ms
+/// counts as 1 ms, and a longest wait below the first is raised to it.
 class Backoff {
   final Duration initial;
   final Duration max;
   late Duration _next = initial;
 
-  Backoff({this.initial = const Duration(seconds: 1), this.max = const Duration(seconds: 30)});
+  Backoff({Duration initial = const Duration(seconds: 1), Duration max = const Duration(seconds: 30)})
+    : this._(initial < _min ? _min : initial, max);
 
+  Backoff._(this.initial, Duration max) : max = max < initial ? initial : max;
+
+  static const _min = Duration(milliseconds: 1);
+
+  /// How long to wait before the next attempt; the one after waits longer.
   Duration next() {
     final d = _next;
     final doubled = _next * 2;
@@ -120,6 +141,18 @@ class Backoff {
     return d;
   }
 
+  /// [next], spread: somewhere from half of it to all of it, by `random`,
+  /// drawn uniformly from [0, 1) (`Random().nextDouble()`), so that clients
+  /// dropped together do not all come back at once. Out of range is
+  /// clamped; NaN counts as 0. Never less than 1 ms.
+  Duration nextDelayJittered(double random) {
+    final ms = next().inMilliseconds;
+    final r = random.isNaN ? 0.0 : random.clamp(0.0, 1.0);
+    final half = ms ~/ 2;
+    return Duration(milliseconds: (half + ((ms - half) * r).floor()).clamp(1, ms));
+  }
+
+  /// A connection worked: the next failure starts from the beginning.
   void reset() => _next = initial;
 }
 
@@ -279,19 +312,56 @@ abstract final class Website {
   static void parseAction(int status, String body) => _parse<Object?>('website.parse_action', status, body);
 }
 
+/// A webhook body as the core takes it: text as `body`, bytes as
+/// `body_base64` (verified byte for byte, UTF-8 or not).
+Map<String, Object?> _body(Object body) => switch (body) {
+  String text => {'body': text},
+  List<int> bytes => {'body_base64': base64Encode(bytes)},
+  _ => throw ArgumentError.value(body, 'body', 'must be a String or a List<int> of bytes'),
+};
+
 /// Kick's official webhooks.
 abstract final class Webhooks {
+  /// The default for `tolerance` in [verify]: 5 minutes.
+  static const defaultTolerance = Duration(seconds: 300);
+
   /// Verifies and reads a delivery: `{"headers": ..., "event": ...}`.
-  static Json verify(String publicKeyPem, List<(String, String)> headers, String body) =>
+  ///
+  /// `body` is the request body exactly as received: a String, or the raw
+  /// bytes (a `List<int>`, e.g. a `Uint8List`), which is the safer of the
+  /// two since a body that is not UTF-8 only verifies as bytes.
+  ///
+  /// The delivery's timestamp must be within `tolerance` (default 5
+  /// minutes) of `now` (default: this machine's clock), so a captured
+  /// delivery cannot be replayed later. `skipFreshness: true` turns that
+  /// off, to re-check a stored delivery on purpose. A valid signature only
+  /// means Kick sent this body to some app; deduplicate on
+  /// `kick-event-message-id` too (docs/KICK.md §4.3).
+  static Json verify(
+    String publicKeyPem,
+    List<(String, String)> headers,
+    Object body, {
+    DateTime? now,
+    Duration? tolerance,
+    bool skipFreshness = false,
+  }) =>
       native.call('webhooks.verify', {
             'public_key_pem': publicKeyPem,
             'headers': [
               for (final (k, v) in headers) [k, v],
             ],
-            'body': body,
+            ..._body(body),
+            if (skipFreshness)
+              'skip_freshness': true
+            else ...{
+              'now': (now ?? DateTime.now()).millisecondsSinceEpoch ~/ 1000,
+              'tolerance_secs': ?tolerance?.inSeconds,
+            },
           })
           as Json;
 
-  static Json parse(String eventType, String body) =>
-      native.call('webhooks.parse', {'event_type': eventType, 'body': body}) as Json;
+  /// Reads a delivery's body as the type its `kick-event-type` header
+  /// names, without verifying it. `body` as for [verify].
+  static Json parse(String eventType, Object body) =>
+      native.call('webhooks.parse', {'event_type': eventType, ..._body(body)}) as Json;
 }
