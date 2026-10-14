@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import gc
 import importlib
 import json
 import logging
@@ -29,11 +30,21 @@ ENDPOINTS = {"realtime": "http://kick.test/rt"}
 
 
 def run(test: Callable[..., Awaitable[None]]) -> Callable[..., None]:
-    """Runs an async test in its own loop, bounded: nothing here may hang."""
+    """Runs an async test in its own loop, bounded: nothing here may hang.
+    Anything the loop reports (a task's exception never retrieved, say)
+    fails the test."""
 
     @functools.wraps(test)
     def wrapper(*args: Any, **kwargs: Any) -> None:
-        asyncio.run(asyncio.wait_for(test(*args, **kwargs), 15))
+        reported: list[dict[str, Any]] = []
+
+        async def main() -> None:
+            asyncio.get_running_loop().set_exception_handler(lambda loop, context: reported.append(context))
+            await asyncio.wait_for(test(*args, **kwargs), 15)
+            gc.collect()  # a task dropped with its exception reports it now
+
+        asyncio.run(main())
+        assert reported == []
 
     return wrapper
 
@@ -482,6 +493,29 @@ async def test_backpressure_pauses_reading_and_drops_nothing() -> None:
         got = [(await next_event(chat))["event"]["content"] for _ in range(5)]
         assert got == [f"text-{n}" for n in range(5)] and chat.dropped == 0
         await until(lambda: pongs == [{}])
+
+
+@run
+async def test_a_refresh_that_fails_after_the_fetch_is_logged_not_lost(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The refresh runs as its own task; whatever goes wrong in it is logged
+    # (`run` fails on "Task exception was never retrieved").
+    def broken(self: realtime.Session, token: str, now: int) -> list[dict[str, Any]]:
+        raise RuntimeError("refresh broke")
+
+    monkeypatch.setattr(realtime.Session, "refresh", broken)
+
+    async def script(ws: ServerConnection, kick: Kick) -> None:
+        await accept(ws, expires=True, ttl=1)
+        await asyncio.sleep(0.8)
+        await ws.send(chat_message(1))
+
+    caplog.set_level(logging.WARNING, logger="kicksdk.aio")
+    async with Kick(script) as kick, kick.feed() as chat:
+        assert (await next_event(chat))["event"]["content"] == "text-1"
+        assert kick.token_requests == 2 and kick.connections == 1
+    assert any("refresh broke" in r.getMessage() for r in caplog.records)
 
 
 def test_bad_options_are_refused() -> None:

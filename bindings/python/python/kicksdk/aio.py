@@ -402,7 +402,6 @@ class ChatFeed:
             close_timeout=5,
         )
         refresher: Optional[asyncio.Task[None]] = None
-        closing: Optional[Event] = None  # a close the refresh's actions asked for
         close_code = 1000
 
         async def apply(actions: list[Event]) -> Optional[Event]:
@@ -436,16 +435,16 @@ class ChatFeed:
             return None
 
         async def refresh() -> None:
-            nonlocal closing
+            # Never raises: nothing awaits this task's result.
             try:
                 fresh = rt.parse_token(*await _send(http, rt.token_request(client_id, self.endpoints)))
+                # Session.refresh only ever sends; its answer comes through
+                # receive, in the loop below.
+                await apply(session.refresh(fresh, _now()))
+            except ConnectionClosed:
+                pass  # the receive loop sees the close too, and handles it
             except Exception as e:  # noqa: BLE001 - the core's contract: carry on
                 log.warning("token refresh failed (%s); the connection stays up until Kick ends it", _describe(e))
-                return
-            close = await apply(session.refresh(fresh, _now()))
-            if close is not None:
-                closing = close
-                await ws.close()  # ends the receive loop below
 
         try:
             try:
@@ -462,13 +461,9 @@ class ChatFeed:
                         frame = frame.decode("utf-8", "replace")
                     close = await apply(session.receive(frame, _now()))
             except ConnectionClosed as e:
-                if closing is not None:
-                    close = closing
-                else:
-                    # A receive or a send found the socket closed by Kick (or
-                    # by the network): its close code decides, wherever it
-                    # showed.
-                    return _closed_by_socket(e)
+                # A receive or a send found the socket closed by Kick (or by
+                # the network): its close code decides, wherever it showed.
+                return _closed_by_socket(e)
             return ChatDrop(close["reason"], close["code"], close["terminal"], close["retry_after_ms"])
         except Exception as e:
             if _failure(e) is None:
