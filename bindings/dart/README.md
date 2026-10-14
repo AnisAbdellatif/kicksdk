@@ -15,13 +15,22 @@ final chat = connectChat(
     final event = e['event'];
     if (event['type'] == 'chat_message') print('${event['sender']['username']}: ${event['content']}');
   },
-  onDrop: (reason) => print('dropped: $reason'), // a jittered reconnect follows
+  onDrop: (reason) => print('dropped: $reason'), // a reconnect always follows
   onError: (error, stack) => print('error: $error'), // e.g. onEvent threw
 );
-// later: chat.close();  `chat.done` completes once it has ended for good,
-// after close() or when Kick closed it with a code that rules out a
-// reconnect (a bad token, a ban).
+// later: chat.close();  `chat.done` completes then, and only then.
 ```
+
+`connectChat` never gives up by itself (docs/KICK.md §6.1). An ordinary
+drop reconnects after a jittered 1 s, doubling to 30 s. A terminal close
+(Kick refused the guest token or the connection, or closed with a code that
+means it would refuse the same client again: 3500-3999, 4500-4999) waits 5
+minutes, then 10, 20 and 30 for more in a row, and reconnects as a new
+client; the chat feed subscribing starts the waits over. `onDropInfo` gets
+each drop as a `ChatDrop`: `reason`, `code`, `terminal` and `retryIn`, the
+wait before the next attempt. Pass your own `Backoff` to change the waits;
+`Backoff.nextDelayFor(retryAfterMs, random)` is the rule, for a driver of
+your own around `Session`.
 
 Each request and the WebSocket handshake time out after `timeout` (10 s)
 and are retried like any other failure. An exception thrown by `onEvent` or
