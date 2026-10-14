@@ -99,6 +99,42 @@ defmodule Kicksdk.ConventionsTest do
     end
   end
 
+  describe "endpoints" do
+    test "point any part of Kick elsewhere, through the NIF and call/2 alike" do
+      assert %{"url" => "http://localhost:9/rt/" <> _} =
+               Realtime.token_request("c", %{realtime: "http://localhost:9/rt"})
+
+      assert {:ok, %{"url" => "http://localhost:9/w/" <> _}} =
+               Website.me_request("s", "somechannel", %{"website" => "http://localhost:9/w", api: nil})
+    end
+
+    test "with an unknown key or a value that is not a URL raise, and send nothing to kick.com" do
+      for builder <- [
+            fn e -> Realtime.token_request("c", e) end,
+            fn e -> Website.channel_request("somechannel", e) end,
+            fn e -> Website.me_request("s", "somechannel", e) end,
+            fn e -> PublicApi.top_livestreams_request("t", endpoints: e) end
+          ] do
+        assert_raise ArgumentError, ~r/unknown key :realtme/, fn ->
+          builder.(%{realtme: "http://localhost:9"})
+        end
+
+        assert_raise ArgumentError, ~r/:api must be a URL string/, fn -> builder.(%{api: 9}) end
+        assert_raise ArgumentError, ~r/must be a map/, fn -> builder.("http://localhost:9") end
+      end
+    end
+
+    test "are checked by the NIF too" do
+      assert_raise ArgumentError, ~r/unknown key `realtme`/, fn ->
+        Kicksdk.Native.token_request(~s({"realtme":"http://localhost:9"}), "c")
+      end
+
+      assert_raise ArgumentError, ~r/`api` must be a URL string/, fn ->
+        Kicksdk.Native.token_request(~s({"api":9}), "c")
+      end
+    end
+  end
+
   test "integers come back exact to 64 bits" do
     assert {:ok, %{"user_id" => 18_446_744_073_709_551_615}} =
              Kicksdk.call("webhooks.parse", %{

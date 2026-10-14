@@ -33,12 +33,14 @@ defmodule Kicksdk do
       `{:shape, what}`, `{:json, message}`, `{:invalid, what}` (refused
       before sending), `{:webhook, message}` (a delivery that does not
       verify) or `{:call, message}` (`call/2` arguments that do not fit).
-    * An argument no call could use - text that is not UTF-8 where a plain
+    * An argument no call could use - endpoints with an unknown key or a
+      value that is not a URL string, text that is not UTF-8 where a plain
       value is returned - raises `ArgumentError`.
 
   Every builder takes an optional `endpoints` map last, to point any part of
   Kick somewhere else (a simulator, a proxy): `%{api: …, id: …, website: …,
-  realtime: …}`, any subset.
+  realtime: …}`, any subset (`nil` for Kick's own). Any other key raises:
+  a typo must not quietly send the request to kick.com.
 
   Integers come back exact up to 64 bits. Kick sends no bigger ones; one in
   its data would come back as a float, as the Rust core reads it.
@@ -104,12 +106,42 @@ defmodule Kicksdk do
   @doc false
   # A request builder through call/2.
   def call_request(name, args, endpoints) do
-    args = if endpoints, do: Map.put(args, :endpoints, endpoints), else: args
-    call(name, args)
+    case endpoints!(endpoints) do
+      e when map_size(e) == 0 -> call(name, args)
+      e -> call(name, Map.put(args, :endpoints, e))
+    end
   end
 
   @doc false
-  def encode_endpoints(nil), do: ""
-  def encode_endpoints(%{} = e) when map_size(e) == 0, do: ""
-  def encode_endpoints(%{} = e), do: JSON.encode!(e)
+  def encode_endpoints(endpoints) do
+    case endpoints!(endpoints) do
+      e when map_size(e) == 0 -> ""
+      e -> JSON.encode!(e)
+    end
+  end
+
+  @endpoint_keys ~w(api id website realtime)
+
+  # The override checked, with string keys and without nil values.
+  defp endpoints!(nil), do: %{}
+
+  defp endpoints!(%{} = endpoints) do
+    for {key, url} <- endpoints, url != nil, into: %{} do
+      name = if is_atom(key) or is_binary(key), do: to_string(key)
+
+      if name not in @endpoint_keys,
+        do:
+          raise(
+            ArgumentError,
+            "endpoints: unknown key #{inspect(key)} (expected :api, :id, :website, :realtime)"
+          )
+
+      if not (is_binary(url) and String.valid?(url)),
+        do: raise(ArgumentError, "endpoints: #{inspect(key)} must be a URL string, got: #{inspect(url)}")
+
+      {name, url}
+    end
+  end
+
+  defp endpoints!(other), do: raise(ArgumentError, "endpoints must be a map or nil, got: #{inspect(other)}")
 end
