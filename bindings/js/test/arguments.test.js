@@ -57,6 +57,36 @@ test('counts and times are checked too', () => {
   b.free();
 });
 
+test('every number must be a number: no string, boolean or BigInt is coerced', () => {
+  const notNumbers = ['10', true, 10n, {}, [1]];
+  const calls = {
+    minutes: (v) => sdk.timeoutRequest('s', 'somechannel', 'someone', v),
+    'pin minutes': (v) => sdk.pinRequest('s', 'somechannel', {}, v),
+    limit: (v) => sdk.topLivestreamsRequest('t', null, null, null, v),
+    code: (v) => sdk.retryAfterMs(v),
+    status: (v) => sdk.parseChannel(v, '{}'),
+    'token status': (v) => sdk.parseToken(v, '{}'),
+    now: (v) => new sdk.Session(['chatrooms.1.v2']).open('t', v),
+    initialMs: (v) => new sdk.Backoff(v),
+    maxMs: (v) => new sdk.Backoff(1000, v),
+    random: (v) => new sdk.Backoff().nextDelayJittered(v),
+    retryAfterMs: (v) => new sdk.Backoff().nextDelayFor(v, 0),
+    'nextDelayFor random': (v) => new sdk.Backoff().nextDelayFor(300_000, v)
+  };
+  for (const [what, call] of Object.entries(calls)) {
+    for (const bad of notNumbers) assert.throws(() => call(bad), TypeError, `${what}: ${String(bad)}`);
+  }
+  // Left out, an optional number keeps its default.
+  assert.match(sdk.topLivestreamsRequest('t', null, null, null, undefined).url, /limit=100/);
+  assert.equal(new sdk.Backoff(undefined, null).nextDelay(), 1000);
+  // A status is 0 to 65535, not cut down to 16 bits (65736 would be 200).
+  assert.throws(() => sdk.parseChannel(65_736, '{}'), RangeError);
+  assert.throws(() => sdk.parseChannel(200.5, '{}'), RangeError);
+  // random may be anything numeric: out of range is clamped, NaN taken as 0.
+  assert.equal(new sdk.Backoff().nextDelayJittered(NaN), 500);
+  assert.equal(new sdk.Backoff().nextDelayFor(300_000, 7), 375_000);
+});
+
 test('endpoints: undefined or left out keeps Kick, a typo throws', () => {
   const kick = sdk.tokenRequest('c').url;
   assert.equal(sdk.tokenRequest('c', undefined).url, kick);

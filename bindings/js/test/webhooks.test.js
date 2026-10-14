@@ -48,7 +48,15 @@ test('freshness: 5 minutes by default, a tolerance, or skipped on purpose', () =
   assert.throws(() => sdk.verifyWebhook(pem, headers, body, {}));
   assert.equal(sdk.verifyWebhook(pem, headers, body, { skipFreshness: true }).event.type, 'followed');
   // Mistakes throw rather than pass or fail for the wrong reason.
-  assert.throws(() => sdk.verifyWebhook(pem, headers, body, { now: Date.now() }), /milliseconds/);
+  const ms = /milliseconds \(Math\.floor\(Date\.now\(\) \/ 1000\)\)/;
+  assert.throws(() => sdk.verifyWebhook(pem, headers, body, { now: Date.now() }), ms);
+  // Date.now() / 1000 is fractional; the fix the message suggests is taken
+  // (and only refused because the fixture is old).
+  assert.throws(() => sdk.verifyWebhook(pem, headers, body, { now: Date.now() / 1000 }), /whole number/);
+  assert.throws(
+    () => sdk.verifyWebhook(pem, headers, body, { now: Math.floor(Date.now() / 1000) }),
+    /beyond the tolerance/
+  );
   assert.throws(() => sdk.verifyWebhook(pem, headers, body, { now: sent, skipFreshness: true }), TypeError);
   assert.throws(() => sdk.verifyWebhook(pem, headers, body, { tolerance_secs: 10 }), /unknown key/);
   assert.throws(() => sdk.verifyWebhook(pem, headers, body, { now: -1 }), RangeError);
