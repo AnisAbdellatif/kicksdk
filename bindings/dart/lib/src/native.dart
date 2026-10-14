@@ -66,17 +66,28 @@ Object? _open(Pointer<Utf8> out) {
   }
 }
 
+/// Runs `f` with `name` and `args` (as JSON) in native memory, freed after.
+/// `args` is encoded first: jsonEncode throws on a value JSON cannot hold,
+/// and nothing is allocated by then.
+T _withArgs<T>(String name, Map<String, Object?> args, T Function(Pointer<Utf8> name, Pointer<Utf8> args) f) {
+  final json = jsonEncode(args);
+  final n = name.toNativeUtf8();
+  try {
+    final a = json.toNativeUtf8();
+    try {
+      return f(n, a);
+    } finally {
+      malloc.free(a);
+    }
+  } finally {
+    malloc.free(n);
+  }
+}
+
 /// Calls one core function by name (see `kicksdk::dispatch`).
 Object? call(String name, [Map<String, Object?> args = const {}]) {
   _checkAbi();
-  final n = name.toNativeUtf8();
-  final a = jsonEncode(args).toNativeUtf8();
-  try {
-    return _open(_call(n, a));
-  } finally {
-    malloc.free(n);
-    malloc.free(a);
-  }
+  return _withArgs(name, args, (n, a) => _open(_call(n, a)));
 }
 
 final _free = Native.addressOf<NativeFunction<Void Function(Pointer<Void>)>>(_sessionFree);
@@ -100,14 +111,7 @@ class NativeSession implements Finalizable {
 
   Object? call(String method, [Map<String, Object?> args = const {}]) {
     if (_ptr == nullptr) throw StateError('kicksdk: session closed');
-    final m = method.toNativeUtf8();
-    final a = jsonEncode(args).toNativeUtf8();
-    try {
-      return _open(_sessionCall(_ptr, m, a));
-    } finally {
-      malloc.free(m);
-      malloc.free(a);
-    }
+    return _withArgs(method, args, (m, a) => _open(_sessionCall(_ptr, m, a)));
   }
 
   void close() {
