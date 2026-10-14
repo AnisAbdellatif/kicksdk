@@ -137,6 +137,7 @@ defmodule Kicksdk.Native do
   def retry_after_ms(_code), do: err()
   def backoff_new(_initial_ms, _max_ms), do: err()
   def backoff_next(_backoff, _random), do: err()
+  def backoff_next_for(_backoff, _retry_after_ms, _random), do: err()
   def backoff_reset(_backoff), do: err()
 
   def session_new(_channels), do: err()

@@ -294,14 +294,22 @@ fn retry_after_ms(code: u16) -> u64 {
     realtime::retry_after_ms(code)
 }
 
-/// `realtime::Backoff` as three integers, `{initial_ms, max_ms, next_ms}`,
-/// so that Elixir keeps it as an immutable struct.
-type BackoffFields = (u64, u64, u64);
+/// `realtime::Backoff` as four integers, `{initial_ms, max_ms, next_ms,
+/// terminal_closes}` (its serde fields), so that Elixir keeps it as an
+/// immutable struct. Every call takes all four and returns all four: a field
+/// left out would be lost between calls (the terminal count, and with it the
+/// escalation from 5 to 30 minutes).
+type BackoffFields = (u64, u64, u64, u32);
 
 fn backoff(fields: BackoffFields) -> NifResult<realtime::Backoff> {
-    let (initial_ms, max_ms, next_ms) = fields;
-    serde_json::from_value(serde_json::json!({"initial_ms": initial_ms, "max_ms": max_ms, "next_ms": next_ms}))
-        .map_err(|e| runtime_error(format!("kicksdk: cannot rebuild a backoff: {e}")))
+    let (initial_ms, max_ms, next_ms, terminal_closes) = fields;
+    serde_json::from_value(serde_json::json!({
+        "initial_ms": initial_ms,
+        "max_ms": max_ms,
+        "next_ms": next_ms,
+        "terminal_closes": terminal_closes,
+    }))
+    .map_err(|e| runtime_error(format!("kicksdk: cannot rebuild a backoff: {e}")))
 }
 
 fn fields(b: &realtime::Backoff) -> NifResult<BackoffFields> {
@@ -309,7 +317,9 @@ fn fields(b: &realtime::Backoff) -> NifResult<BackoffFields> {
     let field = |k: &str| {
         v.get(k).and_then(Value::as_u64).ok_or_else(|| runtime_error(format!("kicksdk: no {k} in a backoff")))
     };
-    Ok((field("initial_ms")?, field("max_ms")?, field("next_ms")?))
+    let terminal_closes = u32::try_from(field("terminal_closes")?)
+        .map_err(|_| runtime_error("kicksdk: terminal_closes out of range in a backoff"))?;
+    Ok((field("initial_ms")?, field("max_ms")?, field("next_ms")?, terminal_closes))
 }
 
 #[rustler::nif]
@@ -317,22 +327,31 @@ fn backoff_new(initial_ms: u64, max_ms: u64) -> NifResult<BackoffFields> {
     fields(&realtime::Backoff::new(initial_ms, max_ms))
 }
 
-/// `{delay_ms, next_ms}`; `random`, from `[0, 1)`, spreads the delay.
+/// `{delay_ms, backoff}`; `random`, from `[0, 1)`, spreads the delay.
 #[rustler::nif]
-fn backoff_next(b: BackoffFields, random: Option<f64>) -> NifResult<(u64, u64)> {
+fn backoff_next(b: BackoffFields, random: Option<f64>) -> NifResult<(u64, BackoffFields)> {
     let mut b = backoff(b)?;
     let delay = match random {
         Some(r) => b.next_delay_jittered(r),
         None => b.next_delay(),
     };
-    Ok((delay, fields(&b)?.2))
+    Ok((delay, fields(&b)?))
+}
+
+/// `{delay_ms, backoff}` after a close that asks for at least
+/// `retry_after_ms` (0 for an ordinary drop).
+#[rustler::nif]
+fn backoff_next_for(b: BackoffFields, retry_after_ms: u64, random: f64) -> NifResult<(u64, BackoffFields)> {
+    let mut b = backoff(b)?;
+    let delay = b.next_delay_for(retry_after_ms, random);
+    Ok((delay, fields(&b)?))
 }
 
 #[rustler::nif]
-fn backoff_reset(b: BackoffFields) -> NifResult<u64> {
+fn backoff_reset(b: BackoffFields) -> NifResult<BackoffFields> {
     let mut b = backoff(b)?;
     b.reset();
-    Ok(fields(&b)?.2)
+    fields(&b)
 }
 
 /// A session and the clock it is driven by.
@@ -850,6 +869,18 @@ mod tests {
         assert_eq!(far.at(i64::MIN), 0);
         assert_eq!(far.at(i64::MAX), u64::MAX);
         assert_eq!(far.host(u64::MAX), i64::MAX);
+    }
+
+    #[test]
+    fn a_backoff_keeps_its_terminal_count_across_calls() {
+        let mut b = backoff(fields(&realtime::Backoff::default()).unwrap()).unwrap();
+        assert_eq!(b.next_delay_for(300_000, 0.0), 300_000);
+        let carried = fields(&b).unwrap();
+        assert_eq!(carried.3, 1);
+        let mut back = backoff(carried).unwrap();
+        assert_eq!(back.next_delay_for(300_000, 0.0), 600_000);
+        back.reset();
+        assert_eq!(fields(&back).unwrap(), (1_000, 30_000, 1_000, 0));
     }
 
     #[test]

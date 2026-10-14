@@ -245,7 +245,11 @@ version stays 0.1.1 until release.
   raises a clear `RuntimeError`; `closed/1` recovers it.
 - New: `Realtime.retry_after_ms/1` (replaces the unreleased
   `should_reconnect?/1`), `Kicksdk.Realtime.Backoff` (with
-  `next_delay_jittered/2`).
+  `next_delay_jittered/2` and `next_delay_for/3`, whose struct carries the
+  terminal-close count in `terminal_closes`; `reset/1` clears it).
+- **Breaking**: the session's `"close"` action has `"code"`, `"reason"`,
+  `"terminal"` and `"retry_after_ms"` instead of `"reconnect"`; a terminal
+  close means "wait longer and come back as a new client", never "stop".
 - **Breaking**: endpoints with an unknown key or a non-string value raise
   `ArgumentError`; HTTP statuses outside 0..65535 are `{:error, {:invalid, _}}`.
 - NIFs whose work grows with the input run on a dirty scheduler above 4 KiB.
