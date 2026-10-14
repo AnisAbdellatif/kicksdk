@@ -1,0 +1,4 @@
+# Copied from the repository root by `npm pack` / `npm publish` (prepack),
+# and removed after (postpack).
+/LICENSE-MIT
+/LICENSE-APACHE
