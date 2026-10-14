@@ -15,13 +15,24 @@ final chat = connectChat(
     final event = e['event'];
     if (event['type'] == 'chat_message') print('${event['sender']['username']}: ${event['content']}');
   },
+  onDrop: (reason) => print('dropped: $reason'), // a jittered reconnect follows
+  onError: (error, stack) => print('error: $error'), // e.g. onEvent threw
 );
-// later: chat.close();
+// later: chat.close();  `chat.done` completes once it has ended for good,
+// after close() or when Kick closed it with a code that rules out a
+// reconnect (a bad token, a ban).
 ```
+
+Each request and the WebSocket handshake time out after `timeout` (10 s)
+and are retried like any other failure. An exception thrown by `onEvent` or
+`onState` goes to `onError` (stderr without it); the frames after it are
+still handled.
 
 `package:kicksdk/kicksdk.dart` has the rest, without `dart:io`:
 `Website.channelRequest` / `parseChannel`, `PublicApi.livestreamsRequests`,
-`Realtime` and `Session`, `Events.parse`, `Webhooks.verify`, … Requests are
+`Realtime` and `Session`, `Events.parse`, `Webhooks.verify` (the raw body as
+bytes or text; it checks the delivery's timestamp against `now`, 5 minutes
+either way, unless `skipFreshness`), … Requests are
 `KickRequest`s for any HTTP client; errors are `KickException` with `kind`
 and `status`.
 
