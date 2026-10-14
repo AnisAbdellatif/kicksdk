@@ -16,7 +16,8 @@
 //!
 //! The channel answer carries a `playback_url` with a signed token. It is
 //! passed on ([`WebsiteChannel::playback_url`]) because a player needs it;
-//! treat it like a credential - never log or store it.
+//! treat it like a credential - never log or store it. [`WebsiteChannel`]'s
+//! `Debug` prints it as `[redacted]`.
 
 use crate::events::{self, ChatMessage, KickEvent};
 use crate::http::{self, Endpoints, Error, Method, Request, segment};
@@ -46,7 +47,9 @@ pub struct SubscriberBadge {
 }
 
 /// A channel, as the website API gives it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+///
+/// `Debug` hides [`playback_url`](Self::playback_url).
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct WebsiteChannel {
     /// The channel id.
@@ -78,6 +81,44 @@ pub struct WebsiteChannel {
     pub subscriber_badges: Vec<SubscriberBadge>,
     /// Verified.
     pub verified: Option<bool>,
+}
+
+impl std::fmt::Debug for WebsiteChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Destructured, so a new field cannot be left out of here unnoticed.
+        let Self {
+            id,
+            user_id,
+            slug,
+            chatroom_id,
+            followers_count,
+            live,
+            viewer_count,
+            livestream_id,
+            session_title,
+            username,
+            profile_pic,
+            playback_url,
+            subscriber_badges,
+            verified,
+        } = self;
+        f.debug_struct("WebsiteChannel")
+            .field("id", id)
+            .field("user_id", user_id)
+            .field("slug", slug)
+            .field("chatroom_id", chatroom_id)
+            .field("followers_count", followers_count)
+            .field("live", live)
+            .field("viewer_count", viewer_count)
+            .field("livestream_id", livestream_id)
+            .field("session_title", session_title)
+            .field("username", username)
+            .field("profile_pic", profile_pic)
+            .field("playback_url", &playback_url.as_ref().map(|_| "[redacted]"))
+            .field("subscriber_badges", subscriber_badges)
+            .field("verified", verified)
+            .finish()
+    }
 }
 
 /// A channel by slug. A rename makes the old slug 404 until the new one is known.
@@ -380,6 +421,11 @@ mod tests {
             assert!(!c.live);
         }
         assert!(parse_channel(200, r#"{"id":5}"#).is_err());
+        let body = r#"{"id":5,"chatroom":{"id":7},"playback_url":"https://x/master.m3u8?token=sekrit"}"#;
+        let c = parse_channel(200, body).unwrap();
+        assert_eq!(c.playback_url.as_deref(), Some("https://x/master.m3u8?token=sekrit"));
+        let shown = format!("{c:?}");
+        assert!(!shown.contains("sekrit") && shown.contains("playback_url: Some(\"[redacted]\")"), "{shown}");
         assert_eq!(parse_channel(404, "{}").unwrap_err().status(), Some(404));
     }
 
