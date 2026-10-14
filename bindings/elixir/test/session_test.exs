@@ -41,6 +41,21 @@ defmodule Kicksdk.Realtime.SessionTest do
     end
   end
 
+  test "a close says whether to reconnect" do
+    s = connected(0)
+
+    assert [%{"action" => "close", "code" => 3501, "reconnect" => false, "reason" => reason}] =
+             Session.receive(s, ~s({"push":{"disconnect":{"code":3501,"reason":"bad request"}}}), 20)
+
+    assert reason =~ "3501"
+    assert [%{"action" => "unsubscribed", "code" => 0}] = Session.closed(s)
+
+    s = connected(0)
+
+    assert [%{"action" => "close", "code" => 3005, "reconnect" => true}] =
+             Session.receive(s, ~s({"push":{"disconnect":{"code":3005,"reason":"shutdown"}}}), 20)
+  end
+
   test "an earlier time than the first is not a wrap" do
     s = connected(1_000)
     assert Session.tick(s, -5_000) == []

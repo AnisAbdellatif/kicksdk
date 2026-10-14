@@ -6,13 +6,21 @@ defmodule Kicksdk.Realtime.Session do
   actions, maps with an `"action"`:
 
     * `"send"` - send `"text"` as a text frame.
-    * `"close"` - close the socket (`"reason"` says why), call `closed/1`, and
-      reconnect with backoff if the connection is still wanted.
+    * `"close"` - close the socket, call `closed/1`, and reconnect with a
+      `Kicksdk.Realtime.Backoff` if `"reconnect"` is true and the connection
+      is still wanted; `"reconnect"` false means the same connection would
+      be refused again. `"code"` is Kick's disconnect code (3000-4999),
+      Kick's error code for a refused connect or token refresh (101
+      unauthorized, 109 token expired, ...), or 0 when the session gave up
+      on a silent connection; `"reason"` is for a log line.
     * `"refresh_token"` - fetch a new token for the same client id and pass it
       to `refresh/3`. If that fails, do nothing: Kick ends the connection when
       the old one runs out.
     * `"connected"`, `"subscribed"`, `"unsubscribed"`, `"subscribe_failed"` -
-      the connection's state.
+      the connection's state. An `"unsubscribed"` with a code from 2500 to
+      2999 is Kick asking to subscribe again: the session has already sent
+      it, and `"subscribed"` or `"subscribe_failed"` follows. Reset the
+      backoff when the chat feed (the first) is subscribed.
     * `"event"` - with `"channel"` (the feed), `"name"` (Kick's event name),
       `"data"` (as Kick sent it) and `"event"` (typed, as in `Kicksdk.Events`).
 

@@ -120,6 +120,10 @@ defmodule Kicksdk.Native do
   def parse_connection(_status, _body), do: err()
   def token_request(_e, _client_id), do: err()
   def parse_token(_status, _body), do: err()
+  def should_reconnect(_code), do: err()
+  def backoff_new(_initial_ms, _max_ms), do: err()
+  def backoff_next(_backoff, _random), do: err()
+  def backoff_reset(_backoff), do: err()
 
   def session_new(_channels), do: err()
   def session_open(_s, _token, _now), do: err()

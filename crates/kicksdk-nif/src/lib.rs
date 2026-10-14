@@ -256,6 +256,52 @@ fn parse_token<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResul
     parsed(env, status, &body, |s, b| realtime::parse_token(s, b))
 }
 
+#[rustler::nif]
+fn should_reconnect(code: u16) -> bool {
+    realtime::should_reconnect(code)
+}
+
+/// `realtime::Backoff` as three integers, `{initial_ms, max_ms, next_ms}`,
+/// so that Elixir keeps it as an immutable struct.
+type BackoffFields = (u64, u64, u64);
+
+fn backoff(fields: BackoffFields) -> NifResult<realtime::Backoff> {
+    let (initial_ms, max_ms, next_ms) = fields;
+    serde_json::from_value(serde_json::json!({"initial_ms": initial_ms, "max_ms": max_ms, "next_ms": next_ms}))
+        .map_err(|e| runtime_error(format!("kicksdk: cannot rebuild a backoff: {e}")))
+}
+
+fn fields(b: &realtime::Backoff) -> NifResult<BackoffFields> {
+    let v = serde_json::to_value(b).map_err(|e| runtime_error(format!("kicksdk: cannot read a backoff: {e}")))?;
+    let field = |k: &str| {
+        v.get(k).and_then(Value::as_u64).ok_or_else(|| runtime_error(format!("kicksdk: no {k} in a backoff")))
+    };
+    Ok((field("initial_ms")?, field("max_ms")?, field("next_ms")?))
+}
+
+#[rustler::nif]
+fn backoff_new(initial_ms: u64, max_ms: u64) -> NifResult<BackoffFields> {
+    fields(&realtime::Backoff::new(initial_ms, max_ms))
+}
+
+/// `{delay_ms, next_ms}`; `random`, from `[0, 1)`, spreads the delay.
+#[rustler::nif]
+fn backoff_next(b: BackoffFields, random: Option<f64>) -> NifResult<(u64, u64)> {
+    let mut b = backoff(b)?;
+    let delay = match random {
+        Some(r) => b.next_delay_jittered(r),
+        None => b.next_delay(),
+    };
+    Ok((delay, fields(&b)?.2))
+}
+
+#[rustler::nif]
+fn backoff_reset(b: BackoffFields) -> NifResult<u64> {
+    let mut b = backoff(b)?;
+    b.reset();
+    Ok(fields(&b)?.2)
+}
+
 /// A session and the clock it is driven by.
 ///
 /// The core counts time in unsigned milliseconds; a host's clock need not
