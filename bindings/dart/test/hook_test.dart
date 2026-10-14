@@ -49,18 +49,42 @@ void main() {
     await tmp.delete(recursive: true);
   });
 
-  test('every target Rust has gets a triple; musl and simulators are told apart', () {
-    expect(hook.rustTriple(OS.linux, Architecture.x64), 'x86_64-unknown-linux-gnu');
-    expect(hook.rustTriple(OS.linux, Architecture.x64, musl: true), 'x86_64-unknown-linux-musl');
-    expect(hook.rustTriple(OS.linux, Architecture.arm), 'armv7-unknown-linux-gnueabihf');
-    expect(hook.rustTriple(OS.linux, Architecture.arm, musl: true), 'armv7-unknown-linux-musleabihf');
-    expect(hook.rustTriple(OS.linux, Architecture.riscv64), 'riscv64gc-unknown-linux-gnu');
-    expect(hook.rustTriple(OS.linux, Architecture.ia32), 'i686-unknown-linux-gnu');
-    expect(hook.rustTriple(OS.windows, Architecture.ia32), 'i686-pc-windows-msvc');
-    expect(hook.rustTriple(OS.android, Architecture.ia32), 'i686-linux-android');
-    expect(hook.rustTriple(OS.iOS, Architecture.arm64, iosSimulator: true), 'aarch64-apple-ios-sim');
-    expect(hook.rustTriple(OS.fuchsia, Architecture.x64), isNull);
-    expect(hook.rustTriple(OS.linux, Architecture.riscv32), isNull);
+  test('the precompiled targets are rustTriple\'s literals, as scripts/ffi-targets.sh reads them', () {
+    // The same expressions as scripts/ffi-targets.sh.
+    final src = File('hook/build.dart').readAsStringSync();
+    final body = RegExp(r'String rustTriple\(.*?\n}\n', dotAll: true).firstMatch(src)!.group(0)!;
+    final triples = {for (final m in RegExp(r"'([a-z0-9_]+(?:-[a-z0-9_]+){2,3})'").allMatches(body)) m.group(1)!};
+    expect(triples, hasLength(12));
+    String? precompiled(OS os, Architecture arch, bool sim) {
+      try {
+        return hook.rustTriple(os, arch, iosSimulator: sim);
+      } on UnsupportedError {
+        return null;
+      }
+    }
+
+    final reached = {
+      for (final os in [OS.linux, OS.macOS, OS.windows, OS.android, OS.iOS])
+        for (final arch in Architecture.values)
+          for (final sim in [false, true]) ?precompiled(os, arch, sim),
+    };
+    expect(reached, triples);
+  });
+
+  test('targets with no precompiled library get a triple to build; musl and simulators are told apart', () {
+    expect(hook.targetTriple(OS.linux, Architecture.x64), 'x86_64-unknown-linux-gnu');
+    expect(hook.targetTriple(OS.linux, Architecture.x64, musl: true), 'x86_64-unknown-linux-musl');
+    expect(hook.targetTriple(OS.linux, Architecture.arm), 'armv7-unknown-linux-gnueabihf');
+    expect(hook.targetTriple(OS.linux, Architecture.arm, musl: true), 'armv7-unknown-linux-musleabihf');
+    expect(hook.targetTriple(OS.linux, Architecture.riscv64), 'riscv64gc-unknown-linux-gnu');
+    expect(hook.targetTriple(OS.linux, Architecture.ia32), 'i686-unknown-linux-gnu');
+    expect(hook.targetTriple(OS.windows, Architecture.ia32), 'i686-pc-windows-msvc');
+    expect(hook.targetTriple(OS.android, Architecture.ia32), 'i686-linux-android');
+    expect(hook.targetTriple(OS.android, Architecture.arm), 'armv7-linux-androideabi');
+    expect(hook.targetTriple(OS.iOS, Architecture.arm64, iosSimulator: true), 'aarch64-apple-ios-sim');
+    expect(hook.targetTriple(OS.fuchsia, Architecture.x64), isNull);
+    expect(hook.targetTriple(OS.linux, Architecture.riscv32), isNull);
+    expect(() => hook.rustTriple(OS.linux, Architecture.arm), throwsUnsupportedError);
     expect(hook.hostIsMusl('7f00-7f01 r-xp 0 08:01 1 /lib/ld-musl-x86_64.so.1'), isTrue);
     expect(hook.hostIsMusl('7f00-7f01 r-xp 0 08:01 1 /usr/lib/x86_64-linux-gnu/libc.so.6'), isFalse);
   });
@@ -163,7 +187,7 @@ void main() {
       expect(c.environment, {'RUSTUP_HOME': '/opt/rustup', 'PATH': '/opt/rust/bin:/usr/bin'});
     });
 
-    test('then CARGO_HOME, then PATH, then ~/.cargo/bin', () {
+    test('then CARGO_HOME, then PATH; never ~/.cargo/bin behind PATH\'s back', () {
       expect(
         hook
             .locateCargo(
@@ -174,31 +198,31 @@ void main() {
             .executable,
         '/opt/cargo/bin/cargo',
       );
-      final onPath = hook.locateCargo(
-        env: {'PATH': '/usr/local/bin:/usr/bin', 'HOME': '/home/u'},
+      final fromDefine = hook.locateCargo(
+        env: {'PATH': '/usr/bin'},
         windows: false,
-        exists: (p) => only({'/usr/bin/cargo', '/home/u/.cargo/bin/cargo'}, p),
+        cargoHome: '/opt/cargo/',
+        exists: (p) => only({'/opt/cargo/bin/cargo'}, p),
       );
-      expect(onPath.executable, 'cargo');
-      expect(onPath.environment, isEmpty);
-      final home = hook.locateCargo(
+      expect(fromDefine.executable, '/opt/cargo/bin/cargo');
+      expect(fromDefine.environment, {'CARGO_HOME': '/opt/cargo/', 'PATH': '/opt/cargo/bin:/usr/bin'});
+      final onPath = hook.locateCargo(
         env: {'PATH': '/usr/bin', 'HOME': '/home/u'},
         windows: false,
         exists: (p) => only({'/home/u/.cargo/bin/cargo'}, p),
       );
-      expect(home.executable, '/home/u/.cargo/bin/cargo');
-      expect(home.environment['PATH'], '/home/u/.cargo/bin:/usr/bin');
-      expect(hook.locateCargo(env: const {}, windows: false, exists: (_) => false).executable, 'cargo');
+      expect(onPath.executable, 'cargo');
+      expect(onPath.environment, isEmpty);
     });
 
-    test('on Windows, cargo.exe under %USERPROFILE%', () {
+    test('on Windows, cargo.exe and ; on PATH', () {
       final c = hook.locateCargo(
-        env: {'Path': r'C:\Windows', 'USERPROFILE': r'C:\Users\u'},
+        env: {'Path': r'C:\Windows', 'CARGO_HOME': r'C:\rust\cargo'},
         windows: true,
-        exists: (p) => p == r'C:\Users\u\.cargo\bin\cargo.exe',
+        exists: (p) => p == r'C:\rust\cargo\bin\cargo.exe',
       );
-      expect(c.executable, r'C:\Users\u\.cargo\bin\cargo.exe');
-      expect(c.environment['PATH'], r'C:\Users\u\.cargo\bin;C:\Windows');
+      expect(c.executable, r'C:\rust\cargo\bin\cargo.exe');
+      expect(c.environment['PATH'], r'C:\rust\cargo\bin;C:\Windows');
     });
   });
 
@@ -228,8 +252,23 @@ void main() {
     });
   });
 
+  test('vendored sources build offline', () {
+    expect(hook.cargoArgs('x86_64-unknown-linux-gnu', vendored: false), [
+      'build',
+      '--release',
+      '--locked',
+      '-p',
+      'kicksdk-ffi',
+      '--target',
+      'x86_64-unknown-linux-gnu',
+    ]);
+    final vendored = hook.cargoArgs('x86_64-unknown-linux-gnu', vendored: true);
+    expect(vendored, containsAllInOrder(['--offline', '--config', 'source.crates-io.replace-with="vendored-sources"']));
+    expect(vendored, contains('source.vendored-sources.directory="vendor"'));
+  });
+
   group('the hook, end to end', () {
-    final triple = hook.rustTriple(OS.current, Architecture.current, musl: Platform.isLinux && hook.hostIsMusl())!;
+    final triple = hook.targetTriple(OS.current, Architecture.current, musl: Platform.isLinux && hook.hostIsMusl())!;
     final fileName = OS.current.dylibFileName('kicksdk_ffi');
     final release = 'kicksdk_ffi-v${hook.version}-$triple.${fileName.split('.').last}';
 
@@ -262,7 +301,15 @@ void main() {
       );
     });
 
-    test('builds from source when the mirror does not have it', () async {
+    // Not where Rust is hidden on purpose (scripts/without-rust.sh).
+    final cargo = () {
+      try {
+        return Process.runSync('cargo', ['--version'], runInShell: Platform.isWindows).exitCode == 0;
+      } on ProcessException {
+        return false;
+      }
+    }();
+    test('builds from source when the mirror does not have it', skip: cargo ? false : 'no cargo on PATH', () async {
       mirror.status = 404;
       final got = await run({'binary_base_url': mirror.url}, {release: 'x'});
       expect(mirror.requests, 1);

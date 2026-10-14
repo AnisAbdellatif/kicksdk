@@ -57,7 +57,8 @@ hooks:
       build_from_source: true          # always build
       # binary_base_url: https://…     # a mirror of the release assets
       # Hooks only see PATH and HOME, not CARGO_HOME or RUSTUP_HOME. A
-      # toolchain outside ~/.cargo and ~/.rustup is named here:
+      # toolchain not on PATH, or outside ~/.cargo and ~/.rustup, is named
+      # here:
       # cargo_path: /opt/rust/bin/cargo
       # cargo_home: /opt/cargo
       # rustup_home: /opt/rustup

@@ -24,17 +24,18 @@
 //
 // The checksums apply to a mirror too. The hooks runner gives a hook only
 // some environment variables (PATH and HOME, not CARGO_HOME or
-// RUSTUP_HOME), so a toolchain installed somewhere else has to be named
-// here. cargo is looked for at `cargo_path`, then in `cargo_home`/bin, on
-// PATH, and in ~/.cargo/bin.
+// RUSTUP_HOME), so a toolchain that is not on PATH, or not in ~/.cargo and
+// ~/.rustup, has to be named here. cargo is looked for at `cargo_path`,
+// then in `cargo_home`/bin, then on PATH.
 //
 // Building needs a Rust toolchain with the target installed (`rustup target
 // add <triple>`); for Android, the NDK's clang (which Flutter passes in) is
 // the linker, aimed at the app's minimum API level. The sources are the
 // package's native/ directory, or the repository itself when the package is
-// used from a checkout. They do not include the crates they depend on, so a
-// source build downloads them from crates.io the first time (or needs them
-// in Cargo's cache already, or a vendored source set up in Cargo's config).
+// used from a checkout. Unless native/vendor/ holds the crates they depend
+// on (`cargo vendor`), in which case the build is offline, a source build
+// downloads those from crates.io the first time (or needs them in Cargo's
+// cache already, or a vendored source set up in Cargo's config).
 
 import 'dart:async';
 import 'dart:convert';
@@ -62,7 +63,7 @@ Future<void> provide(BuildInput input, BuildOutputBuilder output, {Map<String, S
   final os = code.targetOS;
   final arch = code.targetArchitecture;
   final musl = os == OS.linux && Platform.isLinux && hostIsMusl();
-  final triple = rustTriple(
+  final triple = targetTriple(
     os,
     arch,
     iosSimulator: os == OS.iOS && code.iOS.targetSdk == IOSSdk.iPhoneSimulator,
@@ -114,47 +115,73 @@ void log(String message) => stderr.writeln('kicksdk: $message');
 /// A user define that is on: `true`, or "true" from the command line.
 bool isSet(Object? define) => define == true || define == 'true';
 
-/// Rust's name for the target, or null if Rust has none that fits.
-/// Precompiled libraries exist for some of these (hook/checksums.json says
-/// which); the others are built from source.
-String? rustTriple(OS os, Architecture arch, {bool iosSimulator = false, bool musl = false}) {
+/// Rust's name for a target with a precompiled library: the release
+/// builds exactly these. scripts/ffi-targets.sh reads the list from this
+/// function's string literals, so each triple stays a literal here, and a
+/// target that is only built from source goes in [sourceOnlyTriple].
+String rustTriple(OS os, Architecture arch, {bool iosSimulator = false}) {
+  String? t;
   if (os == OS.linux) {
-    final libc = musl ? 'musl' : 'gnu';
-    return switch (arch) {
-      Architecture.x64 => 'x86_64-unknown-linux-$libc',
-      Architecture.arm64 => 'aarch64-unknown-linux-$libc',
-      Architecture.arm => 'armv7-unknown-linux-${libc}eabihf',
-      Architecture.ia32 => 'i686-unknown-linux-$libc',
-      Architecture.riscv64 => 'riscv64gc-unknown-linux-$libc',
-      _ => null,
-    };
-  }
-  if (os == OS.macOS) {
-    return {Architecture.x64: 'x86_64-apple-darwin', Architecture.arm64: 'aarch64-apple-darwin'}[arch];
-  }
-  if (os == OS.windows) {
-    return {
-      Architecture.x64: 'x86_64-pc-windows-msvc',
-      Architecture.arm64: 'aarch64-pc-windows-msvc',
-      Architecture.ia32: 'i686-pc-windows-msvc',
-    }[arch];
-  }
-  if (os == OS.android) {
-    return {
+    t = {Architecture.x64: 'x86_64-unknown-linux-gnu', Architecture.arm64: 'aarch64-unknown-linux-gnu'}[arch];
+  } else if (os == OS.macOS) {
+    t = {Architecture.x64: 'x86_64-apple-darwin', Architecture.arm64: 'aarch64-apple-darwin'}[arch];
+  } else if (os == OS.windows) {
+    t = {Architecture.x64: 'x86_64-pc-windows-msvc', Architecture.arm64: 'aarch64-pc-windows-msvc'}[arch];
+  } else if (os == OS.android) {
+    t = {
       Architecture.arm64: 'aarch64-linux-android',
       Architecture.arm: 'armv7-linux-androideabi',
       Architecture.x64: 'x86_64-linux-android',
-      Architecture.ia32: 'i686-linux-android',
-      Architecture.riscv64: 'riscv64-linux-android',
     }[arch];
-  }
-  if (os == OS.iOS) {
-    return {
+  } else if (os == OS.iOS) {
+    t = {
       Architecture.arm64: iosSimulator ? 'aarch64-apple-ios-sim' : 'aarch64-apple-ios',
       Architecture.x64: 'x86_64-apple-ios',
     }[arch];
   }
+  if (t == null) throw UnsupportedError('kicksdk: no precompiled library for $os/$arch');
+  return t;
+}
+
+/// Rust's name for a target the release has no library for, which is
+/// built from source: other Linux, Windows and Android architectures, and
+/// Linux on musl. Null if Rust has no target for it.
+String? sourceOnlyTriple(OS os, Architecture arch, {bool musl = false}) {
+  if (os == OS.linux && musl) {
+    return {
+      Architecture.x64: 'x86_64-unknown-linux-musl',
+      Architecture.arm64: 'aarch64-unknown-linux-musl',
+      Architecture.arm: 'armv7-unknown-linux-musleabihf',
+      Architecture.ia32: 'i686-unknown-linux-musl',
+      Architecture.riscv64: 'riscv64gc-unknown-linux-musl',
+    }[arch];
+  }
+  if (os == OS.linux) {
+    return {
+      Architecture.arm: 'armv7-unknown-linux-gnueabihf',
+      Architecture.ia32: 'i686-unknown-linux-gnu',
+      Architecture.riscv64: 'riscv64gc-unknown-linux-gnu',
+    }[arch];
+  }
+  if (os == OS.windows) return {Architecture.ia32: 'i686-pc-windows-msvc'}[arch];
+  if (os == OS.android) {
+    return {Architecture.ia32: 'i686-linux-android', Architecture.riscv64: 'riscv64-linux-android'}[arch];
+  }
   return null;
+}
+
+/// The Rust target to download or build for: [rustTriple], or else
+/// [sourceOnlyTriple] (always, on musl, where a glibc library would not
+/// load). Null if there is none.
+String? targetTriple(OS os, Architecture arch, {bool iosSimulator = false, bool musl = false}) {
+  if (!musl) {
+    try {
+      return rustTriple(os, arch, iosSimulator: iosSimulator);
+    } on UnsupportedError {
+      // Not precompiled; maybe buildable.
+    }
+  }
+  return sourceOnlyTriple(os, arch, musl: musl);
 }
 
 /// Whether this process runs on musl (Alpine, ...), where a library built
@@ -288,10 +315,12 @@ Uri? sourceRoot(Uri packageRoot) {
 typedef Cargo = ({String executable, Map<String, String> environment});
 
 /// Finds cargo: `cargoPath`, then `cargoHome`/bin (`CARGO_HOME` when the
-/// runner passed it), then PATH, then ~/.cargo/bin. A cargo found by path
-/// gets its directory first on PATH, so its rustc is the one used, and
-/// `CARGO_HOME`/`RUSTUP_HOME` are passed on when known: the hooks runner
-/// drops them from the environment.
+/// runner passed it), then PATH. Not ~/.cargo/bin when it is not on PATH:
+/// a build with no Rust on PATH must not find one there (the release checks
+/// the precompiled path that way). A cargo found by path gets its directory
+/// first on PATH, so its rustc is the one used, and `CARGO_HOME` and
+/// `RUSTUP_HOME` are passed on when known: the hooks runner drops them from
+/// the environment.
 Cargo locateCargo({
   required Map<String, String> env,
   required bool windows,
@@ -303,7 +332,6 @@ Cargo locateCargo({
   final has = exists ?? (p) => File(p).existsSync();
   final sep = windows ? r'\' : '/';
   final exe = windows ? 'cargo.exe' : 'cargo';
-  String join(String dir, String name) => dir.endsWith(sep) ? '$dir$name' : '$dir$sep$name';
   final environment = <String, String>{};
   cargoHome ??= env['CARGO_HOME'];
   rustupHome ??= env['RUSTUP_HOME'];
@@ -311,23 +339,18 @@ Cargo locateCargo({
   if (rustupHome != null) environment['RUSTUP_HOME'] = rustupHome;
   if (env['RUSTUP_TOOLCHAIN'] case final toolchain?) environment['RUSTUP_TOOLCHAIN'] = toolchain;
 
-  final pathSep = windows ? ';' : ':';
-  final path = env['PATH'] ?? env['Path'] ?? '';
-  final home = windows ? env['USERPROFILE'] : env['HOME'];
-  String? inBin(String? dir) {
-    final candidate = dir == null ? null : join(join(dir, 'bin'), exe);
-    return candidate != null && has(candidate) ? candidate : null;
+  String? inHome() {
+    if (cargoHome == null) return null;
+    final bin = cargoHome.endsWith(sep) ? '${cargoHome}bin' : '$cargoHome${sep}bin';
+    return has('$bin$sep$exe') ? '$bin$sep$exe' : null;
   }
 
-  final found = cargoPath ?? inBin(cargoHome);
-  if (found == null && path.split(pathSep).any((d) => d.isNotEmpty && has(join(d, exe)))) {
-    return (executable: 'cargo', environment: environment);
-  }
-  final cargo = found ?? inBin(home == null ? null : join(home, '.cargo'));
+  final cargo = cargoPath ?? inHome();
   if (cargo == null) return (executable: 'cargo', environment: environment);
   if (cargo.contains(sep)) {
+    final path = env['PATH'] ?? env['Path'] ?? '';
     final dir = cargo.substring(0, cargo.lastIndexOf(sep));
-    environment['PATH'] = path.isEmpty ? dir : '$dir$pathSep$path';
+    environment['PATH'] = path.isEmpty ? dir : '$dir${windows ? ';' : ':'}$path';
   }
   return (executable: cargo, environment: environment);
 }
@@ -360,6 +383,26 @@ Map<String, String> muslEnvironment(String triple) => {
   'CARGO_TARGET_${triple.toUpperCase().replaceAll('-', '_')}_RUSTFLAGS': '-C target-feature=-crt-static',
 };
 
+/// cargo's arguments. With the dependencies' sources vendored in the
+/// workspace's vendor/ (`cargo vendor`), cargo is pointed at them and kept
+/// offline; their checksums are in vendor/ and Cargo.lock.
+List<String> cargoArgs(String triple, {required bool vendored}) => [
+  'build',
+  '--release',
+  '--locked',
+  if (vendored) ...[
+    '--offline',
+    '--config',
+    'source.crates-io.replace-with="vendored-sources"',
+    '--config',
+    'source.vendored-sources.directory="vendor"',
+  ],
+  '-p',
+  'kicksdk-ffi',
+  '--target',
+  triple,
+];
+
 Future<Uri> buildFromSource(BuildInput input, CodeConfig code, Uri root, String triple, String fileName) async {
   final targetDir = input.outputDirectoryShared.resolve('cargo/');
   final cargo = locateCargo(
@@ -377,12 +420,12 @@ Future<Uri> buildFromSource(BuildInput input, CodeConfig code, Uri root, String 
     );
   }
   if (triple.contains('-musl')) env.addAll(muslEnvironment(triple));
-  final args = ['build', '--release', '--locked', '-p', 'kicksdk-ffi', '--target', triple];
+  final args = cargoArgs(triple, vendored: Directory.fromUri(root.resolve('vendor/')).existsSync());
   log('${cargo.executable} ${args.join(' ')} (in ${root.toFilePath()})');
   final help =
-      'It needs Rust (https://rustup.rs) and `rustup target add $triple`; a toolchain outside ~/.cargo and '
-      '~/.rustup is named with the cargo_path, cargo_home and rustup_home user defines (see hook/build.dart). '
-      'The first build downloads crates from crates.io.';
+      'It needs Rust (https://rustup.rs) and `rustup target add $triple`. A toolchain not on PATH, or outside '
+      '~/.cargo and ~/.rustup, is named with the cargo_path, cargo_home and rustup_home user defines (see '
+      'hook/build.dart). The first build downloads crates from crates.io.';
   final ProcessResult run;
   try {
     run = await Process.run(
