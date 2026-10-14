@@ -74,9 +74,21 @@ impl NativeBackoff {
         self.0.initial_ms
     }
 
+    /// Takes effect at once as a bound (the core clamps every wait to the
+    /// bounds as they are), and as the first wait after `reset`.
+    #[setter]
+    fn set_initial_ms(&mut self, ms: u64) {
+        self.0.initial_ms = ms;
+    }
+
     #[getter]
     fn max_ms(&self) -> u64 {
         self.0.max_ms
+    }
+
+    #[setter]
+    fn set_max_ms(&mut self, ms: u64) {
+        self.0.max_ms = ms;
     }
 
     fn next_delay(&mut self) -> u64 {

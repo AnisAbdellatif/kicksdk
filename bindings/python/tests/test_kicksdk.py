@@ -142,6 +142,18 @@ def test_backoff_has_a_slower_stage_for_terminal_closes():
     assert b.next_delay_for(300_000, float("nan")) == 600_000
 
 
+def test_backoff_bounds_can_be_set():
+    b = realtime.Backoff()
+    b.maximum = 4
+    assert [b.next() for _ in range(4)] == [1.0, 2.0, 4.0, 4.0]
+    b.initial = 2
+    b.reset()
+    assert (b.initial, b.maximum, b.next()) == (2.0, 4.0, 2.0)
+    b.initial = -1
+    b.reset()
+    assert b.initial == 0.0 and b.next() == 0.001, "never a busy loop"
+
+
 def test_every_core_function_is_reachable():
     assert "website.channel_request" in kicksdk._native.FUNCTIONS
     assert kicksdk._native.NativeError.__module__ == "kicksdk._native"

@@ -144,13 +144,23 @@ class Backoff:
 
     @property
     def initial(self) -> float:
-        """The first wait, seconds."""
+        """The first wait, seconds. Setting it takes effect at once as the
+        shortest wait, and as the first one after :meth:`reset`."""
         return self._b.initial_ms / 1000
+
+    @initial.setter
+    def initial(self, seconds: float) -> None:
+        self._b.initial_ms = _ms(seconds)
 
     @property
     def maximum(self) -> float:
-        """The longest wait, seconds (of the ordinary stage)."""
+        """The longest wait, seconds (of the ordinary stage). Setting it
+        takes effect at once."""
         return self._b.max_ms / 1000
+
+    @maximum.setter
+    def maximum(self, seconds: float) -> None:
+        self._b.max_ms = _ms(seconds)
 
     def next(self) -> float:
         """The next wait in seconds, without jitter; the one after is longer."""
