@@ -152,7 +152,8 @@ defmodule Kicksdk.Native do
   def channel_user_request(_e, _slug, _username), do: err()
   def parse_channel_user(_status, _body), do: err()
 
-  def verify_webhook(_pem, _headers, _body), do: err()
+  def webhook_public_key(_pem), do: err()
+  def verify_webhook(_key, _headers, _body, _freshness), do: err()
   def call(_name, _args_json), do: err()
   def parse_webhook(_event_type, _body), do: err()
 end

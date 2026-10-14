@@ -37,7 +37,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 mod atoms {
     rustler::atoms! {
-        ok, error, status, shape, json, invalid, call,
+        ok, error, status, shape, json, invalid, call, webhook, skip,
         struct_ = "__struct__",
         exception = "__exception__",
         message,
@@ -510,25 +510,89 @@ fn parse_channel_user<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> N
 
 // ---- Webhooks ----------------------------------------------------------------
 
-/// `{:ok, %{headers: …, event: …}}` for a delivery whose signature checks
-/// out, `{:error, reason}` otherwise.
+/// Kick's webhook key, read once (`Kicksdk.Webhooks.public_key/1`).
+struct KeyResource(webhooks::PublicKey);
+
+#[rustler::resource_impl]
+impl Resource for KeyResource {}
+
+fn webhook_error(env: Env, message: impl Encoder) -> NifResult<Term> {
+    Ok((atoms::error(), (atoms::webhook(), message)).encode(env))
+}
+
+fn read_key(pem: &[u8]) -> Result<webhooks::PublicKey, webhooks::WebhookError> {
+    std::str::from_utf8(pem).map_err(|_| webhooks::WebhookError::BadKey).and_then(webhooks::PublicKey::from_pem)
+}
+
 #[rustler::nif]
-fn verify_webhook<'a>(env: Env<'a>, pem: &str, headers: Vec<(String, String)>, body: &str) -> NifResult<Term<'a>> {
-    let refuse = |reason: String| Ok((atoms::error(), reason).encode(env));
-    let h = match webhooks::Headers::from_pairs(headers.iter().map(|(a, b)| (a.as_str(), b.as_str()))) {
-        Ok(h) => h,
-        Err(e) => return refuse(e.to_string()),
+fn webhook_public_key<'a>(env: Env<'a>, pem: Binary<'a>) -> NifResult<Term<'a>> {
+    match read_key(&pem) {
+        Ok(key) => Ok((atoms::ok(), ResourceArc::new(KeyResource(key))).encode(env)),
+        Err(e) => webhook_error(env, e.to_string()),
+    }
+}
+
+/// `{:ok, %{"headers" => …, "event" => …}}` for a delivery whose signature
+/// checks out, `{:error, {:webhook, message}}` for one that does not, and
+/// the parser's `{:error, reason}` for a signed body that is not the shape
+/// of its type. `key` is a key resource or a PEM, `headers` `[{name,
+/// value}]`, `body` the raw bytes, `freshness` `{now_unix_secs,
+/// tolerance_secs}` or `:skip`.
+#[rustler::nif]
+fn verify_webhook<'a>(
+    env: Env<'a>,
+    key: Term<'a>,
+    headers: Vec<(Binary<'a>, Binary<'a>)>,
+    body: Binary<'a>,
+    freshness: Term<'a>,
+) -> NifResult<Term<'a>> {
+    verify(env, key, &headers, &body, freshness)
+}
+
+fn verify<'a>(
+    env: Env<'a>,
+    key: Term<'a>,
+    headers: &[(Binary, Binary)],
+    body: &[u8],
+    freshness: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let freshness = if freshness.decode::<Atom>().is_ok_and(|a| a == atoms::skip()) {
+        webhooks::Freshness::Skip
+    } else {
+        let (now, tolerance_secs) = freshness
+            .decode::<(u64, u64)>()
+            .map_err(|_| argument_error("freshness must be {now_unix_secs, tolerance_secs} or :skip"))?;
+        webhooks::Freshness::Within { now, tolerance_secs }
     };
-    // The delivery must be fresh: within 5 minutes of this machine's clock.
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    let checked = webhooks::PublicKey::from_pem(pem)
-        .and_then(|key| webhooks::verify(&key, &h, body.as_bytes(), webhooks::Freshness::at(now)));
+    // Kick's headers must be text; any other header is not read, whatever it
+    // holds.
+    let mut pairs = Vec::with_capacity(headers.len());
+    for (name, value) in headers {
+        let Ok(name) = std::str::from_utf8(name) else { continue };
+        let kicks = name.get(..11).is_some_and(|p| p.eq_ignore_ascii_case("kick-event-"));
+        match std::str::from_utf8(value) {
+            Ok(value) => pairs.push((name, value)),
+            Err(_) if kicks => return webhook_error(env, format!("header {name} is not UTF-8")),
+            Err(_) => {}
+        }
+    }
+    let h = match webhooks::Headers::from_pairs(pairs) {
+        Ok(h) => h,
+        Err(e) => return webhook_error(env, e.to_string()),
+    };
+    let checked = match key.decode::<ResourceArc<KeyResource>>() {
+        Ok(key) => webhooks::verify(&key.0, &h, body, freshness),
+        Err(_) => {
+            let pem = key.decode::<Binary>().map_err(|_| argument_error("the key must be a public key or a PEM"))?;
+            read_key(&pem).and_then(|key| webhooks::verify(&key, &h, body, freshness))
+        }
+    };
     if let Err(e) = checked {
-        return refuse(e.to_string());
+        return webhook_error(env, e.to_string());
     }
     let event = match webhooks::parse(&h.event_type, body) {
         Ok(event) => event,
-        Err(e) => return refuse(e.to_string()),
+        Err(e) => return result::<()>(env, Err(e)),
     };
     #[derive(Serialize)]
     struct Verified<'b> {
@@ -541,11 +605,8 @@ fn verify_webhook<'a>(env: Env<'a>, pem: &str, headers: Vec<(String, String)>, b
 /// Reads a body without checking its signature (for a receiver that already
 /// checked it, or a test).
 #[rustler::nif]
-fn parse_webhook<'a>(env: Env<'a>, event_type: &str, body: &str) -> NifResult<Term<'a>> {
-    Ok(match webhooks::parse(event_type, body) {
-        Ok(event) => (atoms::ok(), term(env, &event)?).encode(env),
-        Err(e) => (atoms::error(), error_term(env, &e)).encode(env),
-    })
+fn parse_webhook<'a>(env: Env<'a>, event_type: Binary<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    result(env, utf8(&event_type, "the event type").and_then(|t| webhooks::parse(t, body.as_slice())))
 }
 
 // ---- Any function by name ------------------------------------------------------
