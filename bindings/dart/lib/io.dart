@@ -65,8 +65,19 @@ Future<WebSocket> _openSocket(String url, HttpClient http, Duration timeout) asy
   try {
     return await pending.timeout(timeout);
   } on TimeoutException {
-    unawaited(pending.then((s) => s.close(), onError: (Object _) {}));
+    // Whatever comes of it, the handshake or the close, is of no interest.
+    pending.then((s) => s.close()).ignore();
     throw TimeoutException('WebSocket ${Uri.parse(url).replace(query: '')}: no handshake', timeout);
+  }
+}
+
+/// Closes `socket` without waiting: on a half-open socket, dart:io waits
+/// several seconds for the other side's close. Its errors are of no interest.
+void _discard(WebSocket socket) {
+  try {
+    socket.close().ignore();
+  } catch (_) {
+    // Already closing.
   }
 }
 
@@ -82,7 +93,8 @@ Future<WebSocket> _openSocket(String url, HttpClient http, Duration timeout) asy
 /// `onError` gets what the connection carried on through: an exception
 /// thrown by `onEvent`, `onState` or `onDrop` (the rest of that batch of
 /// frames is still handled), and a token refresh that failed (retried while
-/// the connection lasts). Without `onError`, these are printed to stderr.
+/// the connection lasts). Without `onError`, or after [ChatConnection.close],
+/// these are printed to stderr.
 ///
 /// `timeout` bounds each HTTP request and the WebSocket handshake. Running
 /// out is a failed attempt, retried like any other.
@@ -110,6 +122,7 @@ ChatConnection connectChat({
   final done = Completer<void>();
   var closed = false;
   WebSocket? ws;
+  StreamSubscription<dynamic>? frames;
   Timer? deadline;
   Timer? retry;
   Timer? refreshRetry;
@@ -119,9 +132,12 @@ ChatConnection connectChat({
   var dropped = false;
   var terminal = false;
 
+  // After close(), nothing is called back, onError included: what still
+  // goes wrong (a callback that closed the connection, then threw) goes to
+  // stderr.
   void report(Object error, StackTrace stack) {
     final handler = onError;
-    if (handler != null) {
+    if (!closed && handler != null) {
       try {
         handler(error, stack);
         return;
@@ -155,7 +171,9 @@ ChatConnection connectChat({
     refreshRetry?.cancel();
     final socket = ws;
     ws = null;
-    socket?.close();
+    frames?.cancel().ignore();
+    frames = null;
+    if (socket != null) _discard(socket);
     session?.dispose();
     session = null;
     http.close(force: true);
@@ -177,6 +195,7 @@ ChatConnection connectChat({
   late final void Function() again;
   late final void Function() refreshToken;
   late final void Function(List<Map<String, dynamic>>) apply;
+  late final void Function(WebSocket) lost;
 
   void schedule() {
     deadline?.cancel();
@@ -195,6 +214,7 @@ ChatConnection connectChat({
     if (closed) return;
     var changed = false;
     try {
+      batch:
       for (final a in actions) {
         if (closed) return;
         switch (a['action']) {
@@ -208,7 +228,13 @@ ChatConnection connectChat({
             terminal = a['reconnect'] == false;
             dropped = true;
             drop(a['reason'] as String);
-            ws?.close();
+            // Lost at once: dart:io would hold the socket's onDone for
+            // seconds on a half-open connection. What the batch has after
+            // it was for that connection.
+            final socket = ws;
+            if (socket != null) lost(socket);
+            changed = false;
+            break batch;
           case 'refresh_token':
             refreshToken();
           case 'subscribed':
@@ -254,9 +280,14 @@ ChatConnection connectChat({
     attempt();
   };
 
-  void lost(WebSocket socket) {
+  // Lets go of `socket` at once, whether it closed, failed or was told to
+  // close: its frames are no longer read, and its close is not waited for.
+  lost = (socket) {
     if (ws != socket) return;
     ws = null;
+    frames?.cancel().ignore();
+    frames = null;
+    _discard(socket);
     deadline?.cancel();
     refreshRetry?.cancel();
     if (!dropped) {
@@ -278,7 +309,7 @@ ChatConnection connectChat({
     } else {
       again();
     }
-  }
+  };
 
   Future<void> connect() async {
     if (closed) return;
@@ -309,13 +340,13 @@ ChatConnection connectChat({
     }
     final s = session;
     if (closed || s == null) {
-      await socket.close();
+      _discard(socket);
       return;
     }
     ws = socket;
     dropped = false;
     terminal = false;
-    socket.listen(
+    frames = socket.listen(
       (frame) {
         final s = session;
         if (ws == socket && s != null && frame is String) apply(s.receive(frame, now()));
