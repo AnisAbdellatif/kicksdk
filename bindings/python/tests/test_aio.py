@@ -117,7 +117,9 @@ class Kick:
             await ws.wait_closed()
         except ConnectionClosed:
             pass
-        self.close_codes.append(ws.close_code)
+        # The code the client sent (`close_code` is websockets 14+).
+        rcvd = ws.protocol.close_rcvd
+        self.close_codes.append(rcvd.code if rcvd is not None else None)
 
 
 async def accept(ws: ServerConnection, **reply: Any) -> dict[str, Any]:
