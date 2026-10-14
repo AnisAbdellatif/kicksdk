@@ -78,7 +78,7 @@ a gap, never a zero.
 
 ```toml
 [dependencies]
-kicksdk = "0.1"
+kicksdk = "0.2"
 ```
 
 ```rust

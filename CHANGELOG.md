@@ -1,11 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
-Fixes from a security and robustness audit of the core. **Breaking** (0.x):
-Rust signatures and some `dispatch` arguments and `Action` shapes change;
-every binding needs the updates listed under "For binding authors". The
-version stays 0.1.1 until release.
+Fixes from two security and robustness audits of the core, the bindings and
+the release. **Breaking** (0.x): Rust signatures, some `dispatch` arguments
+and `Action` shapes, and several binding APIs change; see each section, and
+"For binding authors". The chat drivers never stop on their own any more:
+after a terminal close they reconnect as a new client after a long wait.
+0.1.1's x86_64 Linux NIF and x86_64/aarch64 Linux C libraries needed glibc
+2.34; this release's need 2.17 (2.18 for the aarch64 C library).
 
 ### Webhooks
 

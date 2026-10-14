@@ -5,7 +5,7 @@ protocol and webhook verification, as a NIF over the
 [kicksdk](https://github.com/AnisAbdellatif/kicksdk) Rust core.
 
 ```elixir
-def deps, do: [{:kicksdk, "~> 0.1"}]
+def deps, do: [{:kicksdk, "~> 0.2"}]
 ```
 
 Kicksdk never sends a request or opens a socket: it builds requests for your
@@ -29,7 +29,7 @@ optional: true}` to your deps. rustler_precompiled's own switch works too:
 `config :rustler_precompiled, :force_build, kicksdk: true`.
 `KICKSDK_BASE_URL` points the download at a mirror of the release assets
 (a directory URL, such as `http://localhost:8080` or
-`https://mirror.example/kicksdk/v0.1.1/`; the checksums still apply).
+`https://mirror.example/kicksdk/v0.2.0/`; the checksums still apply).
 Nerves' `TARGET_ARCH`, `TARGET_VENDOR`, `TARGET_OS` and `TARGET_ABI` choose
 the target.
 

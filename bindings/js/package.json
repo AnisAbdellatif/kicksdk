@@ -1,6 +1,6 @@
 {
   "name": "kicksdk-js",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Kick (kick.com) without the I/O: requests, parsers, the realtime chat protocol and webhook verification, from one Rust core",
   "license": "MIT OR Apache-2.0",
   "repository": { "type": "git", "url": "git+https://github.com/AnisAbdellatif/kicksdk.git", "directory": "bindings/js" },

@@ -94,7 +94,7 @@ LANGS = [
     },
     {
         "name": "Elixir",
-        "install": '{:kicksdk, "~> 0.1"}',
+        "install": '{:kicksdk, "~> 0.2"}',
         "how": "A precompiled NIF. Values come back as string-keyed maps.",
         "ref": "elixir/index.html",
         "registry": ("hex", "https://hex.pm/packages/kicksdk"),

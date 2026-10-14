@@ -4,7 +4,7 @@ members = ["crates/kicksdk", "crates/kicksdk-wasm", "crates/kicksdk-nif", "crate
 default-members = ["crates/kicksdk", "crates/kicksdk-ffi", "crates/kicksdk-nif"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -12,7 +12,7 @@ repository = "https://github.com/AnisAbdellatif/kicksdk"
 authors = ["Anis Abdellatif"]
 
 [workspace.dependencies]
-kicksdk = { path = "crates/kicksdk", version = "0.1.1" }
+kicksdk = { path = "crates/kicksdk", version = "0.2.0" }
 serde = { version = "1", features = ["derive"] }
 # No preserve_order here: it would be forced on every user of the core.
 # kicksdk's `dispatch` feature and the WebAssembly crate turn it on.
