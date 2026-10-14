@@ -1,8 +1,9 @@
 // Prints a Kick channel's chat:  node chat.mjs <channel>
 // Build the package first: scripts/build-js.sh
 //
-// Runs until Ctrl-C, or until Kick ends the connection for good (a ban, a
-// refused token): then it says why and exits with status 1.
+// Runs until Ctrl-C. A dropped connection comes back by itself; when Kick
+// refuses this client (a ban, a refused token), it says so and tries again
+// as a new client after a long wait (5 minutes, growing to 30).
 
 import { readFileSync } from 'node:fs';
 import * as kick from '../../bindings/js/index.js';
@@ -31,11 +32,10 @@ const chat = kick.connectChat({
   onEvent: ({ event }) => {
     if (event.type === 'chat_message') console.log(`${event.sender.username}: ${event.content}`);
   },
-  onDrop: (reason, { reconnect }) => {
-    // A dropped connection comes back by itself; a terminal one does not,
-    // and once connectChat has stopped, nothing keeps the process alive.
-    console.error(reconnect ? `(reconnecting: ${reason})` : `Kick ended the connection: ${reason}`);
-    if (!reconnect) process.exitCode = 1;
+  onDrop: (reason, { terminal, waitMs }) => {
+    const wait = waitMs >= 60_000 ? `${Math.round(waitMs / 60_000)} min` : `${(waitMs / 1000).toFixed(1)} s`;
+    if (terminal) console.error(`Kick refused this client (${reason}): trying again in ${wait}`);
+    else console.error(`(reconnecting in ${wait}: ${reason})`);
   }
 });
 

@@ -6,10 +6,11 @@
 //! `fetch`; parsers take `(status, bodyText)` and throw an `Error` with a
 //! `status` property when Kick answered with an error status.
 //!
-//! Numbers are checked, never cast: an id, a time or a count must be a whole
-//! number in its range (ids at most `Number.MAX_SAFE_INTEGER`, the largest a
-//! JS number holds exactly), or the call throws a `RangeError`. An id must be
-//! a number, not a numeric string (`TypeError`).
+//! Numbers are checked, never cast: every numeric argument must be a JS
+//! number (a numeric string, a boolean or a BigInt is a `TypeError`), and an
+//! id, a time, a status or a count must be a whole number in its range (ids at
+//! most `Number.MAX_SAFE_INTEGER`, the largest a JS number holds exactly), or
+//! the call throws a `RangeError`.
 //!
 //! The hand-written driver in `bindings/js` puts these together with `fetch`,
 //! `WebSocket` and timers; most callers want that rather than these.
@@ -88,6 +89,11 @@ extern "C" {
     /// An id: a JS number, checked by [`id`].
     #[wasm_bindgen(typescript_type = "number")]
     pub type Id;
+    /// Any other number (a time, a count, a status): a JS number, checked
+    /// by [`number`] and [`uint`]. Taken as a `JsValue` rather than an `f64`,
+    /// which wasm-bindgen would get from `'10'` or `true` by coercion.
+    #[wasm_bindgen(typescript_type = "number")]
+    pub type Num;
     /// Ids: an array of JS numbers, checked by [`id_list`].
     #[wasm_bindgen(typescript_type = "readonly number[]")]
     pub type IdList;
@@ -157,12 +163,26 @@ fn whole(what: &str, n: f64, max: u64) -> Result<u64, JsValue> {
     }
 }
 
+/// A JS number, any (NaN included); anything else is a `TypeError`.
+fn number(what: &str, value: &JsValue) -> Result<f64, JsValue> {
+    value.as_f64().ok_or_else(|| type_error(&format!("{what} must be a number")))
+}
+
 /// [`whole`], for a value that must be a JS number.
 fn uint(what: &str, value: &JsValue, max: u64) -> Result<u64, JsValue> {
-    match value.as_f64() {
-        Some(n) => whole(what, n, max),
-        None => Err(type_error(&format!("{what} must be a number"))),
-    }
+    whole(what, number(what, value)?, max)
+}
+
+/// [`uint`], or `None` for undefined or null.
+fn opt_uint(what: &str, value: Option<Num>, max: u64) -> Result<Option<u64>, JsValue> {
+    let value = or_undefined(value);
+    if nothing(&value) { Ok(None) } else { uint(what, &value, max).map(Some) }
+}
+
+/// An HTTP status, 0 to 65535 (a parser's first argument).
+fn http_status(value: &Num) -> Result<u16, JsValue> {
+    // In range: `uint` checked it.
+    Ok(uint("status", value, u16::MAX.into())? as u16)
 }
 
 fn id(what: &str, value: &JsValue) -> Result<u64, JsValue> {
@@ -177,9 +197,9 @@ fn opt_id(what: &str, value: &JsValue) -> Result<Option<u64>, JsValue> {
     if nothing(value) { Ok(None) } else { id(what, value).map(Some) }
 }
 
-fn u32_arg(what: &str, n: f64) -> Result<u32, JsValue> {
-    // In range: `whole` checked it.
-    Ok(whole(what, n, u32::MAX.into())? as u32)
+fn u32_arg(what: &str, value: &JsValue) -> Result<u32, JsValue> {
+    // In range: `uint` checked it.
+    Ok(uint(what, value, u32::MAX.into())? as u32)
 }
 
 /// A list of ids: an array of numbers.
@@ -277,8 +297,8 @@ pub fn connection_request(client_id: &str, endpoints: Option<EndpointsArg>) -> R
 
 /// Reads either connection answer: `[{provider, url}…]`.
 #[wasm_bindgen(js_name = parseConnection)]
-pub fn parse_connection(status: u16, body: &str) -> Result<JsValue, JsValue> {
-    result(realtime::parse_connection(status, body))
+pub fn parse_connection(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(realtime::parse_connection(http_status(&status)?, body))
 }
 
 /// A guest token request for `clientId`.
@@ -289,8 +309,8 @@ pub fn token_request(client_id: &str, endpoints: Option<EndpointsArg>) -> Result
 
 /// The token from a token answer.
 #[wasm_bindgen(js_name = parseToken)]
-pub fn parse_token(status: u16, body: &str) -> Result<String, JsValue> {
-    realtime::parse_token(status, body).map_err(fail)
+pub fn parse_token(status: Num, body: &str) -> Result<String, JsValue> {
+    realtime::parse_token(http_status(&status)?, body).map_err(fail)
 }
 
 /// The least to wait, ms, before reconnecting after the socket closed with
@@ -299,15 +319,15 @@ pub fn parse_token(status: u16, body: &str) -> Result<String, JsValue> {
 /// new client id; 0, the ordinary backoff, for the rest (1006, a network
 /// drop, among them).
 #[wasm_bindgen(js_name = retryAfterMs)]
-pub fn retry_after_ms(code: f64) -> Result<f64, JsValue> {
-    // In range: `whole` checked it.
-    let code = whole("code", code, u16::MAX.into())? as u16;
+pub fn retry_after_ms(code: Num) -> Result<f64, JsValue> {
+    // In range: `uint` checked it.
+    let code = uint("code", &code, u16::MAX.into())? as u16;
     // At most 300000: exact as a JS number.
     Ok(realtime::retry_after_ms(code) as f64)
 }
 
-fn now_ms(now: f64) -> Result<u64, JsValue> {
-    whole("now (ms)", now, MAX_SAFE)
+fn now_ms(now: &Num) -> Result<u64, JsValue> {
+    uint("now (ms)", now, MAX_SAFE)
 }
 
 /// One connection's protocol. Each method returns the actions to carry out.
@@ -325,26 +345,26 @@ impl Session {
     }
 
     /// The socket opened.
-    pub fn open(&mut self, token: &str, now: f64) -> Result<JsValue, JsValue> {
-        let now = now_ms(now)?;
+    pub fn open(&mut self, token: &str, now: Num) -> Result<JsValue, JsValue> {
+        let now = now_ms(&now)?;
         out(&self.0.open(token, now))
     }
 
     /// A text frame arrived.
-    pub fn receive(&mut self, text: &str, now: f64) -> Result<JsValue, JsValue> {
-        let now = now_ms(now)?;
+    pub fn receive(&mut self, text: &str, now: Num) -> Result<JsValue, JsValue> {
+        let now = now_ms(&now)?;
         out(&self.0.receive(text, now))
     }
 
     /// A new token, after a `refresh_token` action.
-    pub fn refresh(&mut self, token: &str, now: f64) -> Result<JsValue, JsValue> {
-        let now = now_ms(now)?;
+    pub fn refresh(&mut self, token: &str, now: Num) -> Result<JsValue, JsValue> {
+        let now = now_ms(&now)?;
         out(&self.0.refresh(token, now))
     }
 
     /// The clock reached `deadline()`.
-    pub fn tick(&mut self, now: f64) -> Result<JsValue, JsValue> {
-        let now = now_ms(now)?;
+    pub fn tick(&mut self, now: Num) -> Result<JsValue, JsValue> {
+        let now = now_ms(&now)?;
         out(&self.0.tick(now))
     }
 
@@ -373,7 +393,12 @@ impl Session {
     }
 }
 
-/// Reconnect delays: 1 s doubling to 30 s.
+/// The largest `retryAfterMs` `nextDelayFor` takes: its wait, at most 7.5
+/// times this, stays within what a JS number holds exactly.
+const MAX_RETRY_AFTER_MS: u64 = MAX_SAFE / 8;
+
+/// Reconnect delays: 1 s doubling to 30 s, and a slower stage for terminal
+/// closes (`nextDelayFor`).
 #[wasm_bindgen]
 pub struct Backoff(realtime::Backoff);
 
@@ -381,9 +406,9 @@ pub struct Backoff(realtime::Backoff);
 impl Backoff {
     /// From `initialMs`, doubling to `maxMs` (whole milliseconds).
     #[wasm_bindgen(constructor)]
-    pub fn new(initial_ms: Option<f64>, max_ms: Option<f64>) -> Result<Backoff, JsValue> {
-        let initial = initial_ms.map(|n| whole("initialMs", n, MAX_SAFE)).transpose()?.unwrap_or(1_000);
-        let max = max_ms.map(|n| whole("maxMs", n, MAX_SAFE)).transpose()?.unwrap_or(30_000);
+    pub fn new(initial_ms: Option<Num>, max_ms: Option<Num>) -> Result<Backoff, JsValue> {
+        let initial = opt_uint("initialMs", initial_ms, MAX_SAFE)?.unwrap_or(1_000);
+        let max = opt_uint("maxMs", max_ms, MAX_SAFE)?.unwrap_or(30_000);
         Ok(Backoff(realtime::Backoff::new(initial, max)))
     }
 
@@ -396,14 +421,34 @@ impl Backoff {
 
     /// The next wait, ms, spread over [half of it, all of it] by `random`,
     /// drawn uniformly from [0, 1) (`Math.random()`), so that clients dropped
-    /// together do not all come back together. Out of range is clamped.
+    /// together do not all come back together. Out of range is clamped, NaN
+    /// taken as 0.
     #[wasm_bindgen(js_name = nextDelayJittered)]
-    pub fn next_delay_jittered(&mut self, random: f64) -> f64 {
+    pub fn next_delay_jittered(&mut self, random: Num) -> Result<f64, JsValue> {
+        let random = number("random", &random)?;
         // At most `nextDelay()`'s, which a JS number holds exactly.
-        self.0.next_delay_jittered(random) as f64
+        Ok(self.0.next_delay_jittered(random) as f64)
     }
 
-    /// A connection worked.
+    /// The wait before reconnecting after a connection ended, ms.
+    /// `retryAfterMs` is what the end asked for: a `close` action's
+    /// `retry_after_ms`, `retryAfterMs(code)` for a socket's close code, or 0
+    /// for a failure without a code. With 0, exactly `nextDelayJittered`.
+    /// With more (a terminal close), at least that, doubling with each
+    /// terminal close since `reset()` up to six times it (300000: 5, 10, 20,
+    /// then 30 minutes), plus up to a quarter more by `random`. Reconnect
+    /// with a new client id after a terminal close.
+    #[wasm_bindgen(js_name = nextDelayFor)]
+    pub fn next_delay_for(&mut self, retry_after_ms: Num, random: Num) -> Result<f64, JsValue> {
+        let retry_after_ms = uint("retryAfterMs", &retry_after_ms, MAX_RETRY_AFTER_MS)?;
+        let random = number("random", &random)?;
+        // At most 7.5 times `retryAfterMs`, or `nextDelay()`'s: exact as a JS
+        // number.
+        Ok(self.0.next_delay_for(retry_after_ms, random) as f64)
+    }
+
+    /// The chat feed subscribed: back to the first wait, and the terminal
+    /// streak ends.
     pub fn reset(&mut self) {
         self.0.reset()
     }
@@ -423,8 +468,8 @@ pub fn app_token_request(
 
 /// Reads an app token answer.
 #[wasm_bindgen(js_name = parseAppToken)]
-pub fn parse_app_token(status: u16, body: &str) -> Result<JsValue, JsValue> {
-    result(public_api::parse_token(status, body))
+pub fn parse_app_token(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(public_api::parse_token(http_status(&status)?, body))
 }
 
 /// `/livestreams` for any number of user ids: one request per 50.
@@ -440,8 +485,8 @@ pub fn livestreams_requests(
 
 /// Reads a `/livestreams` answer.
 #[wasm_bindgen(js_name = parseLivestreams)]
-pub fn parse_livestreams(status: u16, body: &str) -> Result<JsValue, JsValue> {
-    result(public_api::parse_livestreams(status, body))
+pub fn parse_livestreams(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(public_api::parse_livestreams(http_status(&status)?, body))
 }
 
 /// `/channels` for up to 50 user ids.
@@ -468,8 +513,8 @@ pub fn channels_by_slugs_request(
 
 /// Reads a `/channels` answer.
 #[wasm_bindgen(js_name = parseChannels)]
-pub fn parse_channels(status: u16, body: &str) -> Result<JsValue, JsValue> {
-    result(public_api::parse_channels(status, body))
+pub fn parse_channels(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(public_api::parse_channels(http_status(&status)?, body))
 }
 
 /// The webhook signing key request.
@@ -480,8 +525,8 @@ pub fn public_key_request(endpoints: Option<EndpointsArg>) -> Result<JsValue, Js
 
 /// The PEM from a public key answer.
 #[wasm_bindgen(js_name = parsePublicKey)]
-pub fn parse_public_key(status: u16, body: &str) -> Result<String, JsValue> {
-    public_api::parse_public_key(status, body).map_err(fail)
+pub fn parse_public_key(status: Num, body: &str) -> Result<String, JsValue> {
+    public_api::parse_public_key(http_status(&status)?, body).map_err(fail)
 }
 
 // ---- Website API -------------------------------------------------------------
@@ -494,8 +539,8 @@ pub fn channel_request(slug: &str, endpoints: Option<EndpointsArg>) -> Result<Js
 
 /// Reads a website channel answer.
 #[wasm_bindgen(js_name = parseChannel)]
-pub fn parse_channel(status: u16, body: &str) -> Result<JsValue, JsValue> {
-    result(website::parse_channel(status, body))
+pub fn parse_channel(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(website::parse_channel(http_status(&status)?, body))
 }
 
 /// Recent chat and the pin, by channel id.
@@ -507,8 +552,8 @@ pub fn history_request(channel_id: Id, endpoints: Option<EndpointsArg>) -> Resul
 
 /// Reads a history answer: `{messages, pinned}`.
 #[wasm_bindgen(js_name = parseHistory)]
-pub fn parse_history(status: u16, body: &str) -> Result<JsValue, JsValue> {
-    result(website::parse_history(status, body))
+pub fn parse_history(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(website::parse_history(http_status(&status)?, body))
 }
 
 /// A user as a channel sees them.
@@ -523,8 +568,8 @@ pub fn channel_user_request(
 
 /// Reads a channel user answer.
 #[wasm_bindgen(js_name = parseChannelUser)]
-pub fn parse_channel_user(status: u16, body: &str) -> Result<JsValue, JsValue> {
-    result(website::parse_channel_user(status, body))
+pub fn parse_channel_user(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(website::parse_channel_user(http_status(&status)?, body))
 }
 
 /// The signed-in viewer's standing on a channel.
@@ -535,8 +580,8 @@ pub fn me_request(session: &str, channel_slug: &str, endpoints: Option<Endpoints
 
 /// Reads a `me` answer.
 #[wasm_bindgen(js_name = parseMe)]
-pub fn parse_me(status: u16, body: &str) -> Result<JsValue, JsValue> {
-    result(website::parse_me(status, body))
+pub fn parse_me(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(website::parse_me(http_status(&status)?, body))
 }
 
 /// Bans a user for good.
@@ -556,10 +601,10 @@ pub fn timeout_request(
     session: &str,
     channel_slug: &str,
     username: &str,
-    minutes: f64,
+    minutes: Num,
     endpoints: Option<EndpointsArg>,
 ) -> Result<JsValue, JsValue> {
-    let minutes = u32_arg("minutes", minutes)?;
+    let minutes = u32_arg("minutes", &minutes)?;
     result(website::timeout_request(&to_endpoints(endpoints)?, session, channel_slug, username, minutes))
 }
 
@@ -592,10 +637,10 @@ pub fn pin_request(
     session: &str,
     channel_slug: &str,
     message: JsValue,
-    minutes: f64,
+    minutes: Num,
     endpoints: Option<EndpointsArg>,
 ) -> Result<JsValue, JsValue> {
-    let minutes = u32_arg("minutes", minutes)?;
+    let minutes = u32_arg("minutes", &minutes)?;
     result(website::pin_request(&to_endpoints(endpoints)?, session, channel_slug, &json_arg(message)?, minutes))
 }
 
@@ -648,8 +693,8 @@ pub fn send_request(
 
 /// Whether an acting call worked; throws with `status` if not.
 #[wasm_bindgen(js_name = parseAction)]
-pub fn parse_action(status: u16, body: &str) -> Result<(), JsValue> {
-    website::parse_action(status, body).map_err(fail)
+pub fn parse_action(status: Num, body: &str) -> Result<(), JsValue> {
+    website::parse_action(http_status(&status)?, body).map_err(fail)
 }
 
 /// The top live streams, overall or in a category or language: 1 to 100
@@ -661,7 +706,7 @@ pub fn top_livestreams_request(
     category_id: Option<Id>,
     language: Option<String>,
     sort: Option<SortArg>,
-    limit: Option<f64>,
+    limit: Option<Num>,
     endpoints: Option<EndpointsArg>,
 ) -> Result<JsValue, JsValue> {
     let category = opt_id("categoryId", &or_undefined(category_id))?;
@@ -673,7 +718,8 @@ pub fn top_livestreams_request(
             return Err(range_error(&format!("sort must be \"viewer_count\" or \"started_at\", not {other:?}")));
         }
     };
-    let limit = limit.map(|n| u32_arg("limit", n)).transpose()?.unwrap_or(100);
+    // In range: `opt_uint` checked it.
+    let limit = opt_uint("limit", limit, u32::MAX.into())?.map_or(100, |n| n as u32);
     result(public_api::top_livestreams_request(
         &to_endpoints(endpoints)?,
         token,
@@ -727,8 +773,8 @@ pub fn subscriptions_request(token: &str, endpoints: Option<EndpointsArg>) -> Re
 
 /// Reads a subscriptions answer.
 #[wasm_bindgen(js_name = parseSubscriptions)]
-pub fn parse_subscriptions(status: u16, body: &str) -> Result<JsValue, JsValue> {
-    result(public_api::parse_subscriptions(status, body))
+pub fn parse_subscriptions(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(public_api::parse_subscriptions(http_status(&status)?, body))
 }
 
 /// Removes subscriptions, 50 per request.
@@ -822,7 +868,9 @@ fn freshness(options: Option<VerifyOptionsArg>) -> Result<webhooks::Freshness, J
     }
     let now = if nothing(&now) { machine_now() } else { uint("options.now (Unix seconds)", &now, MAX_SAFE)? };
     if now >= NOW_SECS_LIMIT {
-        return Err(range_error("options.now is Unix seconds; this looks like milliseconds (Date.now() / 1000)"));
+        return Err(range_error(
+            "options.now is Unix seconds; this looks like milliseconds (Math.floor(Date.now() / 1000))",
+        ));
     }
     let tolerance_secs = if nothing(&tolerance) {
         webhooks::DEFAULT_TOLERANCE_SECS

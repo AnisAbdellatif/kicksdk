@@ -30,11 +30,9 @@ export interface ChatState {
   connected: boolean;
   /** The feeds subscribed now. */
   subscribed: string[];
-  /** connectChat gave up for good (a terminal close, or no WebSocket): nothing follows. */
-  stopped: boolean;
 }
 
-/** Why a connection, or an attempt at one, ended. */
+/** Why a connection, or an attempt at one, ended, and when the next one starts. */
 export interface ChatDrop {
   /**
    * Kick's disconnect or error code, the socket's close code (1006 for a
@@ -42,8 +40,19 @@ export interface ChatDrop {
    * silence).
    */
   code: number;
-  /** Whether connectChat tries again (after a backoff). False: it has stopped. */
-  reconnect: boolean;
+  /**
+   * Kick will not take this client back as it is (a refused token, a ban, a
+   * connection limit: codes 3500-3999 and 4500-4999, among others). Not the
+   * end: connectChat waits longer (`waitMs`, 5 minutes or more) and comes
+   * back as a new guest client. Worth a warning.
+   */
+  terminal: boolean;
+  /**
+   * How long connectChat waits before connecting again, ms: the ordinary
+   * backoff (0.5 s growing to 30 s, jittered), or after a terminal close 5,
+   * 10, 20, then 30 minutes in a row, plus up to a quarter.
+   */
+  waitMs: number;
 }
 
 /**
@@ -66,41 +75,67 @@ export interface ChatSocket {
  */
 export type ChatSocketConstructor = new (url: string, options?: any) => ChatSocket;
 
+/**
+ * connectChat's options. Every optional one may be left out or given as
+ * undefined (as a `Partial<>` or optional config carries it), with the same
+ * meaning.
+ */
 export interface ChatOptions {
   /** The chatroom (website API `chatroom.id`). */
   chatroomId: number;
   /** The channel; also locates the chat's region. */
   channelId?: number | undefined;
-  /** The feeds to subscribe to; `chatChannels(chatroomId, channelId)` by default. */
+  /**
+   * The feeds to subscribe to; `chatChannels(chatroomId, channelId)` by
+   * default. The first is taken for the chat feed: its subscribe resets the
+   * reconnect backoff (with none listed, Kick accepting the connection does).
+   * A feed listed twice is subscribed and reported once.
+   */
   channels?: readonly string[] | undefined;
   /** An event on a feed. */
   onEvent(e: ChatEvent): void;
   /** The connection or its subscriptions changed. */
-  onState?(s: ChatState): void;
-  /** A connection, or an attempt at one, ended. */
-  onDrop?(reason: string, drop: ChatDrop): void;
-  /** A callback above threw. Default: console.error. The connection carries on either way. */
-  onError?(error: unknown): void;
-  fetch?: typeof fetch;
+  onState?: ((s: ChatState) => void) | undefined;
+  /** A connection, or an attempt at one, ended; another follows after `drop.waitMs`. */
+  onDrop?: ((reason: string, drop: ChatDrop) => void) | undefined;
+  /**
+   * A callback above threw, or `now` gave a reading it cannot use. Default:
+   * console.error. The connection carries on either way.
+   */
+  onError?: ((error: unknown) => void) | undefined;
+  /** The fetch to make Kick's requests with. Default: the global fetch. */
+  fetch?: typeof fetch | undefined;
   /**
    * The WebSocket class, where the runtime has none (Node before 22: pass the
    * `ws` package's). Default: the global WebSocket.
    */
   WebSocket?: ChatSocketConstructor | undefined;
   /** Opens the socket yourself, instead of `WebSocket`. */
-  createSocket?(url: string): ChatSocket;
+  createSocket?: ((url: string) => ChatSocket) | undefined;
   /** Kick's URLs to use instead; a key left out or undefined stays Kick's. */
   endpoints?: Endpoints | undefined;
-  /** The session's clock, ms, only ever going forward. Default: `performance.now()`. */
-  now?(): number;
-  /** How long a request, or the WebSocket handshake, may take, ms. Default 10000. */
+  /**
+   * The session's clock, ms, only ever going forward. Default:
+   * `performance.now()`. A reading that is not a number from 0 to
+   * `Number.MAX_SAFE_INTEGER` (or a throw) is reported to `onError` once,
+   * and connectChat carries on with `performance.now()`.
+   */
+  now?: (() => number) | undefined;
+  /**
+   * How long a request, or the WebSocket handshake, may take, ms: above 0
+   * and at most 2147483647 (setTimeout's limit; there is no "no timeout").
+   * Default 10000. Out of range, or not a number: connectChat throws a
+   * RangeError.
+   */
   timeoutMs?: number | undefined;
 }
 
 /**
- * Connects to one channel's chat and keeps it up until `close()`, or until
- * Kick ends it for good (`onDrop` with `reconnect: false`, then `onState`
- * with `stopped: true`). No callback fires after `close()`, which may be
- * called more than once, and from inside a callback.
+ * Connects to one channel's chat and keeps it up until `close()`: whatever
+ * ends a connection, `onDrop` says why and how long connectChat waits before
+ * the next (long after a `terminal` one). No callback fires after `close()`,
+ * which may be called more than once, and from inside a callback. Throws at
+ * once on a mistake in the options, or when the runtime has no WebSocket and
+ * none is given.
  */
 export function connectChat(options: ChatOptions): { close(): void };
