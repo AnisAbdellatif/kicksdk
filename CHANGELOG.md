@@ -54,8 +54,9 @@ version stays 0.1.1 until release.
   url)` is now public), `Method`, `public_api::Sort`, `content::Part`,
   `realtime::SessionOptions` (use `SessionOptions::new`, then set fields).
 - `Request`'s `Debug` hides the `authorization` header and a form's
-  `client_secret`; `WebsiteChannel`'s `Debug` hides `playback_url`.
-  `Serialize` output is unchanged.
+  `client_secret`; `WebsiteChannel`'s `Debug` hides `playback_url`;
+  `public_api::AppToken`'s `Debug` hides `access_token`. `Serialize`
+  output is unchanged.
 - **Breaking** (Rust only; JSON unchanged, the ids are transparent): typed
   ids where outputs had a bare `u64`: `ChatMessage::chatroom_id`
   (`ChatroomId`), `Sender::id`, `ReplyTo::sender_id`, `UserRef::id`,
