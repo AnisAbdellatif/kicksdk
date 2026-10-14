@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -11,30 +12,30 @@ from kicksdk import KickError, content, events, public_api, realtime, webhooks, 
 FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
 
 
-def files(d, part=""):
+def files(d: str, part: str = "") -> list[Path]:
     return sorted(p for p in (FIXTURES / d).iterdir() if part in p.name)
 
 
-def response(p):
+def response(p: Path) -> tuple[int, str]:
     r = json.loads(p.read_text())["response"]
     return r["status"], r["body"]
 
 
-def test_events_are_typed_and_unknown_ones_kept():
+def test_events_are_typed_and_unknown_ones_kept() -> None:
     host = events.parse("App\\Events\\StreamHostEvent", '{"host_username":"A","number_viewers":3}')
     assert host["type"] == "host" and host["viewers"] == 3
     assert events.parse("New", "{}") == {"type": "unknown", "name": "New"}
     assert content.parse("[emote:1:X] [emote:1:X]", combine=True)[0]["count"] == 2
 
 
-def test_requests_and_endpoints():
+def test_requests_and_endpoints() -> None:
     r = realtime.chat_connection_request(668, "c1", {"realtime": "http://x/rt"})
     assert (r.method, r.url) == ("POST", "http://x/rt/channels/668/chat/connection")
     assert ("origin", "https://kick.com") in r.headers
     assert len(public_api.livestreams_requests("t", list(range(1, 121)))) == 3
 
 
-def test_errors_carry_kicks_status():
+def test_errors_carry_kicks_status() -> None:
     with pytest.raises(KickError) as e:
         website.parse_channel(404, "{}")
     assert (e.value.kind, e.value.status) == ("status", 404)
@@ -43,7 +44,7 @@ def test_errors_carry_kicks_status():
     assert e.value.kind == "invalid"
 
 
-def test_parsers_read_the_recordings():
+def test_parsers_read_the_recordings() -> None:
     for p in files("v2"):
         assert website.parse_channel(*response(p))["chatroom_id"] > 0
     for p in files("public_api", "livestreams-poll"):
@@ -51,7 +52,7 @@ def test_parsers_read_the_recordings():
             assert s["started_at"].endswith("Z")
 
 
-def test_webhook_signatures():
+def test_webhook_signatures() -> None:
     d = FIXTURES / "signing"
     pem, body = (d / "test-public-key.pem").read_text(), (d / "body.json").read_text()
     headers = {
@@ -69,7 +70,7 @@ def test_webhook_signatures():
     assert webhooks.verify(pem, list(headers.items()), body.encode(), now=sent + 0.9)["event"]["type"] == "followed"
     assert webhooks.verify(pem, headers, bytearray(body.encode()), skip_freshness=True)["event"]["type"] == "followed"
 
-    def refused(**kw):
+    def refused(**kw: Any) -> str:
         with pytest.raises(KickError) as e:
             webhooks.verify(pem, headers, kw.pop("body", body), **kw)
         return e.value.kind
@@ -100,7 +101,7 @@ def test_webhook_signatures():
     assert e.value.kind == "shape"
 
 
-def test_a_recorded_session_replays():
+def test_a_recorded_session_replays() -> None:
     for p in files("realtime", ".jsonl"):
         records = [json.loads(line) for line in p.read_text().splitlines()]
         sent = [r["frame"] for r in records if r["direction"] == "out"]
@@ -125,7 +126,7 @@ def test_a_recorded_session_replays():
         assert s.is_subscribed(channels[0])
 
 
-def test_reconnect_codes_and_backoff():
+def test_reconnect_codes_and_backoff() -> None:
     assert realtime.retry_after_ms(3501) == realtime.retry_after_ms(4500) == realtime.TERMINAL_RETRY_MS == 300_000
     assert realtime.retry_after_ms(1006) == realtime.retry_after_ms(3000) == realtime.retry_after_ms(4499) == 0
     with pytest.raises(KickError) as e:
@@ -140,7 +141,7 @@ def test_reconnect_codes_and_backoff():
     assert realtime.Backoff(0, 0).next_delay() == 1, "never a busy loop"
 
 
-def test_backoff_has_a_slower_stage_for_terminal_closes():
+def test_backoff_has_a_slower_stage_for_terminal_closes() -> None:
     b = realtime.Backoff()
     assert [b.next_delay_for(300_000, 0.0) for _ in range(5)] == [300_000, 600_000, 1_200_000, 1_800_000, 1_800_000]
     assert b.next_delay_for(0, 0.0) == 500, "the ordinary stage is left as it was"
@@ -149,7 +150,7 @@ def test_backoff_has_a_slower_stage_for_terminal_closes():
     assert b.next_delay_for(300_000, float("nan")) == 600_000
 
 
-def test_backoff_bounds_can_be_set():
+def test_backoff_bounds_can_be_set() -> None:
     b = realtime.Backoff()
     b.maximum = 4
     assert [b.next() for _ in range(4)] == [1.0, 2.0, 4.0, 4.0]
@@ -161,12 +162,12 @@ def test_backoff_bounds_can_be_set():
     assert b.initial == 0.0 and b.next() == 0.001, "never a busy loop"
 
 
-def test_every_core_function_is_reachable():
+def test_every_core_function_is_reachable() -> None:
     assert "website.channel_request" in kicksdk._native.FUNCTIONS
     assert kicksdk._native.NativeError.__module__ == "kicksdk._native"
 
 
-def test_packaged_licenses_are_the_repositorys():
+def test_packaged_licenses_are_the_repositorys() -> None:
     # pyproject's license-files cannot reach above the package directory,
     # so the package keeps copies; they must not drift.
     here, root = Path(__file__).resolve().parents[1], Path(__file__).resolve().parents[3]
