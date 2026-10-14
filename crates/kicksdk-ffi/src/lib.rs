@@ -226,6 +226,41 @@ mod tests {
         assert!(unsafe { kicksdk_session_new(std::ptr::null()) }.is_null());
     }
 
+    fn session_call(s: *mut SessionHandle, method: &str, args: &str) -> Value {
+        let method = CString::new(method).unwrap();
+        let args = CString::new(args).unwrap();
+        let out = unsafe { kicksdk_session_call(s, method.as_ptr(), args.as_ptr()) };
+        let text = unsafe { CStr::from_ptr(out) }.to_str().unwrap().to_owned();
+        unsafe { kicksdk_free_string(out) };
+        serde_json::from_str(&text).unwrap()
+    }
+
+    #[test]
+    fn a_terminal_close_says_how_long_to_wait() {
+        // What the Dart binding reads: the close action's keys, in order, and
+        // the wait for a socket's own close code.
+        let channels = CString::new(r#"["a"]"#).unwrap();
+        let s = unsafe { kicksdk_session_new(channels.as_ptr()) };
+        session_call(s, "open", r#"{"token":"t","now":0}"#);
+        session_call(s, "receive", r#"{"text":"{\"id\":1,\"connect\":{\"client\":\"c\",\"ping\":25}}","now":1}"#);
+        let v = session_call(
+            s,
+            "receive",
+            r#"{"text":"{\"push\":{\"disconnect\":{\"code\":3501,\"reason\":\"banned\"}}}","now":2}"#,
+        );
+        let close = v["ok"].as_array().unwrap().iter().find(|a| a["action"] == "close").unwrap().clone();
+        let keys: Vec<&str> = close.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(keys, ["action", "code", "reason", "terminal", "retry_after_ms"]);
+        assert_eq!((close["code"].as_i64(), close["terminal"].as_bool()), (Some(3501), Some(true)));
+        assert_eq!(close["retry_after_ms"], 300_000);
+        unsafe { kicksdk_session_free(s) };
+
+        assert_eq!(call("realtime.retry_after_ms", r#"{"code":4500}"#)["ok"], 300_000);
+        assert_eq!(call("realtime.retry_after_ms", r#"{"code":1006}"#)["ok"], 0);
+        assert_eq!(call("realtime.retry_after_ms", r#"{"code":70000}"#)["error"]["kind"], "call");
+        assert_eq!(call("realtime.should_reconnect", r#"{"code":3501}"#)["error"]["kind"], "call");
+    }
+
     #[test]
     fn the_header_has_the_abi_version() {
         let header = include_str!("../include/kicksdk.h");
