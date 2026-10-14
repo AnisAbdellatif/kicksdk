@@ -12,11 +12,14 @@
     ".": { "types": "./index.d.ts", "default": "./index.js" },
     "./kicksdk_bg.wasm": "./pkg/kicksdk_bg.wasm"
   },
-  "files": ["index.js", "index.d.ts", "pkg/", "README.md"],
+  "files": ["index.js", "index.d.ts", "pkg/", "README.md", "LICENSE-MIT", "LICENSE-APACHE"],
   "engines": { "node": ">=22" },
   "sideEffects": false,
   "scripts": {
     "build": "../../scripts/build-js.sh",
-    "test": "node --test test/*.test.js"
+    "prepack": "node -e \"for (const f of ['LICENSE-MIT', 'LICENSE-APACHE']) require('fs').copyFileSync('../../' + f, f)\"",
+    "postpack": "node -e \"for (const f of ['LICENSE-MIT', 'LICENSE-APACHE']) require('fs').rmSync(f, { force: true })\"",
+    "test": "node --test test/*.test.js",
+    "typecheck": "tsc -p test/types/tsconfig.json"
   }
 }
