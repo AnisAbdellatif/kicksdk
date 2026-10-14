@@ -136,3 +136,13 @@ def test_reconnect_codes_and_backoff():
 
 def test_every_core_function_is_reachable():
     assert "website.channel_request" in kicksdk._native.FUNCTIONS
+
+
+def test_packaged_licenses_are_the_repositorys():
+    # pyproject's license-files cannot reach above the package directory,
+    # so the package keeps copies; they must not drift.
+    here, root = Path(__file__).resolve().parents[1], Path(__file__).resolve().parents[3]
+    for name in ("LICENSE-MIT", "LICENSE-APACHE"):
+        if not (root / name).exists():
+            pytest.skip("not in the repository (an sdist)")
+        assert (here / name).read_bytes() == (root / name).read_bytes(), name
