@@ -89,9 +89,7 @@ mod tests {
         let mut b = Backoff::new(u64::MAX, u64::MAX);
         assert_eq!((b.next_delay(), b.next_delay()), (u64::MAX, u64::MAX));
         // Fields set by hand are bounded too.
-        let mut b = Backoff::default();
-        b.initial_ms = 0;
-        b.max_ms = 0;
+        let mut b = Backoff { initial_ms: 0, max_ms: 0, ..Default::default() };
         b.reset();
         assert_eq!(b.next_delay(), 1);
     }
