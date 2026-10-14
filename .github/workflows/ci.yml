@@ -65,8 +65,26 @@ jobs:
         with:
           persist-credentials: false
       - run: scripts/release-check.sh
+      # The FFI build matrix builds exactly what the Dart hook can download.
+      - run: scripts/ffi-targets.sh --check
       # Fails when a core function has no binding in some language.
       - run: python3 scripts/docs/api_table.py --check
+
+  lint:
+    name: Workflows and scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - run: bash -n scripts/*.sh && shellcheck scripts/*.sh
+      - name: actionlint 1.7.12, checked against its SHA-256
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/actionlint.tar.gz" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint"
 
   python:
     name: Python package (PyO3)
@@ -130,3 +148,11 @@ jobs:
       - run: mix deps.get
       - run: mix format --check-formatted
       - run: mix test
+
+  # The hex and pub packages' source fallback: their vendored native/
+  # workspaces build offline, and each package builds itself from one.
+  vendored:
+    name: Vendored sources
+    uses: ./.github/workflows/build.yml
+    with:
+      part: vendored
