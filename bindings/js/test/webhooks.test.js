@@ -55,7 +55,8 @@ test('freshness: 5 minutes by default, a tolerance, or skipped on purpose', () =
   assert.throws(() => sdk.verifyWebhook(pem, headers, body, { now: String(sent) }), TypeError);
   assert.throws(() => sdk.verifyWebhook(pem, headers, 42, { skipFreshness: true }), TypeError);
   assert.throws(() => sdk.verifyWebhook(pem, 'nope', body, { skipFreshness: true }), TypeError);
-  assert.throws(() => sdk.verifyWebhook(pem, { ...headers, 'kick-event-version': 1 }, body, { skipFreshness: true }), TypeError);
+  const numeric = { ...headers, 'kick-event-version': 1 };
+  assert.throws(() => sdk.verifyWebhook(pem, numeric, body, { skipFreshness: true }), TypeError);
 });
 
 test('a key read once verifies many deliveries', () => {

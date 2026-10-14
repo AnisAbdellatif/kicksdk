@@ -4,15 +4,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-import * as sdk from '../index.js';
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURES = path.join(here, '../../../fixtures');
-
-await sdk.init(readFileSync(path.join(here, '../pkg/kicksdk_bg.wasm')));
+import { sdk, FIXTURES } from './load.js';
 
 const realtimeRecordings = () =>
   readdirSync(path.join(FIXTURES, 'realtime'))

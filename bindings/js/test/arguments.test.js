@@ -64,7 +64,8 @@ test('endpoints: undefined or left out keeps Kick, a typo throws', () => {
   assert.equal(sdk.tokenRequest('c', {}).url, kick);
   // What a Partial<Endpoints> built from optional config looks like.
   assert.equal(sdk.tokenRequest('c', { realtime: undefined, api: undefined }).url, kick);
-  assert.equal(sdk.tokenRequest('c', { realtime: 'http://localhost:9/rt' }).url, 'http://localhost:9/rt/auth/connection');
+  const local = sdk.tokenRequest('c', { realtime: 'http://localhost:9/rt' });
+  assert.equal(local.url, 'http://localhost:9/rt/auth/connection');
   assert.throws(() => sdk.tokenRequest('c', { realtme: 'http://x' }), /unknown key `realtme`/);
   assert.throws(() => sdk.tokenRequest('c', { realtime: 5 }), TypeError);
   assert.throws(() => sdk.tokenRequest('c', 'http://x'), TypeError);
