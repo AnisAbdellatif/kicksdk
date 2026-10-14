@@ -80,7 +80,12 @@ export interface ChatOptions {
   chatroomId: number;
   /** The channel; also locates the chat's region. */
   channelId?: number | undefined;
-  /** The feeds to subscribe to; `chatChannels(chatroomId, channelId)` by default. */
+  /**
+   * The feeds to subscribe to; `chatChannels(chatroomId, channelId)` by
+   * default. The first is taken for the chat feed: its subscribe resets the
+   * reconnect backoff (with none listed, Kick accepting the connection does).
+   * A feed listed twice is subscribed and reported once.
+   */
   channels?: readonly string[] | undefined;
   /** An event on a feed. */
   onEvent(e: ChatEvent): void;

@@ -393,6 +393,29 @@ test('a clock that returns NaN is reported once, and performance.now() takes ove
   assert.deepEqual(log.drops, []);
 });
 
+test('a feed listed twice is subscribed and reported once', async (t) => {
+  const { kick, log, advance } = harness(t, { channels: [CHAT_FEED, 'channel.1', CHAT_FEED] });
+  await advance(100);
+  assert.deepEqual(log.states.at(-1).subscribed, [CHAT_FEED, 'channel.1']);
+  const subscribes = kick.last().sent.flatMap((f) => f.split('\n')).filter((l) => JSON.parse(l).subscribe);
+  assert.equal(subscribes.length, 2);
+});
+
+test('with no feeds, being connected ends a terminal streak', async (t) => {
+  t.mock.method(Math, 'random', () => 0);
+  const kick = fakeKick({ connectError: { code: 101, message: 'unauthorized' } });
+  const { log, advance } = harness(t, { kick, channels: [] });
+  await advance(100);
+  assert.equal(log.drops.at(-1).waitMs, 300_000);
+  kick.connectError = null;
+  await advance(301_000, 5_000);
+  assert.equal(log.states.at(-1).connected, true);
+  kick.last().serverClose(3501);
+  await advance(10);
+  assert.equal(log.drops.length, 2);
+  assert.equal(log.drops.at(-1).waitMs, 300_000, 'not 600000: the streak was over');
+});
+
 test('mistakes in the options throw at once', () => {
   const base = { chatroomId: CHATROOM, onEvent() {} };
   assert.throws(() => sdk.connectChat({ ...base, chatroomId: '1' }), TypeError);

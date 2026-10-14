@@ -169,7 +169,8 @@ export function connectChat(o) {
   }
   // Ids and endpoints are checked here, where a mistake throws, rather than
   // failing every reconnect.
-  const channels = o.channels ? [...o.channels] : chatChannels(o.chatroomId, o.channelId);
+  // A feed listed twice is subscribed once, and reported once.
+  const channels = [...new Set(o.channels ?? chatChannels(o.chatroomId, o.channelId))];
   const hasChannel = o.channelId !== undefined && o.channelId !== null;
   if (hasChannel) chatConnectionRequest(o.channelId, 'x', o.endpoints);
   else connectionRequest('x', o.endpoints);
@@ -308,12 +309,16 @@ export function connectChat(o) {
           refresh();
           break;
         case 'subscribed':
-          // The chat feed is up: back to short waits, and a terminal streak
-          // is over.
+          // The chat feed (the first listed) is up: back to short waits, and
+          // a terminal streak is over.
           if (a.channel === channels[0]) backoff.reset();
           changed = true;
           break;
         case 'connected':
+          // With no feed to subscribe to, the connection is all there is.
+          if (channels.length === 0) backoff.reset();
+          changed = true;
+          break;
         case 'unsubscribed':
         case 'subscribe_failed':
           changed = true;
