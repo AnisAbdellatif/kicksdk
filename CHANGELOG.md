@@ -271,8 +271,13 @@ version stays 0.1.1 until release.
   (architecture `win32`) gets the precompiled NIF as before.
 - `KICKSDK_BASE_URL` without a path (`http://localhost:8080`) works: a `/`
   is added (rustler_precompiled asked for `http://localhost:8080kicksdk_nif-…`).
-- `examples/elixir/chat.exs` ticks, refreshes its token, and reconnects or
-  stops as the session says.
+- `examples/elixir/chat.exs` follows KICK.md §6.1: ticks, refreshes its
+  token, reconnects after `Backoff.next_delay_for/3` of the close's
+  `retry_after_ms` (or of the socket's close code), comes back as a new
+  client (new client id, connection request and token) after a terminal
+  close, resets the backoff when the chat feed subscribes, and stops only
+  when told to (`Chat.stop/1`). Frames queued for a socket that dropped are not sent on the
+  next one.
 - Integers beyond 64 bits in Kick's JSON still arrive as floats (the core
   reads JSON without arbitrary precision); documented.
 
