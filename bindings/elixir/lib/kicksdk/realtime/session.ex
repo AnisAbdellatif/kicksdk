@@ -51,9 +51,10 @@ defmodule Kicksdk.Realtime.Session do
       # each text frame
       Session.receive(session, frame, now)
 
-  The session is a reference to native state; it is not safe to share between
-  processes that call it concurrently in a meaningful order. Keep it in the
-  process that owns the socket.
+  The session is a reference to native state, meant for one process: keep it
+  in the process that owns the socket. A call made while another process's
+  call on the same session is still running raises `RuntimeError` ("session
+  is busy") rather than wait, which would hold up a scheduler.
 
   If a call ever panicked inside the NIF (a bug), the session's state can no
   longer be trusted: every call but `closed/1` raises `RuntimeError` until

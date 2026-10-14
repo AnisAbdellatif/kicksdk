@@ -76,6 +76,39 @@ defmodule Kicksdk.Realtime.SessionTest do
              Session.receive(s, ~s({"id":1,"error":{"code":101,"message":"unauthorized"}}), 5)
   end
 
+  test "a session called from two processes at once raises instead of waiting" do
+    s = connected(0)
+    frame = String.duplicate("{}\n", 200_000)
+
+    # Whichever call comes second raises: usually the poller, while the
+    # big frame is read on a dirty scheduler.
+    busy =
+      Enum.find_value(1..20, fn _ ->
+        task = Task.async(fn -> busy(fn -> Session.receive(s, frame, 20) end) end)
+        seen = poll_busy(s, task)
+        Task.await(task, 30_000) || seen
+      end)
+
+    assert busy =~ "busy"
+    # Afterwards the session works as before.
+    assert Session.connected?(s)
+  end
+
+  defp poll_busy(s, task) do
+    case busy(fn -> Session.connected?(s) end) do
+      nil -> if Process.alive?(task.pid), do: poll_busy(s, task)
+      message -> message
+    end
+  end
+
+  # nil, or the message of the RuntimeError the call raised.
+  defp busy(call) do
+    call.()
+    nil
+  rescue
+    e in RuntimeError -> e.message
+  end
+
   test "an earlier time than the first is not a wrap" do
     s = connected(1_000)
     assert Session.tick(s, -5_000) == []

@@ -245,7 +245,9 @@ version stays 0.1.1 until release.
   verify byte for byte).
 - `Session` takes any integer `now`, `System.monotonic_time(:millisecond)`
   included; `deadline/1` answers on the caller's clock. A poisoned session
-  raises a clear `RuntimeError`; `closed/1` recovers it.
+  raises a clear `RuntimeError`; `closed/1` recovers it. A call on a session
+  that another process is calling at the same moment raises `RuntimeError`
+  ("busy") instead of blocking a scheduler until the other call ends.
 - New: `Realtime.retry_after_ms/1` (replaces the unreleased
   `should_reconnect?/1`), `Kicksdk.Realtime.Backoff` (with
   `next_delay_jittered/2` and `next_delay_for/3`, whose struct carries the

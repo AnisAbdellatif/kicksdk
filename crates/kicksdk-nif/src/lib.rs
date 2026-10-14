@@ -42,7 +42,7 @@ use rustler::types::atom::Atom;
 use rustler::{Binary, Encoder, Env, NifResult, Resource, ResourceArc, Term};
 use serde::Serialize;
 use serde_json::Value;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 
 mod atoms {
     rustler::atoms! {
@@ -387,18 +387,38 @@ impl Resource for SessionResource {}
 const POISONED: &str = "kicksdk: this realtime session panicked in an earlier call and its state cannot be \
                         trusted; call Kicksdk.Realtime.Session.closed/1 to reset it, or start a new one";
 
+const BUSY: &str = "kicksdk: this realtime session is busy in a call from another process; drive a session from \
+                    one process only (the one that owns the socket)";
+
 /// The session, unless a panic in an earlier call poisoned it: its state may
 /// be half-changed then, so it is refused until `closed/1` resets it.
+///
+/// Never waits: a session is meant for one process, and a second one calling
+/// it at the same time would block its scheduler (a normal one, behind a
+/// dirty twin reading a big frame) for as long as the call takes. That is
+/// raised instead.
 fn lock(m: &Mutex<SessionState>) -> NifResult<MutexGuard<'_, SessionState>> {
-    m.lock().map_err(|_| runtime_error(POISONED))
+    try_session(m, false).map_err(runtime_error)
 }
 
 /// The session even if poisoned, for `closed/1`, which resets every part of
 /// its state that a connection uses; the lock is usable again afterwards.
-fn lock_to_reset(m: &Mutex<SessionState>) -> MutexGuard<'_, SessionState> {
-    let guard = m.lock().unwrap_or_else(PoisonError::into_inner);
-    m.clear_poison();
-    guard
+fn lock_to_reset(m: &Mutex<SessionState>) -> NifResult<MutexGuard<'_, SessionState>> {
+    try_session(m, true).map_err(runtime_error)
+}
+
+/// The lock without waiting, or why not; a poisoned one taken (and cleared)
+/// only to `reset`.
+fn try_session(m: &Mutex<SessionState>, reset: bool) -> Result<MutexGuard<'_, SessionState>, &'static str> {
+    match m.try_lock() {
+        Ok(guard) => Ok(guard),
+        Err(TryLockError::WouldBlock) => Err(BUSY),
+        Err(TryLockError::Poisoned(_)) if !reset => Err(POISONED),
+        Err(TryLockError::Poisoned(p)) => {
+            m.clear_poison();
+            Ok(p.into_inner())
+        }
+    }
 }
 
 /// Runs `f` on the session with `now` on the core's clock.
@@ -476,7 +496,7 @@ fn session_tick<'a>(env: Env<'a>, s: ResourceArc<SessionResource>, now: i64) -> 
 
 #[rustler::nif]
 fn session_closed<'a>(env: Env<'a>, s: ResourceArc<SessionResource>) -> NifResult<Term<'a>> {
-    term(env, &lock_to_reset(&s.0).session.closed())
+    term(env, &lock_to_reset(&s.0)?.session.closed())
 }
 
 /// On the host's clock, the one `now` is given in.
@@ -894,8 +914,18 @@ mod tests {
             panic!("poison it");
         })
         .join();
-        assert!(m.lock().is_err());
-        let _ = lock_to_reset(&m).session.closed();
-        assert!(m.lock().is_ok());
+        assert_eq!(try_session(&m, false).err(), Some(POISONED));
+        let _ = try_session(&m, true).unwrap().session.closed();
+        assert!(try_session(&m, false).is_ok());
+    }
+
+    #[test]
+    fn a_busy_session_is_refused_instead_of_waited_for() {
+        let m = Mutex::new(state());
+        let held = try_session(&m, false).unwrap();
+        assert_eq!(try_session(&m, false).err(), Some(BUSY));
+        assert_eq!(try_session(&m, true).err(), Some(BUSY));
+        drop(held);
+        assert!(try_session(&m, false).is_ok());
     }
 }
