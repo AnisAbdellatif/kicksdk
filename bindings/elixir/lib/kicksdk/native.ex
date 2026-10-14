@@ -6,20 +6,38 @@ defmodule Kicksdk.Native do
   # package is published). It is built from source instead - which needs Rust
   # and the optional :rustler dependency - when:
   #
-  #   * KICKSDK_BUILD=1 (or true) is set;
+  #   * KICKSDK_BUILD=1 (or true) is set, or rustler_precompiled's own
+  #     `config :rustler_precompiled, :force_build, kicksdk: true` (or
+  #     RUSTLER_PRECOMPILED_FORCE_BUILD_ALL);
   #   * there is no checksum file: a checkout of the repository;
-  #   * no precompiled NIF exists for this machine's target.
+  #   * no precompiled NIF exists for this machine's target, or the target
+  #     cannot be told (TARGET_ARCH, TARGET_VENDOR, TARGET_OS and TARGET_ABI
+  #     override it, as Nerves sets them).
   #
   # A download that fails on a supported target stops the build with a
   # message; set KICKSDK_BUILD=1 to build from source instead.
   #
   # KICKSDK_BASE_URL points the download at a mirror of the release assets
   # (the checksums still apply).
+  #
+  # These are read when this module compiles, and a change to any of them
+  # recompiles it (`__mix_recompile__?/0`). As a dependency, Mix does not
+  # look again by itself: run `mix deps.compile kicksdk --force`.
 
   version = Mix.Project.config()[:version]
   root = Path.expand("../..", __DIR__)
   nif_versions = ["2.15"]
   targets = RustlerPrecompiled.Config.default_targets()
+  checksum = Path.join(root, "checksum-Elixir.Kicksdk.Native.exs")
+
+  @env ~w(KICKSDK_BUILD KICKSDK_BASE_URL TARGET_ARCH TARGET_VENDOR TARGET_OS TARGET_ABI
+          RUSTLER_PRECOMPILED_FORCE_BUILD_ALL)
+  @checksum checksum
+  @inputs {Enum.map(@env, &System.get_env/1), File.exists?(checksum)}
+
+  @doc false
+  # Mix asks before reusing this module's compiled code.
+  def __mix_recompile__?, do: {Enum.map(@env, &System.get_env/1), File.exists?(@checksum)} != @inputs
 
   # native/ is the vendored Cargo workspace in a published package; in the
   # repository the crate is at the top level.
@@ -28,14 +46,31 @@ defmodule Kicksdk.Native do
       do: "native/crates/kicksdk-nif",
       else: "../../crates/kicksdk-nif"
 
-  # This machine as rustler_precompiled describes a target (its own helper
-  # for this is private).
+  # This machine as rustler_precompiled describes a target, TARGET_* applied
+  # (its own helpers for this are private). An architecture string that is
+  # not three or four parts cannot be read: build from source.
   parts = :erlang.system_info(:system_architecture) |> List.to_string() |> String.split("-")
+  keys = [arch: "TARGET_ARCH", vendor: "TARGET_VENDOR", os: "TARGET_OS", abi: "TARGET_ABI"]
+
+  detected =
+    if length(parts) in [3, 4],
+      do: Map.new(Enum.zip(Keyword.keys(keys), parts)),
+      else: %{}
 
   system =
-    if length(parts) in [3, 4],
-      do: Map.new(Enum.zip([:arch, :vendor, :os, :abi], parts)),
-      else: %{}
+    Enum.reduce(keys, detected, fn {key, var}, acc ->
+      case System.get_env(var) do
+        nil -> acc
+        value -> Map.put(acc, key, value)
+      end
+    end)
+
+  # As rustler_precompiled does: a Linux target set through TARGET_* without
+  # a vendor is "unknown".
+  system =
+    if system != detected and system[:vendor] == detected[:vendor] and system[:os] == "linux",
+      do: Map.put(system, :vendor, "unknown"),
+      else: system
 
   here = %{
     os_type: :os.type(),
@@ -44,24 +79,34 @@ defmodule Kicksdk.Native do
     nif_version: hd(nif_versions)
   }
 
-  supported? = match?({:ok, _}, RustlerPrecompiled.target(here, targets, nif_versions))
+  supported? =
+    Map.has_key?(system, :arch) and Map.has_key?(system, :os) and
+      try do
+        match?({:ok, _}, RustlerPrecompiled.target(here, targets, nif_versions))
+      rescue
+        _ -> false
+      end
 
-  force_build =
-    System.get_env("KICKSDK_BUILD") in ["1", "true"] or
-      not File.exists?(Path.join(root, "checksum-Elixir.Kicksdk.Native.exs")) or
-      not supported?
+  # force_build only when this package needs it, so that rustler_precompiled's
+  # own `config :rustler_precompiled, :force_build, kicksdk: true` still
+  # applies otherwise.
+  force =
+    if System.get_env("KICKSDK_BUILD") in ["1", "true"] or not File.exists?(checksum) or not supported?,
+      do: [force_build: true],
+      else: []
 
   use RustlerPrecompiled,
-    otp_app: :kicksdk,
-    crate: "kicksdk_nif",
-    path: source,
-    base_url:
-      System.get_env("KICKSDK_BASE_URL") ||
-        "https://github.com/AnisAbdellatif/kicksdk/releases/download/v#{version}",
-    version: version,
-    targets: targets,
-    nif_versions: nif_versions,
-    force_build: force_build
+      [
+        otp_app: :kicksdk,
+        crate: "kicksdk_nif",
+        path: source,
+        base_url:
+          System.get_env("KICKSDK_BASE_URL") ||
+            "https://github.com/AnisAbdellatif/kicksdk/releases/download/v#{version}",
+        version: version,
+        targets: targets,
+        nif_versions: nif_versions
+      ] ++ force
 
   defp err, do: :erlang.nif_error(:nif_not_loaded)
 
