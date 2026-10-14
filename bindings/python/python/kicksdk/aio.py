@@ -373,7 +373,10 @@ class ChatFeed:
                 elif kind == "unsubscribed":
                     self.subscribed.discard(a["channel"])
                 elif kind == "subscribe_failed":
-                    log.warning("Kick refused feed %s: %s %s", a["channel"], a["code"], a["message"])
+                    # Kick refuses a guest some of the default feeds (103);
+                    # only the chat feed itself is worth a warning.
+                    level = logging.WARNING if a["channel"] == self.channels[0] else logging.DEBUG
+                    log.log(level, "Kick refused feed %s: %s %s", a["channel"], a["code"], a["message"])
                 elif kind == "event":
                     await self._put(a)
             return None
