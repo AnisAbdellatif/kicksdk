@@ -1,0 +1,536 @@
+# Builds what a release ships, and checks it, without publishing anything: one
+# part per call, as artifacts of the calling run. It needs nothing but read
+# access; uploading and publishing are release.yml's.
+#
+#   nif       the Elixir NIFs, as rustler_precompiled downloads them
+#             (artifact nif-tarballs)
+#   ffi       the Dart/C library per target, named as the release names it
+#             (artifacts ffi-<target>)
+#   wheels    the Python wheels and sdist (artifacts wheels-*), each wheel
+#             installed and tested on a machine it is for
+#   js        the npm package's tarball (artifact js-package)
+#   vendored  the hex and pub packages' vendored native/ workspaces, built
+#             --locked --offline, and each package built from them
+#   packages  the hex, pub and crates.io packages as they would be published,
+#             from this run's nif and ffi artifacts; the Dart package's
+#             precompiled download, served locally (needs nif and ffi first)
+#
+# Called by release.yml (a release, or a dry run) and release-dry-run.yml
+# (pull requests that touch the release).
+
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      part:
+        description: nif, ffi, wheels, js, vendored or packages
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # cross's images, pinned. x86_64 Linux builds in CentOS 7's (glibc 2.17)
+  # rather than the default Ubuntu one, so the library loads on old distros.
+  CROSS_TARGET_X86_64_UNKNOWN_LINUX_GNU_IMAGE: ghcr.io/cross-rs/x86_64-unknown-linux-gnu@sha256:ab74248a187c565196542415b501e661f67635a3bebd20f9b80d5f186cb93e82 # 0.2.5-centos
+  CROSS_TARGET_X86_64_UNKNOWN_LINUX_MUSL_IMAGE: ghcr.io/cross-rs/x86_64-unknown-linux-musl@sha256:77db671d8356a64ae72a3e1415e63f547f26d374fbe3c4762c1cd36c7eac7b99 # 0.2.5
+  CROSS_TARGET_AARCH64_UNKNOWN_LINUX_GNU_IMAGE: ghcr.io/cross-rs/aarch64-unknown-linux-gnu@sha256:7f8308a8734d9fcd2ebbe9a3e4bdea74af293f0799d80c3cc341e340cda49a4c # 0.2.5
+  CROSS_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_IMAGE: ghcr.io/cross-rs/aarch64-unknown-linux-musl@sha256:702154f52b2d8091671aa2c84d5582d849f949977228c735ff8462f93cc0e1e4 # 0.2.5
+  CROSS_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_IMAGE: ghcr.io/cross-rs/arm-unknown-linux-gnueabihf@sha256:2e3ba7a2284844975124febea982bda2586ae4910ef51294729284ff31b0aec5 # 0.2.5
+  CROSS_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_IMAGE: ghcr.io/cross-rs/riscv64gc-unknown-linux-gnu@sha256:67ee97dd4719390d299edfcf39f226360ccfb1539e08b078ec187d4848415794 # 0.2.5
+
+jobs:
+  # ---- Elixir: precompiled NIFs ------------------------------------------------
+
+  nif:
+    name: NIF ${{ matrix.target }}
+    if: inputs.part == 'nif'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # rustler_precompiled's default targets, which Kicksdk.Native lists.
+        # glibc: the oldest glibc the library may ask for (riscv64's port
+        # starts at 2.27).
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, cross: true, glibc: "2.17" }
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, cross: true }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest, cross: true, glibc: "2.17" }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, cross: true }
+          - { target: arm-unknown-linux-gnueabihf, os: ubuntu-latest, cross: true, glibc: "2.17" }
+          - { target: riscv64gc-unknown-linux-gnu, os: ubuntu-latest, cross: true, glibc: "2.27" }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: x86_64-pc-windows-gnu, os: windows-latest }
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - if: matrix.cross
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cross@0.2.5
+      - name: Build
+        shell: bash
+        env:
+          TOOL: ${{ matrix.cross && 'cross' || 'cargo' }}
+          # musl: links statically by default, and a NIF has to be a shared
+          #   library (it then needs libgcc_s at run time: apk add libgcc).
+          # Apple: a relative install name rather than the runner's path.
+          #   rustler 0.38 looks the enif_* functions up at load time, so the
+          #   link has no undefined symbols to allow.
+          # MSVC: the C runtime linked in, so the DLL needs no VC++
+          #   redistributable (VCRUNTIME140.dll).
+          RUSTFLAGS: >-
+            ${{ contains(matrix.target, 'musl') && '-C target-feature=-crt-static' || '' }}
+            ${{ contains(matrix.target, 'apple') && '-C link-arg=-Wl,-install_name,@rpath/libkicksdk_nif.so' || '' }}
+            ${{ contains(matrix.target, 'msvc') && '-C target-feature=+crt-static' || '' }}
+        run: $TOOL build --release --locked -p kicksdk_nif --target "$TARGET"
+      - name: Stage
+        shell: bash
+        run: |
+          dir=target/$TARGET/release
+          case "$TARGET" in
+            *windows*) lib=$dir/kicksdk_nif.dll ;;
+            *apple*)   lib=$dir/libkicksdk_nif.dylib ;;
+            *)         lib=$dir/libkicksdk_nif.so ;;
+          esac
+          mkdir -p out && cp "$lib" out/
+          echo "LIB=$lib" >> "$GITHUB_ENV"
+      - name: glibc floor
+        if: matrix.glibc
+        env:
+          GLIBC: ${{ matrix.glibc }}
+        run: scripts/check-glibc.sh "$GLIBC" "$LIB"
+      - name: Install name
+        if: contains(matrix.target, 'apple')
+        run: otool -D "$LIB" | tail -1 | grep -qx '@rpath/libkicksdk_nif.so'
+      - name: No VC++ runtime import
+        if: contains(matrix.target, 'msvc')
+        shell: bash
+        run: |
+          rustup component add llvm-tools
+          readobj="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin/llvm-readobj"
+          "$readobj" --coff-imports "$LIB" | grep 'Name:'
+          if "$readobj" --coff-imports "$LIB" | grep -Eqi 'Name: (vcruntime|msvcp|api-ms-win-crt)'; then
+            echo "::error::$LIB imports the C runtime"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nif-lib-${{ matrix.target }}
+          path: out/
+          if-no-files-found: error
+
+  nif-tarballs:
+    name: NIF tarballs
+    needs: nif
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: nif-lib-*
+          path: libs
+      # GNU tar here for every target, so a tarball's bytes are the
+      # library's alone (scripts/package-nif.sh).
+      - name: Pack as rustler_precompiled names them
+        run: |
+          version=$(scripts/version.sh)
+          for d in libs/nif-lib-*; do
+            target=${d#libs/nif-lib-}
+            scripts/package-nif.sh "$version" "$target" "$(find "$d" -type f)" dist
+          done
+          (cd dist && sha256sum ./*)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nif-tarballs
+          path: dist/
+          if-no-files-found: error
+
+  # ---- Dart (and C): the FFI library --------------------------------------------
+
+  ffi:
+    name: FFI ${{ matrix.target }}
+    if: inputs.part == 'ffi'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Exactly the targets bindings/dart/hook/build.dart can download
+        # (scripts/ffi-targets.sh --check holds the two together).
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, ext: so, cross: true, glibc: "2.17" }
+          # The image's glibc is 2.23; Rust's thread-local destructors ask
+          # it for __cxa_thread_atexit_impl (2.18).
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest, ext: so, cross: true, glibc: "2.18" }
+          - { target: x86_64-apple-darwin, os: macos-latest, ext: dylib }
+          - { target: aarch64-apple-darwin, os: macos-latest, ext: dylib }
+          - { target: aarch64-apple-ios, os: macos-latest, ext: dylib }
+          - { target: aarch64-apple-ios-sim, os: macos-latest, ext: dylib }
+          - { target: x86_64-apple-ios, os: macos-latest, ext: dylib }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, ext: dll }
+          - { target: aarch64-pc-windows-msvc, os: windows-latest, ext: dll }
+          - { target: aarch64-linux-android, os: ubuntu-latest, ext: so, ndk: arm64-v8a }
+          - { target: armv7-linux-androideabi, os: ubuntu-latest, ext: so, ndk: armeabi-v7a }
+          - { target: x86_64-linux-android, os: ubuntu-latest, ext: so, ndk: x86_64 }
+    env:
+      TARGET: ${{ matrix.target }}
+      EXT: ${{ matrix.ext }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - if: matrix.cross
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cross@0.2.5
+      - name: Build
+        if: ${{ !matrix.ndk }}
+        shell: bash
+        env:
+          TOOL: ${{ matrix.cross && 'cross' || 'cargo' }}
+          # Apple: a relative install name, so an app can embed the dylib.
+          # MSVC: the C runtime linked in (no VCRUNTIME140.dll needed).
+          RUSTFLAGS: >-
+            ${{ contains(matrix.target, 'apple') && '-C link-arg=-Wl,-install_name,@rpath/libkicksdk_ffi.dylib' || '' }}
+            ${{ contains(matrix.target, 'msvc') && '-C target-feature=+crt-static' || '' }}
+        run: $TOOL build --release --locked -p kicksdk-ffi --target "$TARGET"
+      - name: Build (Android)
+        if: matrix.ndk
+        # The runner's ANDROID_NDK_ROOT is what cargo-ndk finds the NDK by.
+        env:
+          ABI: ${{ matrix.ndk }}
+        run: |
+          cargo install cargo-ndk --version 4.1.2 --locked
+          cargo ndk -t "$ABI" -P 21 build --release --locked -p kicksdk-ffi
+      - name: Name it for the release
+        shell: bash
+        run: |
+          dir=target/$TARGET/release
+          case "$EXT" in
+            dll) lib=$dir/kicksdk_ffi.dll ;;
+            *)   lib=$dir/libkicksdk_ffi.$EXT ;;
+          esac
+          mkdir -p out
+          out=out/kicksdk_ffi-v$(scripts/version.sh)-$TARGET.$EXT
+          cp "$lib" "$out"
+          echo "LIB=$out" >> "$GITHUB_ENV"
+      - name: glibc floor
+        if: matrix.glibc
+        env:
+          GLIBC: ${{ matrix.glibc }}
+        run: scripts/check-glibc.sh "$GLIBC" "$LIB"
+      - name: Install name
+        if: contains(matrix.target, 'apple')
+        run: otool -D "$LIB" | tail -1 | grep -qx '@rpath/libkicksdk_ffi.dylib'
+      - name: No VC++ runtime import
+        if: contains(matrix.target, 'msvc')
+        shell: bash
+        run: |
+          rustup component add llvm-tools
+          readobj="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin/llvm-readobj"
+          "$readobj" --coff-imports "$LIB" | grep 'Name:'
+          if "$readobj" --coff-imports "$LIB" | grep -Eqi 'Name: (vcruntime|msvcp|api-ms-win-crt)'; then
+            echo "::error::$LIB imports the C runtime"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ffi-${{ matrix.target }}
+          path: out/
+          if-no-files-found: error
+
+  # ---- Python: wheels -------------------------------------------------------------
+
+  wheels:
+    name: Wheels ${{ matrix.os }} ${{ matrix.target }} ${{ matrix.manylinux }}
+    if: inputs.part == 'wheels'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64, manylinux: auto }
+          - { os: ubuntu-latest, target: aarch64, manylinux: auto }
+          - { os: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2 }
+          - { os: ubuntu-latest, target: aarch64, manylinux: musllinux_1_2 }
+          - { os: macos-latest, target: x86_64 }
+          - { os: macos-latest, target: aarch64 }
+          - { os: windows-latest, target: x64 }
+          - { os: windows-latest, target: aarch64 }
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: bindings/python
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release --locked --out dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.target }}-${{ matrix.manylinux || 'native' }}
+          path: bindings/python/dist
+          if-no-files-found: error
+
+  sdist:
+    name: Python sdist
+    if: inputs.part == 'wheels'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: bindings/python
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheels-sdist
+          path: bindings/python/dist
+          if-no-files-found: error
+
+  wheels-test:
+    name: Wheel test ${{ matrix.os }} ${{ matrix.libc }}
+    needs: wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # One machine per wheel: pip picks the wheel that fits it, from all
+        # of them, never the sdist.
+        include:
+          - { os: ubuntu-latest, libc: glibc }
+          - { os: ubuntu-24.04-arm, libc: glibc }
+          - { os: ubuntu-latest, libc: musl }
+          - { os: ubuntu-24.04-arm, libc: musl }
+          - { os: macos-latest }
+          - { os: macos-15-intel }
+          - { os: windows-latest }
+          - { os: windows-11-arm }
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+      - if: matrix.libc != 'musl'
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+      - name: Install the wheel and run the tests against it
+        if: matrix.libc != 'musl'
+        shell: bash
+        run: |
+          python -m pip install --only-binary :all: --no-index --find-links dist kicksdk-py
+          python -m pip install pytest httpx websockets
+          cd "$RUNNER_TEMP"
+          python -c 'import kicksdk; print(kicksdk.__file__)'
+          python -m pytest -q -p no:cacheprovider "$GITHUB_WORKSPACE/bindings/python/tests"
+      - name: Install the wheel and run the tests against it (Alpine)
+        if: matrix.libc == 'musl'
+        run: |
+          docker run --rm -v "$PWD:/w:ro" python:3.13-alpine sh -euc '
+            pip install --root-user-action=ignore --only-binary :all: --no-index --find-links /w/dist kicksdk-py
+            pip install --root-user-action=ignore pytest httpx websockets
+            cd /tmp
+            python -c "import kicksdk; print(kicksdk.__file__)"
+            python -m pytest -q -p no:cacheprovider /w/bindings/python/tests
+          '
+
+  # ---- JavaScript: the npm package -----------------------------------------------
+
+  js:
+    name: npm package (WebAssembly)
+    if: inputs.part == 'js'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - run: scripts/install-wasm-tools.sh
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+      - run: scripts/build-js.sh
+      - run: npm test
+        working-directory: bindings/js
+      - run: mkdir -p ../../dist && npm pack --pack-destination ../../dist
+        working-directory: bindings/js
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: js-package
+          path: dist/
+          if-no-files-found: error
+
+  # ---- The packages' source fallback ------------------------------------------------
+
+  vendored:
+    name: From vendored sources (${{ matrix.package }})
+    if: inputs.part == 'vendored'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { package: dart, crate: kicksdk-ffi }
+          - { package: elixir, crate: kicksdk-nif }
+    env:
+      PKG: bindings/${{ matrix.package }}
+      CRATE: ${{ matrix.crate }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
+        with:
+          toolchain: stable
+      - if: matrix.package == 'dart'
+        uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
+      - if: matrix.package == 'elixir'
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      # vendor-native.sh fetches the crates, then prunes the lock offline.
+      - run: scripts/vendor-native.sh "$PKG" "$CRATE"
+      - name: native/ builds on its own, offline, at the locked versions
+        run: cargo build --release --locked --offline
+        working-directory: ${{ env.PKG }}/native
+      # No checksums: each package builds itself, from native/ (which it
+      # prefers to the repository), offline.
+      - name: The Dart package, built from native/
+        if: matrix.package == 'dart'
+        working-directory: bindings/dart
+        env:
+          CARGO_NET_OFFLINE: "true"
+        run: dart pub get && dart test
+      - name: The hex package, built from native/
+        if: matrix.package == 'elixir'
+        working-directory: bindings/elixir
+        env:
+          CARGO_NET_OFFLINE: "true"
+        run: mix deps.get && mix test
+
+  # ---- The packages, as they would be published --------------------------------------
+
+  hex-package:
+    name: hex package (dry run)
+    if: inputs.part == 'packages'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bindings/elixir
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
+        with:
+          toolchain: stable
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nif-tarballs
+          path: ${{ runner.temp }}/nifs
+      # This run's NIFs, served where the release would serve them.
+      - name: Serve the NIFs
+        run: |
+          version=$(../../scripts/version.sh)
+          mkdir -p "$RUNNER_TEMP/serve" && mv "$RUNNER_TEMP/nifs" "$RUNNER_TEMP/serve/v$version"
+          nohup python3 -m http.server 8000 --bind 127.0.0.1 --directory "$RUNNER_TEMP/serve" >/dev/null 2>&1 &
+          {
+            echo "KICKSDK_BASE_URL=http://127.0.0.1:8000/v$version"
+            echo "RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH=$RUNNER_TEMP/rustler-cache"
+          } >> "$GITHUB_ENV"
+      - run: ../../scripts/vendor-native.sh bindings/elixir kicksdk-nif
+      - run: mix deps.get
+      # As the hex job does it: every target's NIF must be there (--all).
+      - name: Checksums of every NIF
+        run: |
+          KICKSDK_BUILD=1 mix compile
+          mix rustler_precompiled.download Kicksdk.Native --all --print
+      - name: The precompiled NIF loads (no Rust on PATH)
+        env:
+          MIX_ENV: test
+        run: ../../scripts/without-rust.sh mix test
+      - run: mix hex.build
+
+  pub-package:
+    name: pub package (dry run)
+    if: inputs.part == 'packages'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
+        with:
+          toolchain: stable
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ffi-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/ffi
+      # As the pub job does it, with this run's libraries for the release's.
+      - name: Checksums of every library
+        run: scripts/dart-checksums.sh "$(scripts/version.sh)" "$RUNNER_TEMP/ffi"
+      - run: scripts/vendor-native.sh bindings/dart kicksdk-ffi
+      - run: scripts/package-files.sh bindings/dart
+      - run: dart pub get && dart pub publish --dry-run
+        working-directory: bindings/dart
+      # The precompiled path: the hook downloads this run's library for this
+      # machine from a local server and checks it against checksums.json.
+      # Without Rust on PATH, a fallback to building would fail the tests.
+      - name: The precompiled download (no Rust on PATH)
+        working-directory: bindings/dart
+        run: |
+          rm -rf native
+          nohup python3 -m http.server 8000 --bind 127.0.0.1 --directory "$RUNNER_TEMP/ffi" >/dev/null 2>&1 &
+          printf '\nhooks:\n  user_defines:\n    kicksdk:\n      binary_base_url: http://127.0.0.1:8000\n' >> pubspec.yaml
+          dart pub get
+          ../../scripts/without-rust.sh dart test
+
+  crates-package:
+    name: crates.io packages (dry run)
+    if: inputs.part == 'packages'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
+        with:
+          toolchain: stable
+      - run: cargo publish --dry-run --locked -p kicksdk -p kicksdk-ffi

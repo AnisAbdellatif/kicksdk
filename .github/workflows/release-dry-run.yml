@@ -1,0 +1,93 @@
+# Everything a release builds and checks, uploading and publishing nothing:
+# on pull requests that touch the release (its workflows, scripts, manifests,
+# the packages' download code), and weekly, so a runner image or toolchain
+# change shows up before a tag does. release.yml run on a branch is the same
+# dry run, on demand.
+
+name: Release dry run
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - .github/workflows/build.yml
+      - .github/workflows/release-dry-run.yml
+      - scripts/**
+      - Cargo.toml
+      - Cargo.lock
+      - crates/*/Cargo.toml
+      - crates/*/build.rs
+      - bindings/dart/hook/**
+      - bindings/dart/pubspec.yaml
+      - bindings/elixir/mix.exs
+      - bindings/elixir/mix.lock
+      - bindings/elixir/lib/kicksdk/native.ex
+      - bindings/python/Cargo.toml
+      - bindings/python/pyproject.toml
+      - bindings/js/package.json
+  schedule:
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-dry-run-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      # The release's own checks: versions, the FFI targets, the plan.
+      - env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: branch
+          REF_NAME: ${{ github.head_ref || github.ref_name }}
+        run: scripts/release-plan.sh
+
+  nif:
+    name: NIFs
+    needs: plan
+    uses: ./.github/workflows/build.yml
+    with:
+      part: nif
+
+  ffi:
+    name: FFI libraries
+    needs: plan
+    uses: ./.github/workflows/build.yml
+    with:
+      part: ffi
+
+  wheels:
+    name: Wheels
+    needs: plan
+    uses: ./.github/workflows/build.yml
+    with:
+      part: wheels
+
+  js:
+    name: npm package
+    needs: plan
+    uses: ./.github/workflows/build.yml
+    with:
+      part: js
+
+  vendored:
+    name: Vendored sources
+    needs: plan
+    uses: ./.github/workflows/build.yml
+    with:
+      part: vendored
+
+  packages:
+    name: Packages
+    needs: [nif, ffi]
+    uses: ./.github/workflows/build.yml
+    with:
+      part: packages

@@ -1,26 +1,41 @@
 #!/usr/bin/env bash
-# Publishes the Dart package by hand, the way the release workflow does: for
-# the first version, before pub.dev's automated publishing can be switched on
-# (it needs the package to exist). Run after the release workflow has uploaded
-# the libraries:  scripts/publish-dart.sh 0.1.0
+# Publishes the Dart package by hand, the way the release workflow does:
+#
+#   git checkout v0.2.0 && scripts/publish-dart.sh 0.2.0
+#
+# For the first version, before pub.dev's automated publishing can be switched
+# on (it needs the package to exist), and for any version whose workflow run
+# was not a tag push (pub.dev takes automated publishes from tag pushes only).
+# Run it from a clean checkout of the version's tag, after the release has all
+# the libraries: what is published is the tag's code, with the checksums of
+# the files the release serves.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 version=${1:?version}
+tag=v$version
+repo=AnisAbdellatif/kicksdk
+
+if ! head=$(git rev-parse --verify -q HEAD) || [ "$head" != "$(git rev-parse --verify -q "$tag^{commit}" || true)" ]; then
+  echo "HEAD is not $tag: git checkout $tag first" >&2
+  exit 1
+fi
+if [ -n "$(git status --porcelain)" ]; then
+  echo "the checkout has changes; publish from a clean checkout of $tag:" >&2
+  git status --short >&2
+  exit 1
+fi
 scripts/release-check.sh "$version"
 
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-gh release download "v$version" --pattern 'kicksdk_ffi-*' --dir "$tmp"
-(cd "$tmp" && sha256sum kicksdk_ffi-*) | python3 -c '
-import json, sys
-sums = {}
-for line in sys.stdin:
-    digest, name = line.split()
-    sums[name.lstrip("*")] = digest
-json.dump(sums, open("bindings/dart/hook/checksums.json", "w"), indent=2, sort_keys=True)
-'
-echo "$(python3 -c 'import json;print(len(json.load(open("bindings/dart/hook/checksums.json"))))') libraries checksummed"
+# The release-time files never outlive the publish, whichever way it ends.
+cleanup() {
+  rm -rf "$tmp" bindings/dart/native bindings/dart/hook/checksums.json \
+    bindings/dart/LICENSE bindings/dart/CHANGELOG.md
+}
+trap cleanup EXIT
+
+gh release download "$tag" --repo "$repo" --pattern 'kicksdk_ffi-*' --dir "$tmp"
+scripts/dart-checksums.sh "$version" "$tmp"
 scripts/vendor-native.sh bindings/dart kicksdk-ffi
 scripts/package-files.sh bindings/dart
 (cd bindings/dart && dart pub get && dart pub publish)
-rm -rf bindings/dart/native bindings/dart/hook/checksums.json bindings/dart/LICENSE bindings/dart/CHANGELOG.md
