@@ -15,7 +15,9 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 kicksdk.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+# Objects inside Kick's data (a ban record, an event's raw data) keep
+# Kick's key order in JS, as they always have.
+serde_json = { workspace = true, features = ["preserve_order"] }
 wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
 js-sys = "0.3"

@@ -4,8 +4,9 @@
 
 use kicksdk::events::KickEvent;
 use kicksdk::realtime::{self, Action, Session, SessionOptions};
-use kicksdk::webhooks::Freshness;
-use kicksdk::{public_api, webhooks, website};
+#[cfg(feature = "webhooks")]
+use kicksdk::webhooks::{self, Freshness};
+use kicksdk::{public_api, website};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -109,6 +110,7 @@ fn website_channels_give_the_chatroom() {
     }
 }
 
+#[cfg(feature = "webhooks")]
 #[test]
 fn webhook_bodies_are_read_by_type() {
     for path in fixtures("webhook") {
@@ -136,6 +138,7 @@ fn webhook_bodies_are_read_by_type() {
     }
 }
 
+#[cfg(feature = "webhooks")]
 #[test]
 fn webhook_signatures_verify() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/signing");

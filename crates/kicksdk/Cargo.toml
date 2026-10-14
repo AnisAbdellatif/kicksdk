@@ -16,9 +16,11 @@ authors.workspace = true
 [features]
 default = ["webhooks"]
 # Every function by name, JSON in and out, for the C ABI and Python bindings.
-dispatch = []
+# Its JSON keeps each struct's field order, as the bindings have always
+# returned it, so it needs serde_json's preserve_order; nothing else does.
+dispatch = ["serde_json/preserve_order"]
 # Webhook signature verification (RSA, SHA-256). Pure Rust, works in WASM.
-webhooks = ["dep:rsa", "dep:sha2", "dep:base64"]
+webhooks = ["dep:rsa", "dep:sha2", "dep:base64", "dep:getrandom"]
 
 [dependencies]
 serde.workspace = true
@@ -28,6 +30,12 @@ percent-encoding = "2"
 rsa = { version = "0.9", optional = true, default-features = false, features = ["sha2", "std", "pem"] }
 sha2 = { version = "0.10", optional = true, default-features = false, features = ["oid"] }
 base64 = { version = "0.22", optional = true }
+
+# rsa reaches getrandom 0.2 (through num-bigint-dig and rand), which does
+# not build for wasm32-unknown-unknown unless told to use the browser's
+# crypto. Verifying never draws a random number; this only makes it build.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.2", optional = true, features = ["js"] }
 
 [dev-dependencies]
 pretty_assertions = "1"

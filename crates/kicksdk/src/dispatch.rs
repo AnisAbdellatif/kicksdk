@@ -32,7 +32,7 @@ use crate::http::{Endpoints, Error};
 use crate::ids::{ChannelId, ChatroomId, UserId};
 use crate::{content, events, public_api, realtime, website};
 use serde::Serialize;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 /// Why a call failed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -394,7 +394,7 @@ fn webhook_verify(a: &Args<'_>) -> Out {
     let freshness = a.freshness()?;
     webhooks::verify_pem(a.str("public_key_pem")?, &headers, &body, freshness).map_err(|e| refuse(e.to_string()))?;
     let event = webhooks::parse(&headers.event_type, &body).map_err(|e| refuse(e.to_string()))?;
-    Ok(json!({ "headers": to(&headers)?, "event": to(event)? }))
+    Ok(serde_json::json!({ "headers": to(&headers)?, "event": to(event)? }))
 }
 
 /// A realtime session for a binding to hold.
@@ -429,7 +429,8 @@ impl SessionHandle {
     }
 }
 
-/// Every function [`call`] knows, for bindings that check at load time.
+/// Every function [`call`] knows, for bindings that check at load time. The
+/// `webhooks.*` ones only with the `webhooks` feature (on by default).
 pub const FUNCTIONS: &[&str] = &[
     "events.parse",
     "content.parse",
@@ -471,13 +472,16 @@ pub const FUNCTIONS: &[&str] = &[
     "website.unpin_request",
     "website.send_request",
     "website.parse_action",
+    #[cfg(feature = "webhooks")]
     "webhooks.verify",
+    #[cfg(feature = "webhooks")]
     "webhooks.parse",
 ];
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn every_listed_function_is_dispatched() {
@@ -489,6 +493,7 @@ mod tests {
             );
         }
         assert_eq!(call("nope", &Value::Null).unwrap_err().message, "no function `nope`");
+        assert_eq!(FUNCTIONS.contains(&"webhooks.verify"), cfg!(feature = "webhooks"));
     }
 
     #[test]

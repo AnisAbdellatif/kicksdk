@@ -228,7 +228,7 @@ fn without_playback_urls(data: Value) -> Value {
     fn strip(v: &mut Value) {
         match v {
             Value::Object(map) => {
-                map.shift_remove("playback_url");
+                map.retain(|k, _| k != "playback_url");
                 map.values_mut().for_each(strip);
             }
             Value::Array(list) => list.iter_mut().for_each(strip),

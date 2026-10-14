@@ -206,6 +206,7 @@ name = "kicksdk"
 version = "0.1.1"
 dependencies = [
  "base64",
+ "getrandom",
  "percent-encoding",
  "pretty_assertions",
  "rsa",
