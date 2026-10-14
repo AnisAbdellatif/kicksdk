@@ -8,6 +8,7 @@ use serde::Serialize;
 /// One piece of a message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Part {
     /// Plain text.
     Text {
@@ -29,16 +30,24 @@ pub enum Part {
 /// emote - back to back or with only whitespace between - becomes one part
 /// with a count, so `KEKW KEKW KEKW` is one emote, ×3. The same emote means
 /// the same id; the name is the first one's.
+///
+/// Linear in the length of `content`, whatever it holds: a name ends at the
+/// first `]` and cannot contain `[`, so no stretch of text is scanned twice.
 pub fn parse(content: &str, combine: bool) -> Vec<Part> {
     let mut parts: Vec<Part> = Vec::new();
     let mut rest = content;
     let mut between = String::new();
     while let Some(start) = rest.find("[emote:") {
         let (before, token) = rest.split_at(start);
-        let Some((id, name, len)) = emote_token(token) else {
-            between.push_str(&rest[..start + 1]);
-            rest = &rest[start + 1..];
-            continue;
+        let (id, name, len) = match emote_token(token) {
+            Token::Emote(id, name, len) => (id, name, len),
+            Token::Not => {
+                between.push_str(&rest[..start + 1]);
+                rest = &rest[start + 1..];
+                continue;
+            }
+            // No `]` anywhere further on: nothing after this can be an emote.
+            Token::Unclosed => break,
         };
         between.push_str(before);
         let same_run = combine
@@ -64,23 +73,42 @@ pub fn parse(content: &str, combine: bool) -> Vec<Part> {
     parts
 }
 
-/// `[emote:<digits>:<name>]` at the start of `s`: (id, name, its length).
-fn emote_token(s: &str) -> Option<(String, String, usize)> {
-    let body = s.strip_prefix("[emote:")?;
-    let colon = body.find(':')?;
-    let id = &body[..colon];
-    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let after = &body[colon + 1..];
-    let close = after.find(']')?;
-    let name = &after[..close];
-    Some((id.to_owned(), name.to_owned(), "[emote:".len() + colon + 1 + close + 1))
+enum Token {
+    /// (id, name, its length).
+    Emote(String, String, usize),
+    /// Not an emote; one may start further on.
+    Not,
+    /// An emote's start, and no `]` anywhere after it.
+    Unclosed,
 }
 
-/// An emote's image.
-pub fn emote_url(id: &str) -> String {
-    format!("https://files.kick.com/emotes/{}/fullsize", crate::http::encode(id))
+/// `[emote:<digits>:<name>]` at the start of `s`. Scans only the id's digits
+/// and the name up to the first `[` or `]`, so the work done on a failed
+/// token is never repeated for the next one.
+fn emote_token(s: &str) -> Token {
+    let Some(body) = s.strip_prefix("[emote:") else { return Token::Not };
+    let digits = body.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 || body.as_bytes().get(digits) != Some(&b':') {
+        return Token::Not;
+    }
+    let after = &body[digits + 1..];
+    match after.find(['[', ']']) {
+        Some(close) if after.as_bytes()[close] == b']' => {
+            Token::Emote(body[..digits].to_owned(), after[..close].to_owned(), "[emote:".len() + digits + 1 + close + 1)
+        }
+        Some(_) => Token::Not,
+        None => Token::Unclosed,
+    }
+}
+
+/// An emote's image. `id` is Kick's emote id (digits); anything else would
+/// not name an emote, and `.`, `..` or an empty id would move the URL's
+/// path, so it is refused.
+pub fn emote_url(id: &str) -> Result<String, crate::Error> {
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(crate::Error::Invalid(format!("emote id {id:?}: digits only")));
+    }
+    Ok(format!("https://files.kick.com/emotes/{id}/fullsize"))
 }
 
 #[cfg(test)]
@@ -111,5 +139,32 @@ mod tests {
             vec![emote("1", "A", 3), text(" "), emote("2", "C", 1), text(" x "), emote("2", "C", 1)]
         );
         assert_eq!(parse("[emote:1:A] [emote:1:A]", false).len(), 3);
+    }
+
+    #[test]
+    fn broken_tokens_stay_text() {
+        assert_eq!(parse("[emote:1:a[emote:2:B]", false), vec![text("[emote:1:a"), emote("2", "B", 1)]);
+        assert_eq!(parse("[emote::x] [emote:1x:y]", false), vec![text("[emote::x] [emote:1x:y]")]);
+        assert_eq!(parse("[emote:1:A] [emote:2:", false), vec![emote("1", "A", 1), text(" [emote:2:")]);
+    }
+
+    #[test]
+    fn unclosed_tokens_take_linear_time() {
+        // Quadratic scanning would take minutes on this; linear is instant.
+        let evil = "[emote:1:".repeat(200_000);
+        let start = std::time::Instant::now();
+        assert_eq!(parse(&evil, true), vec![text(&evil)]);
+        let evil = "[emote:1:a".repeat(200_000) + "]";
+        let parts = parse(&evil, true);
+        assert_eq!(parts.len(), 2);
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn emote_urls_take_digits_only() {
+        assert_eq!(emote_url("37226").unwrap(), "https://files.kick.com/emotes/37226/fullsize");
+        for bad in ["", ".", "..", "1/2", "a"] {
+            assert!(emote_url(bad).is_err(), "{bad:?}");
+        }
     }
 }

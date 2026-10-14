@@ -133,7 +133,7 @@ pub fn call(name: &str, args: &Value) -> Out {
     match name {
         "events.parse" => to(events::parse(a.str("name")?, a.value("data").unwrap_or(&Value::Null))),
         "content.parse" => to(content::parse(a.str("text")?, a.bool("combine"))),
-        "content.emote_url" => to(content::emote_url(a.str("id")?)),
+        "content.emote_url" => ok(content::emote_url(a.str("id")?)),
 
         "realtime.chat_channels" => {
             to(realtime::chat_channels(ChatroomId(a.u64("chatroom_id")?), a.opt_u64("channel_id")?.map(ChannelId)))

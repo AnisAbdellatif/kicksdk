@@ -101,8 +101,8 @@ fn parse_content<'a>(env: Env<'a>, text: &str, combine: bool) -> NifResult<Term<
 }
 
 #[rustler::nif]
-fn emote_url(id: &str) -> String {
-    content::emote_url(id)
+fn emote_url(id: &str) -> NifResult<String> {
+    content::emote_url(id).map_err(|_| rustler::Error::BadArg)
 }
 
 // ---- Realtime ----------------------------------------------------------------

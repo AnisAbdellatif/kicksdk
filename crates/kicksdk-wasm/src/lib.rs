@@ -74,8 +74,8 @@ pub fn parse_content(text: &str, combine: bool) -> Result<JsValue, JsValue> {
 
 /// An emote's image URL.
 #[wasm_bindgen(js_name = emoteUrl)]
-pub fn emote_url(id: &str) -> String {
-    content::emote_url(id)
+pub fn emote_url(id: &str) -> Result<String, JsValue> {
+    content::emote_url(id).map_err(fail)
 }
 
 // ---- Realtime ----------------------------------------------------------------
