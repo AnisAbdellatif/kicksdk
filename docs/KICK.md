@@ -185,6 +185,21 @@ Details worth knowing:
   not signed**: the receiver checks them against the envelope schema.
   Every recorded delivery verified. *(recording)*
 - **The same event can arrive twice**: key on the message id.
+- **What a valid signature proves**: that Kick sent *this body*, at *that
+  timestamp*, under *that message id*, to **some** app. Every app verifies
+  with the same public key, so another app's operator (or anyone holding a
+  delivery Kick sent elsewhere) can replay it to your receiver, and the
+  type, version and subscription-id headers can be changed at will. A
+  receiver should therefore:
+  - refuse a timestamp far from its clock (kicksdk: 5 minutes either way
+    by default; deliveries arrive within a second or two);
+  - keep the message ids it has seen for at least that window and drop
+    repeats (needed for Kick's own duplicates anyway);
+  - read the body by its own shape, not only the type header (kicksdk
+    refuses a body that is not the claimed type's shape; `.new` and
+    `.renewal` subscriptions share one shape and cannot be told apart);
+  - expect the message id to be a ULID and the timestamp RFC 3339: neither
+    can then contain the `.` that separates the signed parts.
 - **Fast**: 0.6 to 0.9s on average from Kick's timestamp to our receipt, for
   every type; an end event arrived 5s after its `ended_at`. *(production,
   recording)*
@@ -328,6 +343,19 @@ key 32cbd69e4b950bf97679 not in this cluster…"}}` and closes. Noticed
   The `data` inside is exactly what Pusher carried, so §6.2–6.4 still hold.
 - **Refusals**: subscribing to `private-chatroom_<id>` as a guest:
   `{"id":N,"error":{"code":103,"message":"permission denied"}}`.
+- **Disconnect and unsubscribe codes** follow Centrifugo's conventions
+  *(Centrifugo docs; Kick's server is Centrifugo 6)*: a disconnect (a
+  `push.disconnect`, or the WebSocket close frame's code) of 3000-3499 or
+  4000-4499 is worth a reconnect, **3500-3999 and 4500-4999 are terminal**
+  (reconnecting as before would be refused again). A refused connect or
+  refresh is worth retrying only for 109 (token expired), an error marked
+  `temporary`, or a transport error. An `unsub` push with a code from
+  **2500 to 2999 asks the client to subscribe again**; kicksdk's session
+  does so itself. None of these has been seen from Kick yet.
+- **No `ping` in the connect reply** means the server will not ping (a
+  Centrifugo server can be set up so); the 25 s silence rule then does not
+  apply, and kicksdk does not close a quiet feed. Kick has always sent
+  `ping: 25` so far.
 - **No validation of ids**: subscribing to `chatrooms.999999999.v2` (no such
   chatroom) succeeds, and nothing ever arrives.
 
@@ -400,7 +428,10 @@ apart** when both channels are tracked; **neither event carries a time**.
 - Both viewer counts were the **hosting channel's own viewer count** at the
   time (the viewers taken along).
 - The hosting side carries the hoster's playback URL: we store only
-  `slug` and `hosted` {slug, username, viewers_count}.
+  `slug` and `hosted` {slug, username, viewers_count}. kicksdk's realtime
+  session removes every `playback_url` from an event's data before handing
+  it on: it is a signed URL for the stream, and nothing read from the feed
+  needs it.
 
 ### 6.4 Moderation and other events
 

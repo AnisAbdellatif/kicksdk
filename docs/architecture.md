@@ -30,6 +30,20 @@ from "Kick changed the shape".
 Every builder takes an `Endpoints`, so any part of Kick can be pointed
 elsewhere: KickTracker's simulator, BetterChat's relay, a proxy.
 
+Builders refuse (`Error::Invalid`) what would make the request a different
+one: a path segment that is empty, `.` or `..` (a URL reads them, and
+`%2e%2e`, as a move up the path, so encoding does not help) and a token
+with a control character (a CR/LF would start a header of its own). The
+builders that can refuse return `Result<Request, Error>`.
+
+Secrets never reach a log by accident: `Debug` hides the `authorization`
+header and a form's `client_secret` in a `Request`, the token in a
+session's connect and refresh frames, and a website channel's signed
+`playback_url`. `Serialize` - what a host sends or a binding returns -
+keeps them, since they are needed there. The realtime session drops
+`playback_url` from event data altogether: nothing read from the feed
+needs it.
+
 ## Lenient parsing, strict types
 
 Kick sends numbers as strings (`"duration": "1200"`, `followers_count` either
@@ -57,14 +71,46 @@ says what is known. A guessed conversion would be wrong for somebody.
 the token, connected, subscribed, an event). It keeps:
 
 - command ids, per connection (a new socket starts at 1 again);
-- which subscriptions are pending, confirmed or refused;
+- which subscriptions are pending, confirmed or refused, subscribing again
+  when Kick asks (unsubscribe codes 2500-2999), and reporting every feed
+  that was subscribed or pending as unsubscribed when the socket closes;
 - the ping interval Kick announced (25 s), and when silence means the
-  connection is dead (that plus a 20 s grace);
+  connection is dead (that plus a 20 s grace) - never, if the server
+  announced no ping;
 - when to ask for a new token (2 minutes before the 45-minute lifetime ends,
   or halfway for a short one).
 
-Reconnecting is the host's: `Backoff` gives the delays (1 s doubling to
-30 s, reset once the chat feed is subscribed).
+What Kick sends is bounded before use (a ping of 1 s to 10 min, a token
+lifetime of 1 s to a day) and time sums saturate, so neither Kick nor a
+host's `now` can overflow them.
+
+Reconnecting is the host's. `Action::Close` says whether it makes sense
+(`reconnect`, from Centrifugo's code ranges: 3500-3999 and 4500-4999 are
+terminal), and `realtime::should_reconnect` answers the same for a close
+code the host's socket reports. `Backoff` gives the delays (1 s doubling to
+30 s, reset once the chat feed is subscribed); `next_delay_jittered` spreads
+them with a random number the host draws, since the core has no randomness
+of its own.
+
+## Webhooks
+
+`webhooks::verify` takes a `PublicKey` read once, the headers, the raw body
+as bytes (a body is verified byte for byte, UTF-8 or not) and a
+`Freshness`: the timestamp must be within 5 minutes of `now` unless the
+caller skips the check explicitly, to re-check stored deliveries. A valid
+signature only means Kick sent that body to some app, since every app
+shares the key; KICK.md §4.3 says what else a receiver should do.
+`webhooks::parse` refuses a body that is not the shape of the type header's
+type, because that header is not signed.
+
+RSA is the `rsa` crate's, pure Rust so it builds for WebAssembly. Its
+advisory RUSTSEC-2023-0071 is a timing side channel in private-key
+operations; kicksdk only verifies, with a public key, so it is not
+affected (`deny.toml` and `.cargo/audit.toml` record the exception). The
+alternatives (ring, aws-lc-rs) bring C and assembly that do not build for
+`wasm32-unknown-unknown`. On that target `rsa` reaches `getrandom` 0.2,
+which the core's Cargo.toml sets to its `js` backend; verifying never
+draws a random number.
 
 ## Bindings
 
@@ -80,7 +126,11 @@ Two ways in:
   modules are thin typed wrappers. A function added to `dispatch` reaches C,
   Dart and Python at once. The cost is a JSON round trip per call: a few
   microseconds, against chat that arrives at most a few hundred times a
-  second.
+  second. Numbers crossing it must be exact integers in range; it refuses
+  rather than rounds or clamps. Its JSON keeps each struct's field order,
+  which needs serde_json's `preserve_order`: the `dispatch` feature turns
+  that on (and the WebAssembly crate does for itself), so a plain Rust
+  user of the core does not get it forced on them.
 
 Per language:
 
