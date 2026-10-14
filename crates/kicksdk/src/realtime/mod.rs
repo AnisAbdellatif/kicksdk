@@ -26,7 +26,7 @@ mod backoff;
 mod session;
 
 pub use backoff::Backoff;
-pub use session::{Action, Session, SessionOptions};
+pub use session::{Action, Session, SessionOptions, should_reconnect};
 
 use crate::http::{self, Endpoints, Error, Method, Request};
 use crate::ids::{ChannelId, ChatroomId};

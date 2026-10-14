@@ -151,6 +151,7 @@ pub fn call(name: &str, args: &Value) -> Out {
             let (s, b) = a.status_body()?;
             ok(realtime::parse_token(s, b))
         }
+        "realtime.should_reconnect" => to(realtime::should_reconnect(a.u16("code")?)),
 
         "public_api.token_request" => {
             to(public_api::token_request(&a.endpoints()?, a.str("client_id")?, a.str("client_secret")?))
@@ -384,6 +385,7 @@ pub const FUNCTIONS: &[&str] = &[
     "realtime.parse_connection",
     "realtime.token_request",
     "realtime.parse_token",
+    "realtime.should_reconnect",
     "public_api.token_request",
     "public_api.parse_token",
     "public_api.livestreams_requests",
