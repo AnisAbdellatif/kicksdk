@@ -21,7 +21,9 @@
 //!
 //! Numbers must be integers in range: `1.0` is 1, but `1.5`, `-1`, `1e30`
 //! or a value too big for its argument is a `call` error, never rounded or
-//! clamped.
+//! clamped. Every argument must be of its type: an optional one may be
+//! left out or null, but a number for `sort` or `"true"` for `combine` is a
+//! `call` error, never taken for "left out".
 //!
 //! Failures come back as a [`DispatchError`]: `kind` is `status` (Kick
 //! answered an error status, in `status`), `shape`, `json`, `invalid`
@@ -88,8 +90,13 @@ impl Args<'_> {
     fn str(&self, key: &str) -> Result<&str, DispatchError> {
         self.value(key)?.as_str().ok_or_else(|| DispatchError::call(format!("`{key}` must be a string")))
     }
-    fn opt_str(&self, key: &str) -> Option<&str> {
-        self.0.get(key).and_then(Value::as_str)
+    /// Left out or null: `None`. Anything but a string is a `call` error,
+    /// never taken for "left out".
+    fn opt_str(&self, key: &str) -> Result<Option<&str>, DispatchError> {
+        match self.0.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => v.as_str().map(Some).ok_or_else(|| DispatchError::call(format!("`{key}` must be a string"))),
+        }
     }
     fn u64(&self, key: &str) -> Result<u64, DispatchError> {
         whole(self.value(key)?).ok_or_else(|| DispatchError::call(format!("`{key}` must be a non-negative integer")))
@@ -112,8 +119,13 @@ impl Args<'_> {
             Some(_) => self.u32(key).map(Some),
         }
     }
-    fn bool(&self, key: &str) -> bool {
-        self.0.get(key).and_then(Value::as_bool).unwrap_or(false)
+    /// Left out or null: false. Anything but a boolean (`"true"`, `1`) is a
+    /// `call` error, never taken for false.
+    fn bool(&self, key: &str) -> Result<bool, DispatchError> {
+        match self.0.get(key) {
+            None | Some(Value::Null) => Ok(false),
+            Some(v) => v.as_bool().ok_or_else(|| DispatchError::call(format!("`{key}` must be a boolean"))),
+        }
     }
     fn strings(&self, key: &str) -> Result<Vec<String>, DispatchError> {
         self.value(key)?
@@ -172,7 +184,7 @@ pub fn call(name: &str, args: &Value) -> Out {
     });
     match name {
         "events.parse" => to(events::parse(a.str("name")?, a.value("data").unwrap_or(&Value::Null))),
-        "content.parse" => to(content::parse(a.str("text")?, a.bool("combine"))),
+        "content.parse" => to(content::parse(a.str("text")?, a.bool("combine")?)),
         "content.emote_url" => ok(content::emote_url(a.str("id")?)),
 
         "realtime.chat_channels" => {
@@ -205,7 +217,7 @@ pub fn call(name: &str, args: &Value) -> Out {
             ok(public_api::livestreams_requests(&a.endpoints()?, a.str("token")?, &ids))
         }
         "public_api.top_livestreams_request" => {
-            let sort = match a.opt_str("sort").unwrap_or("viewer_count") {
+            let sort = match a.opt_str("sort")?.unwrap_or("viewer_count") {
                 "viewer_count" => public_api::Sort::ViewerCount,
                 "started_at" => public_api::Sort::StartedAt,
                 other => return Err(DispatchError::call(format!("unknown sort `{other}`"))),
@@ -214,7 +226,7 @@ pub fn call(name: &str, args: &Value) -> Out {
                 &a.endpoints()?,
                 a.str("token")?,
                 a.opt_u64("category_id")?,
-                a.opt_str("language"),
+                a.opt_str("language")?,
                 sort,
                 a.opt_u32("limit")?.unwrap_or(100),
             ))
@@ -336,7 +348,7 @@ pub fn call(name: &str, args: &Value) -> Out {
                 None => None,
                 Some(r) => Some(website::ReplyTarget {
                     message_id: r.str("message_id")?,
-                    content: r.opt_str("content").unwrap_or(""),
+                    content: r.opt_str("content")?.unwrap_or(""),
                     sender_id: UserId(r.u64("sender_id")?),
                     sender_username: r.str("sender_username")?,
                 }),
@@ -370,7 +382,7 @@ impl Args<'_> {
     /// (a body that is not UTF-8 must come that way to verify).
     fn body(&self) -> Result<Vec<u8>, DispatchError> {
         use base64::Engine;
-        match (self.opt_str("body"), self.opt_str("body_base64")) {
+        match (self.opt_str("body")?, self.opt_str("body_base64")?) {
             (Some(text), None) => Ok(text.as_bytes().to_vec()),
             (None, Some(b64)) => base64::engine::general_purpose::STANDARD
                 .decode(b64.trim())
@@ -384,7 +396,7 @@ impl Args<'_> {
     /// `skip_freshness: true` and neither.
     fn freshness(&self) -> Result<crate::webhooks::Freshness, DispatchError> {
         use crate::webhooks::{DEFAULT_TOLERANCE_SECS, Freshness};
-        if self.bool("skip_freshness") {
+        if self.bool("skip_freshness")? {
             return Ok(Freshness::Skip);
         }
         let now = self.u64("now").map_err(|_| {
@@ -557,6 +569,38 @@ mod tests {
     }
 
     #[test]
+    fn optional_arguments_of_the_wrong_type_are_refused() {
+        let top = |extra: Value| {
+            let mut a = json!({"token": "t"});
+            a.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            call("public_api.top_livestreams_request", &a)
+        };
+        assert!(top(json!({"sort": "started_at", "language": "en"})).is_ok());
+        assert!(top(json!({"sort": null, "language": null})).is_ok());
+        for bad in
+            [json!({"sort": 1}), json!({"sort": ["started_at"]}), json!({"language": 7}), json!({"language": {}})]
+        {
+            assert_eq!(top(bad.clone()).unwrap_err().kind, "call", "{bad}");
+        }
+        assert!(call("content.parse", &json!({"text": "hi", "combine": true})).is_ok());
+        assert!(call("content.parse", &json!({"text": "hi", "combine": null})).is_ok());
+        for bad in [json!("true"), json!(1), json!(0)] {
+            let e = call("content.parse", &json!({"text": "hi", "combine": bad})).unwrap_err();
+            assert_eq!((e.kind, e.message.as_str()), ("call", "`combine` must be a boolean"), "{bad}");
+        }
+        let reply = |content: Value| {
+            call(
+                "website.send_request",
+                &json!({"session": "s", "chatroom_id": 1, "content": "hi", "message_ref": "1",
+                    "reply_to": {"message_id": "m", "content": content, "sender_id": 2, "sender_username": "somechannel"}}),
+            )
+        };
+        assert!(reply(json!("parent")).is_ok());
+        assert!(reply(Value::Null).is_ok());
+        assert_eq!(reply(json!(5)).unwrap_err().kind, "call");
+    }
+
+    #[test]
     fn requests_and_partial_endpoints() {
         let r =
             call("realtime.token_request", &json!({"client_id": "c", "endpoints": {"realtime": "http://x"}})).unwrap();
@@ -597,6 +641,11 @@ mod tests {
             .unwrap_err();
         assert_eq!(e.kind, "webhook");
         let e = call("webhooks.verify", &args(json!({"body": body, "body_base64": b64, "now": 0}))).unwrap_err();
+        assert_eq!(e.kind, "call");
+        // `skip_freshness: "yes"` is neither true nor left out.
+        let e = call("webhooks.verify", &args(json!({"body": body, "skip_freshness": "yes"}))).unwrap_err();
+        assert_eq!((e.kind, e.message.as_str()), ("call", "`skip_freshness` must be a boolean"));
+        let e = call("webhooks.verify", &args(json!({"body": 1, "now": 1_790_217_344}))).unwrap_err();
         assert_eq!(e.kind, "call");
 
         // Signed, but the (unsigned) type header claims another type: not a

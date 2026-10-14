@@ -235,6 +235,13 @@ version stays 0.1.1 until release.
   `Endpoints` fields; an unknown key is a `call` error instead of being
   ignored (a misspelt key would have sent that request to kick.com). A
   `null` value keeps Kick's URL.
+- **Breaking**: optional string and boolean arguments are checked like
+  numbers: a non-string `sort`, `language`, `reply_to.content`, `body` or
+  `body_base64`, or a non-boolean `combine` or `skip_freshness` (`"true"`,
+  `1`), is a `call` error instead of being taken for "left out" (which
+  silently sorted by viewers, dropped the language filter, or checked
+  freshness the host meant to skip). Left out or `null` still means the
+  default.
 
 ### Release
 
@@ -270,6 +277,9 @@ version stays 0.1.1 until release.
   - Numbers must be exact integers in their range (`1.0` is accepted;
     `1.5`, `-1`, `1e30`, 2^32+ for `limit`/`version`/`minutes` are `call`
     errors instead of being rounded or truncated).
+  - Optional strings and booleans must be of their type or null/absent
+    (see Dispatch): pass `None`/`null` for "default", never `""`-for-bool
+    or a number-for-string.
   - Builders listed above under Requests can now fail with kind `invalid`;
     `content.emote_url` too.
   - Session actions: `close` has `code` and `reconnect`; see Realtime.
