@@ -28,14 +28,34 @@ export const REQUIRED_ORIGIN = 'https://kick.com';
 
 let ready = null;
 
-/** Loads the WebAssembly. Safe to call more than once. */
+/**
+ * Loads the WebAssembly. Safe to call more than once; if loading fails, the
+ * next call tries again.
+ */
 export function init(input) {
   if (!ready) {
-    if (input instanceof Uint8Array || input instanceof ArrayBuffer) {
-      initSync({ module: input });
+    const bytes =
+      input instanceof Uint8Array ||
+      input instanceof ArrayBuffer ||
+      (typeof WebAssembly !== 'undefined' && input instanceof WebAssembly.Module);
+    if (bytes) {
+      try {
+        initSync({ module: input });
+      } catch (e) {
+        return Promise.reject(e);
+      }
       ready = Promise.resolve();
     } else {
-      ready = initWasm(input === undefined ? undefined : { module_or_path: input });
+      // A failed load (a fetch that did not get through) is not kept: a
+      // later init() starts over instead of returning the same rejection.
+      const loading = initWasm(input === undefined ? undefined : { module_or_path: input }).then(
+        () => undefined,
+        (e) => {
+          if (ready === loading) ready = null;
+          throw e;
+        }
+      );
+      ready = loading;
     }
   }
   return ready;

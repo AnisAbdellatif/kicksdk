@@ -4,8 +4,14 @@ import type { Endpoints } from './pkg/kicksdk.js';
 /** The Origin Kick's realtime server accepts. */
 export const REQUIRED_ORIGIN: 'https://kick.com';
 
-/** Loads the WebAssembly: a URL, a Response, or the .wasm bytes. */
-export function init(input?: string | URL | Request | Response | BufferSource): Promise<void>;
+/**
+ * Loads the WebAssembly: a URL, a Response (or a promise of one), the .wasm
+ * bytes or a compiled module. Safe to call more than once; after a failure,
+ * the next call tries again.
+ */
+export function init(
+  input?: string | URL | Request | Response | Promise<Response> | BufferSource | WebAssembly.Module
+): Promise<void>;
 
 export interface ChatEvent {
   /** The feed it came on, e.g. `chatrooms.668.v2`. */
