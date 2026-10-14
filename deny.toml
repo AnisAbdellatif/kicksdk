@@ -1,0 +1,13 @@
+# cargo-deny: `cargo deny check advisories`.
+
+[advisories]
+ignore = [
+    # rsa: the Marvin attack, a timing side channel in operations with the
+    # private key (decrypting, signing). kicksdk only verifies webhook
+    # signatures, with Kick's public key; it never holds a private key, and
+    # verification is not affected. No fixed rsa release exists yet; when one
+    # does, take it and drop this entry. The alternatives (ring, aws-lc-rs)
+    # bring C and assembly that do not build for wasm32-unknown-unknown.
+    # See crates/kicksdk/src/webhooks.rs and docs/architecture.md.
+    { id = "RUSTSEC-2023-0071", reason = "verify-only use of rsa: no private key, not affected" },
+]

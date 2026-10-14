@@ -1,0 +1,5 @@
+# cargo-audit. The same exception as deny.toml, with the reason there:
+# kicksdk uses rsa to verify signatures only, never with a private key,
+# so RUSTSEC-2023-0071 (a private-key timing side channel) does not apply.
+[advisories]
+ignore = ["RUSTSEC-2023-0071"]
