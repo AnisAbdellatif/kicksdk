@@ -16,8 +16,11 @@ defmodule Kicksdk.Realtime.Session do
     * `"event"` - with `"channel"` (the feed), `"name"` (Kick's event name),
       `"data"` (as Kick sent it) and `"event"` (typed, as in `Kicksdk.Events`).
 
-  The session reads no clock and sets no timer: pass `now` (milliseconds,
-  monotonic is fine) to every call, and call `tick/2` when `deadline/1` comes.
+  The session reads no clock and sets no timer: pass `now` in milliseconds to
+  every call - any integer clock, `System.monotonic_time(:millisecond)` (which
+  is usually negative) included, as long as it is the same one throughout - and
+  call `tick/2` when `deadline/1` comes. `deadline/1` is on that same clock:
+  `Process.send_after(self(), :tick, max(deadline - now, 0))`.
 
       session = Session.new(Kicksdk.Realtime.chat_channels(chatroom_id, channel_id))
       # socket opened
@@ -45,23 +48,23 @@ defmodule Kicksdk.Realtime.Session do
   def new(channels), do: Kicksdk.Native.session_new(channels)
 
   @doc "The socket opened."
-  @spec open(t(), String.t(), non_neg_integer()) :: [action()]
+  @spec open(t(), String.t(), integer()) :: [action()]
   def open(s, token, now), do: Kicksdk.Native.session_open(s, token, now)
 
   @doc "A text frame arrived."
-  @spec receive(t(), String.t(), non_neg_integer()) :: [action()]
+  @spec receive(t(), binary(), integer()) :: [action()]
   def receive(s, text, now), do: Kicksdk.Native.session_receive(s, text, now)
 
   @doc "A new token, after a `\"refresh_token\"` action."
-  @spec refresh(t(), String.t(), non_neg_integer()) :: [action()]
+  @spec refresh(t(), String.t(), integer()) :: [action()]
   def refresh(s, token, now), do: Kicksdk.Native.session_refresh(s, token, now)
 
   @doc "The clock reached `deadline/1`."
-  @spec tick(t(), non_neg_integer()) :: [action()]
+  @spec tick(t(), integer()) :: [action()]
   def tick(s, now), do: Kicksdk.Native.session_tick(s, now)
 
-  @doc "When to call `tick/2` next, or nil."
-  @spec deadline(t()) :: non_neg_integer() | nil
+  @doc "When to call `tick/2` next, on the clock `now` is given in, or nil."
+  @spec deadline(t()) :: integer() | nil
   def deadline(s), do: Kicksdk.Native.session_deadline(s)
 
   @doc "The socket closed: reports every feed as unsubscribed, and readies the session for `open/3`."

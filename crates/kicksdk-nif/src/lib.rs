@@ -256,7 +256,31 @@ fn parse_token<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResul
     parsed(env, status, &body, |s, b| realtime::parse_token(s, b))
 }
 
-struct SessionResource(Mutex<realtime::Session>);
+/// A session and the clock it is driven by.
+///
+/// The core counts time in unsigned milliseconds; a host's clock need not
+/// (`System.monotonic_time/1` is usually negative). The first `now` a
+/// session is given becomes its zero, every `now` after it reaches the core
+/// relative to that, and `deadline/1` adds it back.
+struct SessionState {
+    session: realtime::Session,
+    zero: Option<i64>,
+}
+
+impl SessionState {
+    /// The host's `now` on the core's clock (an earlier time counts as 0).
+    fn at(&mut self, now: i64) -> u64 {
+        let zero = *self.zero.get_or_insert(now);
+        u64::try_from(i128::from(now) - i128::from(zero)).unwrap_or(0)
+    }
+
+    /// The core's time on the host's clock.
+    fn host(&self, t: u64) -> i64 {
+        i64::try_from(i128::from(self.zero.unwrap_or(0)) + i128::from(t)).unwrap_or(i64::MAX)
+    }
+}
+
+struct SessionResource(Mutex<SessionState>);
 
 #[rustler::resource_impl]
 impl Resource for SessionResource {}
@@ -266,34 +290,38 @@ const POISONED: &str = "kicksdk: this realtime session panicked in an earlier ca
 
 /// The session, unless a panic in an earlier call poisoned it: its state may
 /// be half-changed then, so it is refused until `closed/1` resets it.
-fn lock(m: &Mutex<realtime::Session>) -> NifResult<MutexGuard<'_, realtime::Session>> {
+fn lock(m: &Mutex<SessionState>) -> NifResult<MutexGuard<'_, SessionState>> {
     m.lock().map_err(|_| runtime_error(POISONED))
 }
 
 /// The session even if poisoned, for `closed/1`, which resets every part of
 /// its state that a connection uses; the lock is usable again afterwards.
-fn lock_to_reset(m: &Mutex<realtime::Session>) -> MutexGuard<'_, realtime::Session> {
+fn lock_to_reset(m: &Mutex<SessionState>) -> MutexGuard<'_, SessionState> {
     let guard = m.lock().unwrap_or_else(PoisonError::into_inner);
     m.clear_poison();
     guard
 }
 
-fn with<'a, F>(env: Env<'a>, s: &ResourceArc<SessionResource>, f: F) -> NifResult<Term<'a>>
+/// Runs `f` on the session with `now` on the core's clock.
+fn with<'a, F>(env: Env<'a>, s: &ResourceArc<SessionResource>, now: i64, f: F) -> NifResult<Term<'a>>
 where
-    F: FnOnce(&mut realtime::Session) -> Vec<realtime::Action>,
+    F: FnOnce(&mut realtime::Session, u64) -> Vec<realtime::Action>,
 {
-    term(env, &f(&mut *lock(&s.0)?))
+    let mut state = lock(&s.0)?;
+    let now = state.at(now);
+    term(env, &f(&mut state.session, now))
 }
 
 #[rustler::nif]
 fn session_new(channels: Vec<String>) -> ResourceArc<SessionResource> {
-    ResourceArc::new(SessionResource(Mutex::new(realtime::Session::new(realtime::SessionOptions::new(channels)))))
+    let session = realtime::Session::new(realtime::SessionOptions::new(channels));
+    ResourceArc::new(SessionResource(Mutex::new(SessionState { session, zero: None })))
 }
 
 #[rustler::nif]
-fn session_open<'a>(env: Env<'a>, s: ResourceArc<SessionResource>, token: Binary<'a>, now: u64) -> NifResult<Term<'a>> {
+fn session_open<'a>(env: Env<'a>, s: ResourceArc<SessionResource>, token: Binary<'a>, now: i64) -> NifResult<Term<'a>> {
     let token = text(&token, "the token")?;
-    with(env, &s, |x| x.open(token, now))
+    with(env, &s, now, |x, now| x.open(token, now))
 }
 
 /// A frame is lines of JSON. A line that is not UTF-8 is skipped like one
@@ -303,7 +331,7 @@ fn session_receive<'a>(
     env: Env<'a>,
     s: ResourceArc<SessionResource>,
     frame: Binary<'a>,
-    now: u64,
+    now: i64,
 ) -> NifResult<Term<'a>> {
     let owned;
     let frame = match std::str::from_utf8(&frame) {
@@ -314,7 +342,7 @@ fn session_receive<'a>(
             &owned
         }
     };
-    with(env, &s, |x| x.receive(frame, now))
+    with(env, &s, now, |x, now| x.receive(frame, now))
 }
 
 #[rustler::nif]
@@ -322,36 +350,38 @@ fn session_refresh<'a>(
     env: Env<'a>,
     s: ResourceArc<SessionResource>,
     token: Binary<'a>,
-    now: u64,
+    now: i64,
 ) -> NifResult<Term<'a>> {
     let token = text(&token, "the token")?;
-    with(env, &s, |x| x.refresh(token, now))
+    with(env, &s, now, |x, now| x.refresh(token, now))
 }
 
 #[rustler::nif]
-fn session_tick<'a>(env: Env<'a>, s: ResourceArc<SessionResource>, now: u64) -> NifResult<Term<'a>> {
-    with(env, &s, |x| x.tick(now))
+fn session_tick<'a>(env: Env<'a>, s: ResourceArc<SessionResource>, now: i64) -> NifResult<Term<'a>> {
+    with(env, &s, now, |x, now| x.tick(now))
 }
 
 #[rustler::nif]
 fn session_closed<'a>(env: Env<'a>, s: ResourceArc<SessionResource>) -> NifResult<Term<'a>> {
-    term(env, &lock_to_reset(&s.0).closed())
+    term(env, &lock_to_reset(&s.0).session.closed())
 }
 
+/// On the host's clock, the one `now` is given in.
 #[rustler::nif]
-fn session_deadline(s: ResourceArc<SessionResource>) -> NifResult<Option<u64>> {
-    Ok(lock(&s.0)?.deadline())
+fn session_deadline(s: ResourceArc<SessionResource>) -> NifResult<Option<i64>> {
+    let state = lock(&s.0)?;
+    Ok(state.session.deadline().map(|t| state.host(t)))
 }
 
 #[rustler::nif]
 fn session_subscribed(s: ResourceArc<SessionResource>, channel: Binary) -> NifResult<bool> {
     let channel = text(&channel, "the channel")?;
-    Ok(lock(&s.0)?.is_subscribed(channel))
+    Ok(lock(&s.0)?.session.is_subscribed(channel))
 }
 
 #[rustler::nif]
 fn session_connected(s: ResourceArc<SessionResource>) -> NifResult<bool> {
-    Ok(lock(&s.0)?.is_connected())
+    Ok(lock(&s.0)?.session.is_connected())
 }
 
 // ---- Official API ------------------------------------------------------------
@@ -645,9 +675,28 @@ rustler::init!("Elixir.Kicksdk.Native");
 mod tests {
     use super::*;
 
+    fn state() -> SessionState {
+        SessionState { session: realtime::Session::new(realtime::SessionOptions::new(vec![])), zero: None }
+    }
+
+    #[test]
+    fn a_negative_clock_is_counted_from_its_first_reading() {
+        let start = -576_460_752_303_i64;
+        let mut s = state();
+        assert_eq!(s.at(start), 0);
+        assert_eq!(s.at(start + 25_000), 25_000);
+        // Earlier than the first reading: the core's zero, never a wrap.
+        assert_eq!(s.at(start - 1), 0);
+        assert_eq!(s.host(25_000), start + 25_000);
+        let mut far = state();
+        assert_eq!(far.at(i64::MIN), 0);
+        assert_eq!(far.at(i64::MAX), u64::MAX);
+        assert_eq!(far.host(u64::MAX), i64::MAX);
+    }
+
     #[test]
     fn a_poisoned_session_is_refused_until_reset() {
-        let m = std::sync::Arc::new(Mutex::new(realtime::Session::new(realtime::SessionOptions::new(vec![]))));
+        let m = std::sync::Arc::new(Mutex::new(state()));
         let m2 = m.clone();
         let _ = std::thread::spawn(move || {
             let _guard = m2.lock().unwrap();
@@ -655,7 +704,7 @@ mod tests {
         })
         .join();
         assert!(m.lock().is_err());
-        let _ = lock_to_reset(&m).closed();
+        let _ = lock_to_reset(&m).session.closed();
         assert!(m.lock().is_ok());
     }
 }
