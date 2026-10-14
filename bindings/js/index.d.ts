@@ -75,6 +75,11 @@ export interface ChatSocket {
  */
 export type ChatSocketConstructor = new (url: string, options?: any) => ChatSocket;
 
+/**
+ * connectChat's options. Every optional one may be left out or given as
+ * undefined (as a `Partial<>` or optional config carries it), with the same
+ * meaning.
+ */
 export interface ChatOptions {
   /** The chatroom (website API `chatroom.id`). */
   chatroomId: number;
@@ -90,19 +95,23 @@ export interface ChatOptions {
   /** An event on a feed. */
   onEvent(e: ChatEvent): void;
   /** The connection or its subscriptions changed. */
-  onState?(s: ChatState): void;
-  /** A connection, or an attempt at one, ended. */
-  onDrop?(reason: string, drop: ChatDrop): void;
-  /** A callback above threw. Default: console.error. The connection carries on either way. */
-  onError?(error: unknown): void;
-  fetch?: typeof fetch;
+  onState?: ((s: ChatState) => void) | undefined;
+  /** A connection, or an attempt at one, ended; another follows after `drop.waitMs`. */
+  onDrop?: ((reason: string, drop: ChatDrop) => void) | undefined;
+  /**
+   * A callback above threw, or `now` gave a reading it cannot use. Default:
+   * console.error. The connection carries on either way.
+   */
+  onError?: ((error: unknown) => void) | undefined;
+  /** The fetch to make Kick's requests with. Default: the global fetch. */
+  fetch?: typeof fetch | undefined;
   /**
    * The WebSocket class, where the runtime has none (Node before 22: pass the
    * `ws` package's). Default: the global WebSocket.
    */
   WebSocket?: ChatSocketConstructor | undefined;
   /** Opens the socket yourself, instead of `WebSocket`. */
-  createSocket?(url: string): ChatSocket;
+  createSocket?: ((url: string) => ChatSocket) | undefined;
   /** Kick's URLs to use instead; a key left out or undefined stays Kick's. */
   endpoints?: Endpoints | undefined;
   /**
@@ -111,7 +120,7 @@ export interface ChatOptions {
    * `Number.MAX_SAFE_INTEGER` (or a throw) is reported to `onError` once,
    * and connectChat carries on with `performance.now()`.
    */
-  now?(): number;
+  now?: (() => number) | undefined;
   /**
    * How long a request, or the WebSocket handshake, may take, ms: above 0
    * and at most 2147483647 (setTimeout's limit; there is no "no timeout").

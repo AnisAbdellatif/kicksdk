@@ -67,7 +67,11 @@ export async function main(pem: string, body: Uint8Array, headers: Headers): Pro
     channels: feeds,
     endpoints: { realtime: config.realtime },
     onEvent: ({ channel, event }) => console.log(channel, event.type),
-    onState: (s: ChatState) => console.log(s.connected, s.subscribed),
+    onState: (s: ChatState) => {
+      console.log(s.connected, s.subscribed);
+      // @ts-expect-error nothing stops connectChat but close(): there is no `stopped`
+      void s.stopped;
+    },
     onDrop: (reason: string, drop: ChatDrop) => {
       if (drop.terminal) console.warn(reason, drop.code, `back in ${drop.waitMs} ms`);
     },
@@ -79,6 +83,27 @@ export async function main(pem: string, body: Uint8Array, headers: Headers): Pro
   });
   chat.close();
   kick.connectChat({ chatroomId: 668, onEvent() {}, createSocket: (url) => new WebSocket(url) }).close();
+
+  // Every optional option given as undefined, as optional config passes them
+  // on (exactOptionalPropertyTypes is on).
+  const optional: { onDrop?: (reason: string, drop: ChatDrop) => void; timeoutMs?: number } = {};
+  kick
+    .connectChat({
+      chatroomId: 668,
+      onEvent() {},
+      channelId: undefined,
+      channels: undefined,
+      onState: undefined,
+      onDrop: optional.onDrop,
+      onError: undefined,
+      fetch: undefined,
+      WebSocket: undefined,
+      createSocket: undefined,
+      endpoints: undefined,
+      now: undefined,
+      timeoutMs: optional.timeoutMs
+    })
+    .close();
 
   // A WebSocket class shaped like the `ws` package's.
   class WsLike {
