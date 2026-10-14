@@ -15,9 +15,15 @@ if (!slug) {
   process.exit(1);
 }
 
-const req = kick.channelRequest(slug);
-const res = await fetch(req.url, { headers: { 'user-agent': 'Mozilla/5.0' } });
-const channel = kick.parseChannel(res.status, await res.text());
+let channel;
+try {
+  const req = kick.channelRequest(slug);
+  const res = await fetch(req.url, { headers: { 'user-agent': 'Mozilla/5.0' } });
+  channel = kick.parseChannel(res.status, await res.text());
+} catch (e) {
+  console.error(`${slug}: ${e.message}`);
+  process.exit(1);
+}
 
 const chat = kick.connectChat({
   chatroomId: channel.chatroom_id,
