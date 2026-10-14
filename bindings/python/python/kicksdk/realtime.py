@@ -55,17 +55,27 @@ def retry_after_ms(code: int) -> int:
     return _call("realtime.retry_after_ms", code=code)
 
 
+#: The least wait, in ms, after a terminal close (a ban, a refused token, a
+#: connection limit): 300000, 5 minutes. :meth:`Backoff.next_delay_for`
+#: lengthens it for terminal closes in a row.
+TERMINAL_RETRY_MS: int = retry_after_ms(3500)
+
+
 class Session:
     """One connection's worth of Kick's Centrifugo protocol.
 
     Each method returns the actions to carry out, dicts with an ``action``:
 
     - ``send`` (``text``): send this frame;
-    - ``close`` (``code``, ``reason``, ``reconnect``): close the socket and
-      call :meth:`closed`; open a new connection (with a new token, after a
-      :class:`Backoff` delay) only if ``reconnect`` is true. ``code`` is
-      Kick's disconnect code, Kick's error code for a refused connect or
-      refresh, or 0 when the session gave up (silence);
+    - ``close`` (``code``, ``reason``, ``terminal``, ``retry_after_ms``):
+      close the socket, call :meth:`closed`, wait
+      ``backoff.next_delay_for(retry_after_ms, random.random())`` ms and open
+      a new connection with a new token. ``terminal`` (Kick refused this
+      client: a ban, a bad token, a limit) asks for a **new client id** too,
+      and comes with ``retry_after_ms`` :data:`TERMINAL_RETRY_MS`; it is
+      never a reason to stop for good (KICK.md §6.1). ``code`` is Kick's
+      disconnect code, Kick's error code for a refused connect or refresh,
+      or 0 when the session gave up (silence);
     - ``refresh_token``: fetch a token for the same client id and pass it to
       :meth:`refresh`. If that fails, carry on: Kick ends the connection when
       the old token runs out, and the reconnect gets a new one;
@@ -122,6 +132,10 @@ class Backoff:
     step; :meth:`next_delay_jittered` spreads them::
 
         await asyncio.sleep(backoff.next_delay_jittered(random.random()) / 1000)
+
+    After a close, :meth:`next_delay_for` takes the close's
+    ``retry_after_ms`` and keeps a second, slower stage for terminal closes
+    (5, 10, 20, then 30 minutes).
     """
 
     def __init__(self, initial: float = 1.0, maximum: float = 30.0) -> None:
@@ -130,13 +144,23 @@ class Backoff:
 
     @property
     def initial(self) -> float:
-        """The first wait, seconds."""
+        """The first wait, seconds. Setting it takes effect at once as the
+        shortest wait, and as the first one after :meth:`reset`."""
         return self._b.initial_ms / 1000
+
+    @initial.setter
+    def initial(self, seconds: float) -> None:
+        self._b.initial_ms = _ms(seconds)
 
     @property
     def maximum(self) -> float:
-        """The longest wait, seconds."""
+        """The longest wait, seconds (of the ordinary stage). Setting it
+        takes effect at once."""
         return self._b.max_ms / 1000
+
+    @maximum.setter
+    def maximum(self, seconds: float) -> None:
+        self._b.max_ms = _ms(seconds)
 
     def next(self) -> float:
         """The next wait in seconds, without jitter; the one after is longer."""
@@ -152,8 +176,23 @@ class Backoff:
         Out of range is clamped. Never less than 1 ms."""
         return self._b.next_delay_jittered(float(random))
 
+    def next_delay_for(self, retry_after_ms: int, random: float) -> int:
+        """The wait in milliseconds after a close that asks for at least
+        ``retry_after_ms`` (a session ``close`` action's, or
+        :func:`retry_after_ms` of the socket's close code), spread by
+        ``random`` from [0, 1).
+
+        0 (an ordinary drop) is :meth:`next_delay_jittered`. More (a
+        terminal close) is ``retry_after_ms`` doubled for each terminal close
+        before it since the last :meth:`reset`, at most six times it, plus
+        ``random`` times a quarter of that: 300000, 600000, 1200000, 1800000,
+        1800000 … ms from Kick's 5 minutes and ``random`` 0. The ordinary
+        stage is left as it was."""
+        return self._b.next_delay_for(retry_after_ms, float(random))
+
     def reset(self) -> None:
-        """A connection worked: the next failure starts from the beginning."""
+        """The chat feed is subscribed: the next failure starts from the
+        beginning, and so does the next terminal close."""
         self._b.reset()
 
 

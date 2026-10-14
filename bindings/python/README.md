@@ -25,16 +25,21 @@ async def main():
 asyncio.run(main())
 ```
 
-`connect_chat` reconnects by itself (jittered backoff) after network errors,
-5xx answers and dropped sockets; a failed token refresh keeps the connection.
-The `async for` raises `kicksdk.aio.ChatClosed` when Kick ends the chat for
-good (a ban, a terminal close code) and `kicksdk.aio.ChatRefused` after
-`max_refusals` (5) refused attempts in a row (a 403, say), then ends; it also
-ends with the `async with` block, which closes the socket normally. Events
-the consumer has not read wait in a buffer of `max_queue` (10,000); when it
-is full, `overflow="drop_oldest"` (the default) drops the oldest and counts
-them in `chat.dropped`, and `overflow="backpressure"` stops reading the
-socket until there is room. The `kicksdk.aio` module docs have the details.
+`connect_chat` reconnects by itself until the `async with` block ends, which
+closes the socket normally. After network errors, 5xx answers and dropped
+sockets it waits a jittered backoff (1 s doubling to 30 s); when Kick refuses
+the client (a ban, a refused token, a terminal close code), or after
+`max_refusals` (5) refused attempts in a row (a 403, say), it waits 5 minutes
+or more (10, 20, then 30 for more in a row) and comes back as a new client.
+Only an unexpected error (a bug) ends it early, raised by the `async for`.
+`chat.last_drop` says why the last connection ended and how long the wait
+is, `chat.retrying` whether it is waiting now, and the `kicksdk.aio` logger
+reports each drop. A failed token refresh keeps
+the connection. Events the consumer has not read wait in a buffer of
+`max_queue` (10,000); when it is full, `overflow="drop_oldest"` (the
+default) drops the oldest and counts them in `chat.dropped`, and
+`overflow="backpressure"` stops reading the socket until there is room. The
+`kicksdk.aio` module docs have the details.
 
 Everything else returns `kicksdk.Request` objects for any HTTP client and
 parses what comes back (`kicksdk.website.channel_request` /

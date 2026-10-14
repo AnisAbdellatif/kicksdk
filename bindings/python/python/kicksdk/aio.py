@@ -10,28 +10,36 @@
 Each item is an ``event`` action of :class:`kicksdk.realtime.Session`
 (``channel``, ``name``, ``data``, ``event``).
 
-**Staying connected.** The feed reconnects, after a jittered backoff (1 s
-doubling to 30 s, back to 1 s once the chat feed is subscribed), from
-anything that may pass: a network error or timeout, an HTTP 5xx, 408 or
-429, a socket dropped with a code :func:`kicksdk.realtime.should_reconnect`
-allows, Kick ending the connection with ``reconnect`` true, or the session
-finding it silent. A failed token refresh keeps the connection up: Kick
-ends it when the old token runs out, and the reconnect gets a new one.
+**Staying connected.** The feed never gives up on its own: it reconnects
+until the ``async with`` block ends (KICK.md §6.1). How long it waits first
+depends on how the connection, or the attempt at one, ended:
 
-**Stopping.** The ``async for`` raises, after the events received before,
-when going on would not help:
+- a network error or timeout, an HTTP error, a socket closed with an
+  ordinary code, Kick ending the connection for a reason that may pass, or
+  the session finding it silent: a jittered backoff, 1 s doubling to 30 s;
+- a **terminal** close, Kick refusing this client (a disconnect or socket
+  close code 3500-3999 or 4500-4999, a refused token: a ban, a connection
+  limit): at least 5 minutes, then 10, 20 and 30 for more in a row, plus up
+  to a quarter at random; the next connection is made as a new client (a
+  new client id, so a new guest token);
+- ``max_refusals`` (5) attempts refused in a row (an HTTP 4xx such as a 403
+  on the WebSocket handshake, or an answer kicksdk cannot read): that
+  attempt and every refused one after it count as terminal, until one is
+  not refused.
 
-- :class:`ChatClosed`: Kick closed the connection for good (a session
-  ``close`` with ``reconnect`` false, or a terminal socket close code,
-  3500-3999 or 4500-4999), e.g. a ban or a refused token;
-- :class:`ChatRefused`: ``max_refusals`` attempts in a row were refused - an
-  HTTP 4xx such as a 403 on the WebSocket handshake, or an answer kicksdk
-  cannot read - the last error is its ``__cause__``;
-- anything else unexpected (a bug, arguments that do not fit) as itself.
+The chat feed subscribing ends a streak of terminal closes, and the waits
+start from the beginning again. A failed token refresh keeps
+the connection up: Kick ends it when the old token runs out, and the
+reconnect gets a new one. :attr:`ChatFeed.last_drop` says why the last
+connection ended and how long the feed waits; :attr:`ChatFeed.retrying` is
+true while it waits. Terminal closes are logged as warnings, other drops as
+info (logger ``kicksdk.aio``).
 
-Then, and once the ``async with`` block has ended, iteration stops: it never
-waits on a feed that is gone. :attr:`ChatFeed.error` keeps the error.
-Leaving the block closes the socket normally (1000).
+**Stopping.** Iteration ends with the ``async with`` block, which closes the
+socket normally (1000) and returns once the feed has stopped. Only an
+unexpected error (a bug, arguments that do not fit) ends the feed before
+that: the ``async for`` raises it, after the events received before, then
+stops; :attr:`ChatFeed.error` keeps it.
 
 **Slow consumers.** Events wait for the ``async for`` in a buffer of
 ``max_queue`` (10,000; ``None`` for no limit). When it is full, ``overflow``
@@ -51,11 +59,12 @@ from __future__ import annotations
 import asyncio
 import collections
 import contextlib
+import dataclasses
 import logging
 import random
 import time
 import uuid
-from typing import Any, Deque, Dict, Mapping, Optional
+from typing import Any, Deque, Dict, Mapping, Optional, Union
 
 try:
     import httpx
@@ -78,7 +87,7 @@ except ImportError as e:
 from . import KickError, Request
 from . import realtime as rt
 
-__all__ = ["connect_chat", "ChatFeed", "ChatError", "ChatClosed", "ChatRefused", "Event"]
+__all__ = ["connect_chat", "ChatFeed", "ChatDrop", "Event"]
 
 Event = Dict[str, Any]
 """An ``event`` action: ``{"action": "event", "channel", "name", "data", "event"}``."""
@@ -88,32 +97,28 @@ log = logging.getLogger("kicksdk.aio")
 OVERFLOW = ("drop_oldest", "backpressure")
 
 
-class ChatError(Exception):
-    """The chat feed stopped for good; see :class:`ChatClosed` and
-    :class:`ChatRefused`."""
+@dataclasses.dataclass(frozen=True)
+class ChatDrop:
+    """Why a connection, or an attempt at one, ended, and how long the feed
+    waits before the next."""
 
-
-class ChatClosed(ChatError):
-    """Kick closed the connection and a new one would be refused the same way.
-
-    ``code`` is Kick's disconnect or error code, or the socket's close code;
-    ``reason`` says why."""
-
-    def __init__(self, code: int, reason: str) -> None:
-        super().__init__(f"Kick closed the chat for good: {code} {reason}".rstrip())
-        self.code = code
-        self.reason = reason
-
-
-class ChatRefused(ChatError):
-    """``attempts`` connection attempts in a row were refused (an HTTP 4xx,
-    or an answer kicksdk cannot read). ``status`` is the last HTTP status, if
-    there was one; the last error is ``__cause__``."""
-
-    def __init__(self, attempts: int, last: BaseException) -> None:
-        super().__init__(f"Kick refused {attempts} connection attempts in a row; the last: {_describe(last)}")
-        self.attempts = attempts
-        self.status = _status_of(last)
+    reason: str
+    """What happened, readable."""
+    code: int
+    """Kick's disconnect or error code, the socket's close code (1006: the
+    network dropped), or 0 (a failed request or handshake, silence)."""
+    terminal: bool
+    """Kick refused this client (or ``max_refusals`` attempts in a row were
+    refused): the next connection is made with a new client id."""
+    retry_after_ms: int
+    """The least wait asked for, ms: 0 (the ordinary backoff), or
+    :data:`kicksdk.realtime.TERMINAL_RETRY_MS` for a terminal close."""
+    wait: float = 0.0
+    """How long the feed waits before reconnecting, seconds."""
+    status: Optional[int] = None
+    """The HTTP status of a refused request or WebSocket handshake."""
+    error: Optional[BaseException] = None
+    """The exception that ended the attempt, if one did."""
 
 
 def _now() -> int:
@@ -149,8 +154,9 @@ def _by_status(status: Optional[int]) -> str:
 
 def _failure(e: BaseException) -> Optional[str]:
     """How a failed attempt counts: ``retry`` (it may pass), ``refused`` (it
-    may well not: give up after a few in a row), or None: not a connection
-    problem at all, so it is raised."""
+    may well not: after ``max_refusals`` in a row, wait as long as for a
+    terminal close), or None: not a connection problem at all, so it is
+    raised."""
     if isinstance(e, KickError):
         if e.kind == "status":
             return _by_status(e.status)
@@ -170,6 +176,14 @@ def _failure(e: BaseException) -> Optional[str]:
     return None
 
 
+def _closed_by_socket(e: ConnectionClosed) -> ChatDrop:
+    """The socket closed by itself, seen by a receive or a send: its close
+    code decides (:func:`kicksdk.realtime.retry_after_ms`)."""
+    code, reason = (e.rcvd.code, e.rcvd.reason) if e.rcvd is not None else (1006, "")
+    retry_after = rt.retry_after_ms(code)
+    return ChatDrop(reason or f"the socket closed ({code})", code, retry_after > 0, retry_after)
+
+
 class ChatFeed:
     """The connection :func:`connect_chat` keeps up; iterate it for events.
 
@@ -187,6 +201,7 @@ class ChatFeed:
         overflow: str = "drop_oldest",
         max_refusals: int = 5,
         http: Optional[httpx.AsyncClient] = None,
+        backoff: Optional[rt.Backoff] = None,
     ) -> None:
         if overflow not in OVERFLOW:
             raise ValueError(f"overflow must be one of {OVERFLOW}, not {overflow!r}")
@@ -200,30 +215,44 @@ class ChatFeed:
         self.max_queue = max_queue
         self.overflow = overflow
         self.max_refusals = max_refusals
+        #: The reconnect delays (:class:`kicksdk.realtime.Backoff`).
+        self.backoff: rt.Backoff = backoff if backoff is not None else rt.Backoff()
         #: The feeds subscribed right now.
         self.subscribed: set[str] = set()
         #: Events dropped because the buffer was full (``drop_oldest``).
         self.dropped = 0
+        #: How the last connection, or attempt at one, ended; None before.
+        self.last_drop: Optional[ChatDrop] = None
         self._http = http
         self._buf: Deque[Event] = collections.deque()
         self._task: Optional[asyncio.Task[None]] = None
         self._ready: Optional[asyncio.Event] = None
         self._room: Optional[asyncio.Event] = None
         self._done = False
+        self._stopping = False  # the block has ended: the task must stop
+        self._closing = False  # the task is closing its socket or client: no cancel then
+        self._retrying = False
         self._error: Optional[BaseException] = None
         self._error_raised = False
         self._refusals = 0
 
     @property
     def error(self) -> Optional[BaseException]:
-        """Why the feed stopped on its own (:class:`ChatError`, or an
-        unexpected error); None while it runs or if the block ended it."""
+        """The unexpected error that stopped the feed; None while it runs or
+        if the block ended it."""
         return self._error
 
     @property
     def done(self) -> bool:
-        """The feed has stopped: its error, or the end of the block."""
+        """The feed has stopped: an unexpected error, or the end of the
+        block."""
         return self._done
+
+    @property
+    def retrying(self) -> bool:
+        """The feed is waiting to reconnect (:attr:`last_drop` says how
+        long, and why)."""
+        return self._retrying
 
     async def __aenter__(self) -> ChatFeed:
         if self._task is not None or self._done:
@@ -234,11 +263,25 @@ class ChatFeed:
         return self
 
     async def __aexit__(self, *exc: object) -> None:
+        self._stopping = True
+        if self._room is not None:
+            self._room.set()
         task = self._task
-        if task is not None and not task.done():
-            # The task closes its socket normally (1000) on the way out.
-            task.cancel()
-            await asyncio.wait({task})
+        if task is not None:
+            try:
+                # One cancel is not always enough: before Python 3.12 a
+                # wait_for anywhere below (in websockets, say) can swallow it.
+                # So cancel until the task ends; it also checks _stopping at
+                # each step. Not while it is closing a socket (or its HTTP
+                # client): that is how it ends, and a cancel would cut the
+                # close (1000) short.
+                while not task.done():
+                    if not self._closing:
+                        task.cancel()
+                    await asyncio.wait({task}, timeout=0.1)
+            except asyncio.CancelledError:
+                task.cancel()
+                raise
         self._buf.clear()
         self._finish()
 
@@ -263,10 +306,15 @@ class ChatFeed:
 
     def _finish(self) -> None:
         self._done = True
+        self._retrying = False
         if self._ready is not None:
             self._ready.set()
         if self._room is not None:
             self._room.set()
+
+    def _check_stop(self) -> None:
+        if self._stopping:
+            raise asyncio.CancelledError()
 
     async def _put(self, event: Event) -> None:
         assert self._ready is not None and self._room is not None
@@ -274,6 +322,7 @@ class ChatFeed:
         if limit is not None and len(self._buf) >= limit:
             if self.overflow == "backpressure":
                 while len(self._buf) >= limit and not self._done:
+                    self._check_stop()
                     self._room.clear()
                     await self._room.wait()
             else:
@@ -294,7 +343,10 @@ class ChatFeed:
                 await self._keep_up(self._http)
             else:
                 async with httpx.AsyncClient(timeout=10, headers={"user-agent": "Mozilla/5.0"}) as http:
-                    await self._keep_up(http)
+                    try:
+                        await self._keep_up(http)
+                    finally:
+                        self._closing = True  # the client, now: let it close
         except Exception as e:  # noqa: BLE001 - kept for the iterator, which raises it
             self._error = e
             log.warning("chat feed stopped: %s", _describe(e))
@@ -303,33 +355,61 @@ class ChatFeed:
 
     async def _keep_up(self, http: httpx.AsyncClient) -> None:
         session = rt.Session(self.channels)
-        backoff = rt.Backoff()
+        backoff = self.backoff
+        # A guest identity: the token is issued to this id, and so is every
+        # refreshed one. Kept across reconnects; a terminal close (Kick
+        # refusing this client) makes a new one.
+        client_id = str(uuid.uuid4())
         while True:
+            self._check_stop()
             try:
-                await self._connect(http, session, backoff)
-            except ChatError:
-                raise
+                drop = await self._connect(http, session, backoff, client_id)
+                self._refusals = 0
             except Exception as e:
                 failure = _failure(e)
                 if failure is None:
                     raise
-                if failure == _REFUSED:
-                    self._refusals += 1
-                    if self._refusals >= self.max_refusals:
-                        raise ChatRefused(self._refusals, e) from e
-                log.info("chat connection failed (%s); reconnecting", _describe(e))
+                self._refusals = self._refusals + 1 if failure == _REFUSED else 0
+                gave_up = self._refusals >= self.max_refusals
+                retry_after = rt.TERMINAL_RETRY_MS if gave_up else 0
+                drop = ChatDrop(_describe(e), 0, gave_up, retry_after, status=_status_of(e), error=e)
             finally:
                 for a in session.closed():
                     if a["action"] == "unsubscribed":
                         self.subscribed.discard(a["channel"])
-            await asyncio.sleep(backoff.next_delay_jittered(random.random()) / 1000)
+            if drop.terminal:
+                client_id = str(uuid.uuid4())
+            wait_ms = backoff.next_delay_for(drop.retry_after_ms, random.random())
+            drop = dataclasses.replace(drop, wait=wait_ms / 1000)
+            self.last_drop = drop
+            if drop.terminal and drop.error is not None:
+                log.warning(
+                    "Kick refused %d attempts in a row, the last: %s; trying as a new client in %.0f s",
+                    self._refusals,
+                    drop.reason,
+                    drop.wait,
+                )
+            elif drop.terminal:
+                log.warning(
+                    "Kick closed the chat to this client (%d: %s); reconnecting as a new client in %.0f s",
+                    drop.code,
+                    drop.reason,
+                    drop.wait,
+                )
+            else:
+                log.info("chat connection ended (%s); reconnecting in %.1f s", drop.reason, drop.wait)
+            self._check_stop()
+            self._retrying = True
+            try:
+                await asyncio.sleep(drop.wait)
+            finally:
+                self._retrying = False
 
-    async def _connect(self, http: httpx.AsyncClient, session: rt.Session, backoff: rt.Backoff) -> None:
-        """One connection, from asking Kick where to its end. Returns when a
-        new one is worth trying; raises :class:`ChatClosed` when not."""
-        # A guest identity: the token is issued to this id, and so is every
-        # refreshed one for this connection.
-        client_id = str(uuid.uuid4())
+    async def _connect(
+        self, http: httpx.AsyncClient, session: rt.Session, backoff: rt.Backoff, client_id: str
+    ) -> ChatDrop:
+        """One connection, from asking Kick where to its end; returns how it
+        ended. Raises for a failed attempt."""
         where = (
             rt.chat_connection_request(self.channel_id, client_id, self.endpoints)
             if self.channel_id
@@ -339,6 +419,7 @@ class ChatFeed:
         if not found:
             raise KickError("shape", None, "Kick offered no Centrifugo server")
         token = rt.parse_token(*await _send(http, rt.token_request(client_id, self.endpoints)))
+        self._check_stop()
 
         ws = await _ws_connect(
             found[0]["url"],
@@ -348,7 +429,7 @@ class ChatFeed:
             close_timeout=5,
         )
         refresher: Optional[asyncio.Task[None]] = None
-        closing: Optional[Event] = None  # a close the refresh's actions asked for
+        recv: Optional[asyncio.Task[Union[str, bytes]]] = None
         close_code = 1000
 
         async def apply(actions: list[Event]) -> Optional[Event]:
@@ -382,51 +463,60 @@ class ChatFeed:
             return None
 
         async def refresh() -> None:
-            nonlocal closing
+            # Never raises: nothing awaits this task's result.
             try:
                 fresh = rt.parse_token(*await _send(http, rt.token_request(client_id, self.endpoints)))
+                # Session.refresh only ever sends; its answer comes through
+                # receive, in the loop below.
+                await apply(session.refresh(fresh, _now()))
+            except ConnectionClosed:
+                pass  # the receive loop sees the close too, and handles it
             except Exception as e:  # noqa: BLE001 - the core's contract: carry on
                 log.warning("token refresh failed (%s); the connection stays up until Kick ends it", _describe(e))
-                return
-            close = await apply(session.refresh(fresh, _now()))
-            if close is not None:
-                closing = close
-                await ws.close()  # ends the receive loop below
 
         try:
-            close = await apply(session.open(token, _now()))
-            while close is None:
-                deadline = session.deadline
-                timeout = None if deadline is None else max(0.0, (deadline - _now()) / 1000)
-                try:
-                    frame = await asyncio.wait_for(ws.recv(), timeout)
-                except asyncio.TimeoutError:
-                    close = await apply(session.tick(_now()))
-                    continue
-                except ConnectionClosed as e:
-                    if closing is not None:
-                        close = closing
-                        break
-                    code, reason = (e.rcvd.code, e.rcvd.reason) if e.rcvd is not None else (1006, "")
-                    if not rt.should_reconnect(code):
-                        raise ChatClosed(code, reason) from e
-                    raise
-                if isinstance(frame, bytes):
-                    frame = frame.decode("utf-8", "replace")
-                close = await apply(session.receive(frame, _now()))
-            if not close["reconnect"]:
-                raise ChatClosed(close["code"], close["reason"])
-            log.info("chat connection ended (%s); reconnecting", close["reason"])
+            try:
+                close = await apply(session.open(token, _now()))
+                while close is None:
+                    self._check_stop()
+                    if recv is None:
+                        recv = asyncio.create_task(ws.recv())
+                    deadline = session.deadline
+                    timeout = None if deadline is None else max(0.0, (deadline - _now()) / 1000)
+                    # Not wait_for: before Python 3.12 it can swallow a
+                    # cancel when the frame arrives at the same moment.
+                    # asyncio.wait leaves the receive running on a timeout.
+                    done, _ = await asyncio.wait({recv}, timeout=timeout)
+                    if not done:
+                        close = await apply(session.tick(_now()))
+                        continue
+                    received, recv = recv, None
+                    frame = received.result()
+                    if isinstance(frame, bytes):
+                        frame = frame.decode("utf-8", "replace")
+                    close = await apply(session.receive(frame, _now()))
+            except ConnectionClosed as e:
+                # A receive or a send found the socket closed by Kick (or by
+                # the network): its close code decides, wherever it showed.
+                return _closed_by_socket(e)
+            return ChatDrop(close["reason"], close["code"], close["terminal"], close["retry_after_ms"])
         except Exception as e:
-            if not isinstance(e, ChatError) and _failure(e) is None:
+            if _failure(e) is None:
                 close_code = 1011  # a bug of ours, not the connection's end
             raise
         finally:
-            if refresher is not None and not refresher.done():
-                refresher.cancel()
-                await asyncio.wait({refresher})
-            with contextlib.suppress(Exception):
-                await ws.close(close_code)
+            self._closing = True
+            try:
+                for t in (refresher, recv):
+                    if t is not None and not t.done():
+                        t.cancel()
+                        await asyncio.wait({t}, timeout=5)
+                if recv is not None and recv.done() and not recv.cancelled():
+                    recv.exception()  # retrieved: the socket is closing anyway
+                with contextlib.suppress(Exception):
+                    await ws.close(close_code)
+            finally:
+                self._closing = False
 
 
 def connect_chat(
@@ -439,6 +529,7 @@ def connect_chat(
     overflow: str = "drop_oldest",
     max_refusals: int = 5,
     http: Optional[httpx.AsyncClient] = None,
+    backoff: Optional[rt.Backoff] = None,
 ) -> ChatFeed:
     """One channel's chat, kept connected for the ``async with`` block.
 
@@ -446,9 +537,11 @@ def connect_chat(
     replaces the feeds (:func:`kicksdk.realtime.chat_channels`, the chat
     feed first); ``endpoints`` points Kick's URLs elsewhere. ``max_queue``
     and ``overflow`` set what happens to events the consumer is not reading
-    fast enough, ``max_refusals`` how many refused attempts in a row end the
-    feed (see the module docs). ``http`` is a client to send Kick's HTTP
-    requests with (it stays open); by default the feed has its own.
+    fast enough, ``max_refusals`` how many refused attempts in a row count
+    as a terminal close (see the module docs). ``http`` is a client to send
+    Kick's HTTP requests with (it stays open); by default the feed has its
+    own. ``backoff`` is the :class:`kicksdk.realtime.Backoff` to wait by
+    (default: 1 s doubling to 30 s).
     """
     return ChatFeed(
         chatroom_id,
@@ -459,4 +552,5 @@ def connect_chat(
         overflow=overflow,
         max_refusals=max_refusals,
         http=http,
+        backoff=backoff,
     )

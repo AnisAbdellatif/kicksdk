@@ -12,7 +12,7 @@ use pyo3::types::PyDict;
 use pythonize::{depythonize, pythonize};
 use serde_json::Value;
 
-create_exception!(_native, NativeError, PyException, "A failed call: (kind, status, message).");
+create_exception!(kicksdk._native, NativeError, PyException, "A failed call: (kind, status, message).");
 
 fn args(obj: Option<&Bound<'_, PyDict>>) -> PyResult<Value> {
     match obj {
@@ -74,9 +74,21 @@ impl NativeBackoff {
         self.0.initial_ms
     }
 
+    /// Takes effect at once as a bound (the core clamps every wait to the
+    /// bounds as they are), and as the first wait after `reset`.
+    #[setter]
+    fn set_initial_ms(&mut self, ms: u64) {
+        self.0.initial_ms = ms;
+    }
+
     #[getter]
     fn max_ms(&self) -> u64 {
         self.0.max_ms
+    }
+
+    #[setter]
+    fn set_max_ms(&mut self, ms: u64) {
+        self.0.max_ms = ms;
     }
 
     fn next_delay(&mut self) -> u64 {
@@ -85,6 +97,10 @@ impl NativeBackoff {
 
     fn next_delay_jittered(&mut self, random: f64) -> u64 {
         self.0.next_delay_jittered(random)
+    }
+
+    fn next_delay_for(&mut self, retry_after_ms: u64, random: f64) -> u64 {
+        self.0.next_delay_for(retry_after_ms, random)
     }
 
     fn reset(&mut self) {

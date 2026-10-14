@@ -4,6 +4,7 @@ Install the package first:  pip install "../../bindings/python[aio]"
 """
 
 import asyncio
+import logging
 import sys
 
 import httpx
@@ -19,8 +20,8 @@ async def main(slug: str) -> None:
         res = await http.request(req.method, req.url, headers=req.headers)
         channel = kicksdk.website.parse_channel(res.status_code, res.text)
 
-        # Reconnects by itself; ends with a ChatError only when going on would
-        # not help (a ban, a token refused for good, every attempt refused).
+        # Reconnects by itself until the block ends, after a ban or a refused
+        # token too: then as a new client, after 5 minutes or more (logged).
         async with kicksdk.aio.connect_chat(channel["chatroom_id"], channel["id"], http=http) as chat:
             async for e in chat:
                 if e["event"]["type"] == "chat_message":
@@ -29,10 +30,11 @@ async def main(slug: str) -> None:
 
 if len(sys.argv) != 2:
     sys.exit("usage: python chat.py <channel>")
+# Drops and reconnects go to the "kicksdk.aio" logger: show them.
+logging.basicConfig(format="%(name)s: %(message)s")
+logging.getLogger("kicksdk.aio").setLevel(logging.INFO)
 try:
     asyncio.run(main(sys.argv[1]))
-except kicksdk.aio.ChatError as e:
-    sys.exit(str(e))
 except kicksdk.KickError as e:
     sys.exit(f"Kick: {e}")
 except KeyboardInterrupt:
