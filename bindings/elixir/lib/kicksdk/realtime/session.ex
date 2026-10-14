@@ -61,7 +61,12 @@ defmodule Kicksdk.Realtime.Session do
 
   @doc "A text frame arrived."
   @spec receive(t(), binary(), integer()) :: [action()]
-  def receive(s, text, now), do: Kicksdk.Native.session_receive(s, text, now)
+  def receive(s, text, now),
+    do:
+      if(Kicksdk.Native.dirty?(text),
+        do: Kicksdk.Native.session_receive_dirty(s, text, now),
+        else: Kicksdk.Native.session_receive(s, text, now)
+      )
 
   @doc "A new token, after a `\"refresh_token\"` action."
   @spec refresh(t(), String.t(), integer()) :: [action()]

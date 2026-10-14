@@ -89,8 +89,13 @@ defmodule Kicksdk do
   @spec call(String.t(), map()) :: result(term())
   def call(name, args \\ %{}) when is_binary(name) and is_map(args) do
     case encode(args) do
-      {:ok, json} -> request(Kicksdk.Native.call(name, json))
-      {:error, _} = e -> e
+      {:ok, json} ->
+        if Kicksdk.Native.dirty?(json),
+          do: request(Kicksdk.Native.call_dirty(name, json)),
+          else: request(Kicksdk.Native.call(name, json))
+
+      {:error, _} = e ->
+        e
     end
   end
 

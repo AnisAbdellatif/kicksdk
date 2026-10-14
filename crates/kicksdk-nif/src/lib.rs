@@ -17,9 +17,18 @@
 //! value raises instead: `ArgumentError` for an argument it cannot use,
 //! `RuntimeError` for a session that a panic left unusable.
 //!
-//! Every NIF here returns in microseconds - no I/O, no waiting - so none needs
-//! a dirty scheduler. Webhook verification (one RSA public-key operation) is
-//! the slowest, at well under a millisecond.
+//! Scheduling: a NIF should hand its scheduler back within about a
+//! millisecond. None here waits on anything, but the ones that read input
+//! take time in proportion to it: about 20 µs per KiB of JSON turned into
+//! terms and 100-150 µs per KiB of message text split into parts, so a 4 MB
+//! answer holds a scheduler for over 100 ms (measured on the release
+//! build). Each of those has a `_dirty` twin, the same function on a dirty
+//! CPU scheduler, which the Elixir side picks for an input over 4 KiB
+//! (`Kicksdk.Native.dirty?/1`). Below that the normal scheduler is used:
+//! switching to a dirty one costs about 8 µs, more than the work on a
+//! typical chat frame. With one scheduler (`+S 1`), a 1 ms timer was held
+//! up 109 ms by a 3.8 MB `/livestreams` answer on the normal scheduler and
+//! 3 ms on the dirty one.
 
 // `|s, b| website::parse_history(s, b)` rather than the bare path: the API
 // table (scripts/docs/api_table.py) finds the core function each NIF calls
@@ -201,15 +210,29 @@ fn endpoints(json: &[u8]) -> NifResult<Endpoints> {
 
 #[rustler::nif]
 fn parse_event<'a>(env: Env<'a>, name: Binary<'a>, data: Binary<'a>) -> NifResult<Term<'a>> {
+    event(env, &name, &data)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn parse_event_dirty<'a>(env: Env<'a>, name: Binary<'a>, data: Binary<'a>) -> NifResult<Term<'a>> {
+    event(env, &name, &data)
+}
+
+fn event<'a>(env: Env<'a>, name: &[u8], data: &[u8]) -> NifResult<Term<'a>> {
     // Kick's data is usually a JSON string inside the JSON; the caller may
     // hand over either that string's content or the outer value. Text that
     // is not JSON (or not UTF-8) is read as text.
-    let data = serde_json::from_slice(&data).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&data).into()));
-    term(env, &events::parse(text(&name, "the event name")?, &data))
+    let data = serde_json::from_slice(data).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(data).into()));
+    term(env, &events::parse(text(name, "the event name")?, &data))
 }
 
 #[rustler::nif]
 fn parse_content<'a>(env: Env<'a>, message: Binary<'a>, combine: bool) -> NifResult<Term<'a>> {
+    term(env, &content::parse(text(&message, "the message")?, combine))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn parse_content_dirty<'a>(env: Env<'a>, message: Binary<'a>, combine: bool) -> NifResult<Term<'a>> {
     term(env, &content::parse(text(&message, "the message")?, combine))
 }
 
@@ -246,6 +269,11 @@ fn parse_connection<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> Nif
     parsed(env, status, &body, |s, b| realtime::parse_connection(s, b))
 }
 
+#[rustler::nif(schedule = "DirtyCpu")]
+fn parse_connection_dirty<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| realtime::parse_connection(s, b))
+}
+
 #[rustler::nif]
 fn token_request<'a>(env: Env<'a>, e: Binary<'a>, client_id: Binary<'a>) -> NifResult<Term<'a>> {
     term(env, &realtime::token_request(&endpoints(&e)?, text(&client_id, "the client id")?))
@@ -253,6 +281,11 @@ fn token_request<'a>(env: Env<'a>, e: Binary<'a>, client_id: Binary<'a>) -> NifR
 
 #[rustler::nif]
 fn parse_token<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| realtime::parse_token(s, b))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn parse_token_dirty<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
     parsed(env, status, &body, |s, b| realtime::parse_token(s, b))
 }
 
@@ -370,8 +403,6 @@ fn session_open<'a>(env: Env<'a>, s: ResourceArc<SessionResource>, token: Binary
     with(env, &s, now, |x, now| x.open(token, now))
 }
 
-/// A frame is lines of JSON. A line that is not UTF-8 is skipped like one
-/// that is not JSON (the frame still counts as traffic).
 #[rustler::nif]
 fn session_receive<'a>(
     env: Env<'a>,
@@ -379,8 +410,24 @@ fn session_receive<'a>(
     frame: Binary<'a>,
     now: i64,
 ) -> NifResult<Term<'a>> {
+    receive(env, &s, &frame, now)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn session_receive_dirty<'a>(
+    env: Env<'a>,
+    s: ResourceArc<SessionResource>,
+    frame: Binary<'a>,
+    now: i64,
+) -> NifResult<Term<'a>> {
+    receive(env, &s, &frame, now)
+}
+
+/// A frame is lines of JSON. A line that is not UTF-8 is skipped like one
+/// that is not JSON (the frame still counts as traffic).
+fn receive<'a>(env: Env<'a>, s: &ResourceArc<SessionResource>, frame: &[u8], now: i64) -> NifResult<Term<'a>> {
     let owned;
-    let frame = match std::str::from_utf8(&frame) {
+    let frame = match std::str::from_utf8(frame) {
         Ok(f) => f,
         Err(_) => {
             owned =
@@ -388,7 +435,7 @@ fn session_receive<'a>(
             &owned
         }
     };
-    with(env, &s, now, |x, now| x.receive(frame, now))
+    with(env, s, now, |x, now| x.receive(frame, now))
 }
 
 #[rustler::nif]
@@ -448,6 +495,11 @@ fn parse_app_token<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifR
     parsed(env, status, &body, |s, b| public_api::parse_token(s, b))
 }
 
+#[rustler::nif(schedule = "DirtyCpu")]
+fn parse_app_token_dirty<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| public_api::parse_token(s, b))
+}
+
 #[rustler::nif]
 fn livestreams_requests<'a>(env: Env<'a>, e: Binary<'a>, token: Binary<'a>, ids: Vec<u64>) -> NifResult<Term<'a>> {
     let ids: Vec<UserId> = ids.into_iter().map(UserId).collect();
@@ -457,6 +509,11 @@ fn livestreams_requests<'a>(env: Env<'a>, e: Binary<'a>, token: Binary<'a>, ids:
 
 #[rustler::nif]
 fn parse_livestreams<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| public_api::parse_livestreams(s, b))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn parse_livestreams_dirty<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
     parsed(env, status, &body, |s, b| public_api::parse_livestreams(s, b))
 }
 
@@ -488,6 +545,11 @@ fn parse_channels<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifRe
     parsed(env, status, &body, |s, b| public_api::parse_channels(s, b))
 }
 
+#[rustler::nif(schedule = "DirtyCpu")]
+fn parse_channels_dirty<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| public_api::parse_channels(s, b))
+}
+
 #[rustler::nif]
 fn public_key_request<'a>(env: Env<'a>, e: Binary<'a>) -> NifResult<Term<'a>> {
     term(env, &public_api::public_key_request(&endpoints(&e)?))
@@ -495,6 +557,11 @@ fn public_key_request<'a>(env: Env<'a>, e: Binary<'a>) -> NifResult<Term<'a>> {
 
 #[rustler::nif]
 fn parse_public_key<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| public_api::parse_public_key(s, b))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn parse_public_key_dirty<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
     parsed(env, status, &body, |s, b| public_api::parse_public_key(s, b))
 }
 
@@ -523,6 +590,11 @@ fn subscriptions_request<'a>(env: Env<'a>, e: Binary<'a>, token: Binary<'a>) -> 
 
 #[rustler::nif]
 fn parse_subscriptions<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| public_api::parse_subscriptions(s, b))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn parse_subscriptions_dirty<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
     parsed(env, status, &body, |s, b| public_api::parse_subscriptions(s, b))
 }
 
@@ -555,6 +627,11 @@ fn parse_channel<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifRes
     parsed(env, status, &body, |s, b| website::parse_channel(s, b))
 }
 
+#[rustler::nif(schedule = "DirtyCpu")]
+fn parse_channel_dirty<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| website::parse_channel(s, b))
+}
+
 #[rustler::nif]
 fn history_request<'a>(env: Env<'a>, e: Binary<'a>, channel: u64) -> NifResult<Term<'a>> {
     term(env, &website::history_request(&endpoints(&e)?, ChannelId(channel)))
@@ -562,6 +639,11 @@ fn history_request<'a>(env: Env<'a>, e: Binary<'a>, channel: u64) -> NifResult<T
 
 #[rustler::nif]
 fn parse_history<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| website::parse_history(s, b))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn parse_history_dirty<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
     parsed(env, status, &body, |s, b| website::parse_history(s, b))
 }
 
@@ -581,6 +663,11 @@ fn channel_user_request<'a>(
 
 #[rustler::nif]
 fn parse_channel_user<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    parsed(env, status, &body, |s, b| website::parse_channel_user(s, b))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn parse_channel_user_dirty<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
     parsed(env, status, &body, |s, b| website::parse_channel_user(s, b))
 }
 
@@ -616,6 +703,17 @@ fn webhook_public_key<'a>(env: Env<'a>, pem: Binary<'a>) -> NifResult<Term<'a>> 
 /// tolerance_secs}` or `:skip`.
 #[rustler::nif]
 fn verify_webhook<'a>(
+    env: Env<'a>,
+    key: Term<'a>,
+    headers: Vec<(Binary<'a>, Binary<'a>)>,
+    body: Binary<'a>,
+    freshness: Term<'a>,
+) -> NifResult<Term<'a>> {
+    verify(env, key, &headers, &body, freshness)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn verify_webhook_dirty<'a>(
     env: Env<'a>,
     key: Term<'a>,
     headers: Vec<(Binary<'a>, Binary<'a>)>,
@@ -685,6 +783,11 @@ fn parse_webhook<'a>(env: Env<'a>, event_type: Binary<'a>, body: Binary<'a>) -> 
     result(env, utf8(&event_type, "the event type").and_then(|t| webhooks::parse(t, body.as_slice())))
 }
 
+#[rustler::nif(schedule = "DirtyCpu")]
+fn parse_webhook_dirty<'a>(env: Env<'a>, event_type: Binary<'a>, body: Binary<'a>) -> NifResult<Term<'a>> {
+    result(env, utf8(&event_type, "the event type").and_then(|t| webhooks::parse(t, body.as_slice())))
+}
+
 // ---- Any function by name ------------------------------------------------------
 
 /// Any core function by name (`kicksdk::dispatch`), arguments as JSON:
@@ -693,12 +796,21 @@ fn parse_webhook<'a>(env: Env<'a>, event_type: Binary<'a>, body: Binary<'a>) -> 
 /// for a delivery that does not verify.
 #[rustler::nif]
 fn call<'a>(env: Env<'a>, name: Binary<'a>, args_json: Binary<'a>) -> NifResult<Term<'a>> {
+    dispatch(env, &name, &args_json)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn call_dirty<'a>(env: Env<'a>, name: Binary<'a>, args_json: Binary<'a>) -> NifResult<Term<'a>> {
+    dispatch(env, &name, &args_json)
+}
+
+fn dispatch<'a>(env: Env<'a>, name: &[u8], args_json: &[u8]) -> NifResult<Term<'a>> {
     let refuse = |message: &str| Ok((atoms::error(), (atoms::call(), message)).encode(env));
-    let Ok(name) = std::str::from_utf8(&name) else { return refuse("the function name is not UTF-8") };
+    let Ok(name) = std::str::from_utf8(name) else { return refuse("the function name is not UTF-8") };
     let args = if args_json.is_empty() {
         Value::Null
     } else {
-        match serde_json::from_slice(&args_json) {
+        match serde_json::from_slice(args_json) {
             Ok(v) => v,
             Err(_) => return refuse("the arguments are not JSON"),
         }

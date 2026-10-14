@@ -21,7 +21,12 @@ defmodule Kicksdk.Website do
 
   @doc "Reads a channel answer: chatroom id, followers (number or string upstream), live state."
   @spec parse_channel(integer(), binary()) :: Kicksdk.result(map())
-  def parse_channel(status, body), do: Native.parse_channel(status, body)
+  def parse_channel(status, body),
+    do:
+      if(Native.dirty?(body),
+        do: Native.parse_channel_dirty(status, body),
+        else: Native.parse_channel(status, body)
+      )
 
   @doc "Recent chat and the pin, by channel id."
   @spec history_request(non_neg_integer(), Kicksdk.endpoints()) :: Kicksdk.request()
@@ -30,7 +35,12 @@ defmodule Kicksdk.Website do
 
   @doc "Reads a history answer: `%{\"messages\" => […], \"pinned\" => event | nil}`."
   @spec parse_history(integer(), binary()) :: Kicksdk.result(map())
-  def parse_history(status, body), do: Native.parse_history(status, body)
+  def parse_history(status, body),
+    do:
+      if(Native.dirty?(body),
+        do: Native.parse_history_dirty(status, body),
+        else: Native.parse_history(status, body)
+      )
 
   @doc "A user as a channel sees them; a 404 means the channel does not know the name."
   @spec channel_user_request(String.t(), String.t(), Kicksdk.endpoints()) :: Kicksdk.result(Kicksdk.request())
@@ -39,7 +49,12 @@ defmodule Kicksdk.Website do
 
   @doc "Reads a channel user answer."
   @spec parse_channel_user(integer(), binary()) :: Kicksdk.result(map())
-  def parse_channel_user(status, body), do: Native.parse_channel_user(status, body)
+  def parse_channel_user(status, body),
+    do:
+      if(Native.dirty?(body),
+        do: Native.parse_channel_user_dirty(status, body),
+        else: Native.parse_channel_user(status, body)
+      )
 
   # Acting as a viewer: `session` is kick.com's `session_token`. Never log it.
   # These go through Kicksdk.call/2 and, like every builder that can refuse

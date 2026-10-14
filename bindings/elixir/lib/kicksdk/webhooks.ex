@@ -55,7 +55,11 @@ defmodule Kicksdk.Webhooks do
           Kicksdk.result(%{required(String.t()) => map()})
   def verify(key, headers, body, opts \\ []) when is_binary(body) do
     opts = Keyword.validate!(opts, now: nil, tolerance_secs: 300, skip_freshness: false)
-    Kicksdk.Native.verify_webhook(key, Enum.to_list(headers), body, freshness(opts))
+    headers = Enum.to_list(headers)
+
+    if Kicksdk.Native.dirty?(body),
+      do: Kicksdk.Native.verify_webhook_dirty(key, headers, body, freshness(opts)),
+      else: Kicksdk.Native.verify_webhook(key, headers, body, freshness(opts))
   end
 
   defp freshness(opts) do
@@ -83,5 +87,10 @@ defmodule Kicksdk.Webhooks do
   type's shape.
   """
   @spec parse(String.t(), binary()) :: Kicksdk.result(map())
-  def parse(event_type, body), do: Kicksdk.Native.parse_webhook(event_type, body)
+  def parse(event_type, body),
+    do:
+      if(Kicksdk.Native.dirty?(body),
+        do: Kicksdk.Native.parse_webhook_dirty(event_type, body),
+        else: Kicksdk.Native.parse_webhook(event_type, body)
+      )
 end

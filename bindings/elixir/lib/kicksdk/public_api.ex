@@ -23,7 +23,12 @@ defmodule Kicksdk.PublicApi do
 
   @doc "Reads an app token answer."
   @spec parse_app_token(integer(), binary()) :: Kicksdk.result(map())
-  def parse_app_token(status, body), do: Native.parse_app_token(status, body)
+  def parse_app_token(status, body),
+    do:
+      if(Native.dirty?(body),
+        do: Native.parse_app_token_dirty(status, body),
+        else: Native.parse_app_token(status, body)
+      )
 
   @doc "`/livestreams` for any number of user ids: one request per 50."
   @spec livestreams_requests(String.t(), [non_neg_integer()], Kicksdk.endpoints()) ::
@@ -45,7 +50,12 @@ defmodule Kicksdk.PublicApi do
 
   @doc "Reads a `/livestreams` answer. Offline is `{:ok, []}`."
   @spec parse_livestreams(integer(), binary()) :: Kicksdk.result([map()])
-  def parse_livestreams(status, body), do: Native.parse_livestreams(status, body)
+  def parse_livestreams(status, body),
+    do:
+      if(Native.dirty?(body),
+        do: Native.parse_livestreams_dirty(status, body),
+        else: Native.parse_livestreams(status, body)
+      )
 
   @doc "`/channels` for up to 50 user ids."
   @spec channels_by_ids_request(String.t(), [non_neg_integer()], Kicksdk.endpoints()) ::
@@ -61,7 +71,12 @@ defmodule Kicksdk.PublicApi do
 
   @doc "Reads a `/channels` answer."
   @spec parse_channels(integer(), binary()) :: Kicksdk.result([map()])
-  def parse_channels(status, body), do: Native.parse_channels(status, body)
+  def parse_channels(status, body),
+    do:
+      if(Native.dirty?(body),
+        do: Native.parse_channels_dirty(status, body),
+        else: Native.parse_channels(status, body)
+      )
 
   @doc "The webhook signing key."
   @spec public_key_request(Kicksdk.endpoints()) :: Kicksdk.request()
@@ -70,7 +85,12 @@ defmodule Kicksdk.PublicApi do
 
   @doc "The PEM from a public key answer."
   @spec parse_public_key(integer(), binary()) :: Kicksdk.result(String.t())
-  def parse_public_key(status, body), do: Native.parse_public_key(status, body)
+  def parse_public_key(status, body),
+    do:
+      if(Native.dirty?(body),
+        do: Native.parse_public_key_dirty(status, body),
+        else: Native.parse_public_key(status, body)
+      )
 
   @doc "Subscribes the app to `events` (`[{name, version}]`) for one channel."
   @spec subscribe_request(
@@ -90,7 +110,12 @@ defmodule Kicksdk.PublicApi do
 
   @doc "Reads a subscriptions answer."
   @spec parse_subscriptions(integer(), binary()) :: Kicksdk.result([map()])
-  def parse_subscriptions(status, body), do: Native.parse_subscriptions(status, body)
+  def parse_subscriptions(status, body),
+    do:
+      if(Native.dirty?(body),
+        do: Native.parse_subscriptions_dirty(status, body),
+        else: Native.parse_subscriptions(status, body)
+      )
 
   @doc "Removes subscriptions, 50 per request."
   @spec unsubscribe_requests(String.t(), [String.t()], Kicksdk.endpoints()) ::

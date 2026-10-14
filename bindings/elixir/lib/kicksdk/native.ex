@@ -108,18 +108,32 @@ defmodule Kicksdk.Native do
         nif_versions: nif_versions
       ] ++ force
 
+  # A NIF should hand its scheduler back within about a millisecond. Those
+  # that read input take time in proportion to it (about 20 us per KiB of
+  # JSON, 100 us per KiB of message text), so each has a `_dirty` twin on a
+  # dirty CPU scheduler, used above this size. Kick's answers and frames are
+  # mostly smaller and stay on the normal scheduler.
+  @dirty_bytes 4096
+
+  @doc false
+  def dirty?(input), do: is_binary(input) and byte_size(input) > @dirty_bytes
+
   defp err, do: :erlang.nif_error(:nif_not_loaded)
 
   def parse_event(_name, _data_json), do: err()
+  def parse_event_dirty(_name, _data_json), do: err()
   def parse_content(_text, _combine), do: err()
+  def parse_content_dirty(_text, _combine), do: err()
   def emote_url(_id), do: err()
 
   def chat_channels(_chatroom, _channel), do: err()
   def chat_connection_request(_e, _channel, _client_id), do: err()
   def connection_request(_e, _client_id), do: err()
   def parse_connection(_status, _body), do: err()
+  def parse_connection_dirty(_status, _body), do: err()
   def token_request(_e, _client_id), do: err()
   def parse_token(_status, _body), do: err()
+  def parse_token_dirty(_status, _body), do: err()
   def should_reconnect(_code), do: err()
   def backoff_new(_initial_ms, _max_ms), do: err()
   def backoff_next(_backoff, _random), do: err()
@@ -128,6 +142,7 @@ defmodule Kicksdk.Native do
   def session_new(_channels), do: err()
   def session_open(_s, _token, _now), do: err()
   def session_receive(_s, _text, _now), do: err()
+  def session_receive_dirty(_s, _text, _now), do: err()
   def session_refresh(_s, _token, _now), do: err()
   def session_tick(_s, _now), do: err()
   def session_closed(_s), do: err()
@@ -137,27 +152,38 @@ defmodule Kicksdk.Native do
 
   def app_token_request(_e, _client_id, _secret), do: err()
   def parse_app_token(_status, _body), do: err()
+  def parse_app_token_dirty(_status, _body), do: err()
   def livestreams_requests(_e, _token, _ids), do: err()
   def parse_livestreams(_status, _body), do: err()
+  def parse_livestreams_dirty(_status, _body), do: err()
   def channels_by_ids_request(_e, _token, _ids), do: err()
   def channels_by_slugs_request(_e, _token, _slugs), do: err()
   def parse_channels(_status, _body), do: err()
+  def parse_channels_dirty(_status, _body), do: err()
   def public_key_request(_e), do: err()
   def parse_public_key(_status, _body), do: err()
+  def parse_public_key_dirty(_status, _body), do: err()
   def subscribe_request(_e, _token, _broadcaster, _events), do: err()
   def subscriptions_request(_e, _token), do: err()
   def parse_subscriptions(_status, _body), do: err()
+  def parse_subscriptions_dirty(_status, _body), do: err()
   def unsubscribe_requests(_e, _token, _ids), do: err()
 
   def channel_request(_e, _slug), do: err()
   def parse_channel(_status, _body), do: err()
+  def parse_channel_dirty(_status, _body), do: err()
   def history_request(_e, _channel), do: err()
   def parse_history(_status, _body), do: err()
+  def parse_history_dirty(_status, _body), do: err()
   def channel_user_request(_e, _slug, _username), do: err()
   def parse_channel_user(_status, _body), do: err()
+  def parse_channel_user_dirty(_status, _body), do: err()
 
   def webhook_public_key(_pem), do: err()
   def verify_webhook(_key, _headers, _body, _freshness), do: err()
+  def verify_webhook_dirty(_key, _headers, _body, _freshness), do: err()
   def call(_name, _args_json), do: err()
+  def call_dirty(_name, _args_json), do: err()
   def parse_webhook(_event_type, _body), do: err()
+  def parse_webhook_dirty(_event_type, _body), do: err()
 end

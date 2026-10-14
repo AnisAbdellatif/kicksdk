@@ -19,6 +19,7 @@ defmodule Kicksdk.Realtime do
   """
 
   import Kicksdk, only: [encode_endpoints: 1, request: 1]
+  alias Kicksdk.Native
 
   @origin "https://kick.com"
 
@@ -48,7 +49,12 @@ defmodule Kicksdk.Realtime do
 
   @doc "Reads a connection answer: `{:ok, [%{\"provider\" => \"centrifugo\", \"url\" => url} | …]}`."
   @spec parse_connection(integer(), binary()) :: Kicksdk.result([map()])
-  def parse_connection(status, body), do: Kicksdk.Native.parse_connection(status, body)
+  def parse_connection(status, body),
+    do:
+      if(Native.dirty?(body),
+        do: Native.parse_connection_dirty(status, body),
+        else: Native.parse_connection(status, body)
+      )
 
   @doc "A guest token request for `client_id`."
   @spec token_request(String.t(), Kicksdk.endpoints()) :: Kicksdk.request()
@@ -69,5 +75,10 @@ defmodule Kicksdk.Realtime do
 
   @doc "The token from a token answer."
   @spec parse_token(integer(), binary()) :: Kicksdk.result(String.t())
-  def parse_token(status, body), do: Kicksdk.Native.parse_token(status, body)
+  def parse_token(status, body),
+    do:
+      if(Native.dirty?(body),
+        do: Native.parse_token_dirty(status, body),
+        else: Native.parse_token(status, body)
+      )
 end
