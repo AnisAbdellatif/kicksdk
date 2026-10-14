@@ -68,6 +68,14 @@ type Out = Result<Value, DispatchError>;
 
 struct Args<'a>(&'a Map<String, Value>);
 
+/// A non-negative integer: a JSON integer, or a float that is a whole number
+/// an `f64` holds exactly (`1.0` from a language whose numbers are all
+/// floats). `1.5`, `-1` and `1e30` are not: never rounded or clamped.
+fn whole(v: &Value) -> Option<u64> {
+    const EXACT: f64 = 9_007_199_254_740_991.0;
+    v.as_u64().or_else(|| v.as_f64().filter(|f| (0.0..=EXACT).contains(f) && f.fract() == 0.0).map(|f| f as u64))
+}
+
 impl Args<'_> {
     fn value(&self, key: &str) -> Result<&Value, DispatchError> {
         self.0.get(key).filter(|v| !v.is_null()).ok_or_else(|| DispatchError::call(format!("missing `{key}`")))
@@ -79,10 +87,7 @@ impl Args<'_> {
         self.0.get(key).and_then(Value::as_str)
     }
     fn u64(&self, key: &str) -> Result<u64, DispatchError> {
-        let v = self.value(key)?;
-        v.as_u64()
-            .or_else(|| v.as_f64().filter(|f| *f >= 0.0 && f.fract() == 0.0).map(|f| f as u64))
-            .ok_or_else(|| DispatchError::call(format!("`{key}` must be a non-negative integer")))
+        whole(self.value(key)?).ok_or_else(|| DispatchError::call(format!("`{key}` must be a non-negative integer")))
     }
     fn opt_u64(&self, key: &str) -> Result<Option<u64>, DispatchError> {
         match self.0.get(key) {
@@ -96,6 +101,12 @@ impl Args<'_> {
     fn u32(&self, key: &str) -> Result<u32, DispatchError> {
         u32::try_from(self.u64(key)?).map_err(|_| DispatchError::call(format!("`{key}` is out of range")))
     }
+    fn opt_u32(&self, key: &str) -> Result<Option<u32>, DispatchError> {
+        match self.0.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(_) => self.u32(key).map(Some),
+        }
+    }
     fn bool(&self, key: &str) -> bool {
         self.0.get(key).and_then(Value::as_bool).unwrap_or(false)
     }
@@ -108,7 +119,7 @@ impl Args<'_> {
     fn ids(&self, key: &str) -> Result<Vec<u64>, DispatchError> {
         self.value(key)?
             .as_array()
-            .and_then(|a| a.iter().map(Value::as_u64).collect())
+            .and_then(|a| a.iter().map(whole).collect())
             .ok_or_else(|| DispatchError::call(format!("`{key}` must be a list of integers")))
     }
     fn endpoints(&self) -> Result<Endpoints, DispatchError> {
@@ -187,7 +198,7 @@ pub fn call(name: &str, args: &Value) -> Out {
                 a.opt_u64("category_id")?,
                 a.opt_str("language"),
                 sort,
-                a.opt_u64("limit")?.unwrap_or(100) as u32,
+                a.opt_u32("limit")?.unwrap_or(100),
             ))
         }
         "public_api.parse_livestreams" => {
@@ -217,12 +228,15 @@ pub fn call(name: &str, args: &Value) -> Out {
             let events: Vec<(String, u32)> = list
                 .iter()
                 .map(|e| {
-                    let name = e.get("name").and_then(Value::as_str);
-                    let version = e.get("version").and_then(Value::as_u64).unwrap_or(1) as u32;
-                    name.map(|n| (n.to_owned(), version))
+                    let name = e.get("name").and_then(Value::as_str)?;
+                    let version = match e.get("version") {
+                        None | Some(Value::Null) => 1,
+                        Some(v) => u32::try_from(whole(v)?).ok()?,
+                    };
+                    Some((name.to_owned(), version))
                 })
                 .collect::<Option<_>>()
-                .ok_or_else(|| DispatchError::call("`events` must be [{name, version}]"))?;
+                .ok_or_else(|| DispatchError::call("`events` must be [{name, version}], version a u32"))?;
             let refs: Vec<(&str, u32)> = events.iter().map(|(n, v)| (n.as_str(), *v)).collect();
             ok(public_api::subscribe_request(
                 &a.endpoints()?,
@@ -483,6 +497,37 @@ mod tests {
         assert_eq!((e.kind, e.status), ("status", Some(404)));
         let e = call("website.channel_request", &json!({})).unwrap_err();
         assert_eq!((e.kind, e.message.as_str()), ("call", "missing `slug`"));
+    }
+
+    #[test]
+    fn numbers_are_checked_not_squeezed() {
+        let top = |limit: Value| {
+            call("public_api.top_livestreams_request", &json!({"token": "t", "limit": limit})).map(|r| r["url"].clone())
+        };
+        assert!(top(json!(10)).unwrap().as_str().unwrap().contains("limit=10"));
+        assert!(top(json!(10.0)).unwrap().as_str().unwrap().contains("limit=10"));
+        // 2^32 + 10 used to become 10.
+        for bad in [json!(4_294_967_306u64), json!(10.5), json!(-1), json!(1e30), json!("10")] {
+            assert_eq!(top(bad.clone()).unwrap_err().kind, "call", "{bad}");
+        }
+        let sub = |version: Value| {
+            call(
+                "public_api.subscribe_request",
+                &json!({"token": "t", "broadcaster_user_id": 1, "events": [{"name": "channel.followed", "version": version}]}),
+            )
+        };
+        assert!(sub(json!(1)).is_ok());
+        assert!(sub(Value::Null).is_ok());
+        assert_eq!(sub(json!(4_294_967_297u64)).unwrap_err().kind, "call");
+        assert_eq!(sub(json!(1.5)).unwrap_err().kind, "call");
+        // 2^53 + 1 as a float has already lost its last digit.
+        let e = call("website.history_request", &json!({"channel_id": 9_007_199_254_740_993.0})).unwrap_err();
+        assert_eq!(e.kind, "call");
+        assert!(call("website.history_request", &json!({"channel_id": u64::MAX})).is_ok());
+        let mut s = SessionHandle::new(vec![]);
+        assert_eq!(s.call("open", &json!({"token": "t", "now": 1.5})).unwrap_err().kind, "call");
+        assert_eq!(call("realtime.should_reconnect", &json!({"code": 3501})).unwrap(), json!(false));
+        assert_eq!(call("realtime.should_reconnect", &json!({"code": 70_000})).unwrap_err().kind, "call");
     }
 
     #[test]
