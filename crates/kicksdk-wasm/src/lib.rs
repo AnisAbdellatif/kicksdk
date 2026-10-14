@@ -44,6 +44,31 @@ export interface ReplyTo {
   sender_username: string;
 }
 
+/** A webhook delivery's headers: `[name, value]` pairs (a fetch `Headers` will do) or an object. */
+export type WebhookHeaders = Iterable<readonly [string, string]> | Record<string, string>;
+
+/** How a delivery's timestamp is checked. By default: within 5 minutes of this machine's clock. */
+export interface VerifyOptions {
+  /** Now, Unix **seconds** (not `Date.now()`'s milliseconds). Default: this machine's clock. */
+  now?: number | undefined;
+  /** How far from `now` the timestamp may be, either way, in seconds. Default 300. */
+  toleranceSecs?: number | undefined;
+  /** No freshness check: to re-check a delivery stored earlier. A live receiver never skips it. */
+  skipFreshness?: boolean | undefined;
+}
+
+/** A delivery that passed: its headers and the typed event. */
+export interface VerifiedWebhook {
+  headers: {
+    message_id: string;
+    timestamp: string;
+    signature: string;
+    event_type: string;
+    version: string;
+    subscription_id: string | null;
+  };
+  event: { type: string; [key: string]: unknown };
+}
 "#;
 
 #[wasm_bindgen]
@@ -51,12 +76,24 @@ extern "C" {
     /// `Endpoints` on the TypeScript side.
     #[wasm_bindgen(typescript_type = "Endpoints")]
     pub type EndpointsArg;
+    /// `WebhookHeaders` on the TypeScript side.
+    #[wasm_bindgen(typescript_type = "WebhookHeaders")]
+    pub type HeadersArg;
+    /// `VerifyOptions` on the TypeScript side.
+    #[wasm_bindgen(typescript_type = "VerifyOptions")]
+    pub type VerifyOptionsArg;
+    /// `VerifiedWebhook` on the TypeScript side.
+    #[wasm_bindgen(typescript_type = "VerifiedWebhook")]
+    pub type VerifiedWebhook;
     /// An id: a JS number, checked by [`id`].
     #[wasm_bindgen(typescript_type = "number")]
     pub type Id;
     /// Ids: an array of JS numbers, checked by [`id_list`].
     #[wasm_bindgen(typescript_type = "readonly number[]")]
     pub type IdList;
+    /// A webhook body: text or bytes.
+    #[wasm_bindgen(typescript_type = "string | Uint8Array | ArrayBuffer")]
+    pub type Body;
     /// `topLivestreamsRequest`'s order.
     #[wasm_bindgen(typescript_type = "'viewer_count' | 'started_at'")]
     pub type SortArg;
@@ -256,6 +293,17 @@ pub fn parse_token(status: u16, body: &str) -> Result<String, JsValue> {
     realtime::parse_token(status, body).map_err(fail)
 }
 
+/// Whether a connection whose socket closed with this code is worth opening
+/// again: false for Kick's terminal codes (3500-3999 and 4500-4999: a bad
+/// token, a ban, a refused request), true for the rest (1006, a network
+/// drop, among them).
+#[wasm_bindgen(js_name = shouldReconnect)]
+pub fn should_reconnect(code: f64) -> Result<bool, JsValue> {
+    // In range: `whole` checked it.
+    let code = whole("code", code, u16::MAX.into())? as u16;
+    Ok(realtime::should_reconnect(code))
+}
+
 fn now_ms(now: f64) -> Result<u64, JsValue> {
     whole("now (ms)", now, MAX_SAFE)
 }
@@ -342,6 +390,15 @@ impl Backoff {
     pub fn next_delay(&mut self) -> f64 {
         // At most `maxMs`, itself at most 2^53 - 1: exact as a JS number.
         self.0.next_delay() as f64
+    }
+
+    /// The next wait, ms, spread over [half of it, all of it] by `random`,
+    /// drawn uniformly from [0, 1) (`Math.random()`), so that clients dropped
+    /// together do not all come back together. Out of range is clamped.
+    #[wasm_bindgen(js_name = nextDelayJittered)]
+    pub fn next_delay_jittered(&mut self, random: f64) -> f64 {
+        // At most `nextDelay()`'s, which a JS number holds exactly.
+        self.0.next_delay_jittered(random) as f64
     }
 
     /// A connection worked.
@@ -685,38 +742,160 @@ pub fn unsubscribe_requests(
 
 // ---- Webhooks ----------------------------------------------------------------
 
-/// Reads a delivery's body by its type header, without checking anything.
-#[wasm_bindgen(js_name = parseWebhook)]
-pub fn parse_webhook(event_type: &str, body: &str) -> Result<JsValue, JsValue> {
-    result(webhooks::parse(event_type, body))
+/// A body as Kick sent it: text, or the raw bytes.
+fn body_bytes(value: &JsValue) -> Result<Vec<u8>, JsValue> {
+    if let Some(text) = value.as_string() {
+        Ok(text.into_bytes())
+    } else if let Some(bytes) = value.dyn_ref::<js_sys::Uint8Array>() {
+        Ok(bytes.to_vec())
+    } else if let Some(buffer) = value.dyn_ref::<js_sys::ArrayBuffer>() {
+        Ok(js_sys::Uint8Array::new(buffer).to_vec())
+    } else {
+        Err(type_error("body must be a string, a Uint8Array or an ArrayBuffer"))
+    }
 }
 
-/// Checks a delivery: `headers` as `[[name, value]…]` or an object, `body` the
-/// raw text. Returns the typed event, or throws.
-#[wasm_bindgen(js_name = verifyWebhook)]
-pub fn verify_webhook(public_key_pem: &str, headers: JsValue, body: &str) -> Result<JsValue, JsValue> {
-    let pairs: Vec<(String, String)> = match json_arg(headers)? {
-        serde_json::Value::Array(list) => {
-            list.iter().filter_map(|p| Some((p.get(0)?.as_str()?.to_owned(), p.get(1)?.as_str()?.to_owned()))).collect()
-        }
-        serde_json::Value::Object(map) => {
-            map.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_owned()))).collect()
-        }
-        _ => return Err(js_sys::Error::new("headers must be pairs or an object").into()),
+fn header_pair(pair: JsValue) -> Result<(String, String), JsValue> {
+    if !js_sys::Array::is_array(&pair) {
+        return Err(type_error("headers: each must be a [name, value] pair"));
+    }
+    let pair: js_sys::Array = pair.unchecked_into();
+    let name = pair.get(0).as_string().ok_or_else(|| type_error("headers: a name must be a string"))?;
+    let value = pair.get(1).as_string().ok_or_else(|| type_error(&format!("headers: {name} must be a string")))?;
+    Ok((name, value))
+}
+
+/// `[[name, value]…]`, any iterable of pairs (a fetch `Headers`, a `Map`),
+/// or an object.
+fn webhook_headers(value: HeadersArg) -> Result<webhooks::Headers, JsValue> {
+    let value: JsValue = value.into();
+    if !value.is_object() {
+        return Err(type_error("headers must be [name, value] pairs, a Headers or an object"));
+    }
+    let pairs: Vec<(String, String)> = match js_sys::try_iter(&value)? {
+        Some(iter) => iter.map(|pair| header_pair(pair?)).collect::<Result<_, _>>()?,
+        None => js_sys::Object::entries(value.unchecked_ref()).iter().map(header_pair).collect::<Result<_, _>>()?,
     };
-    let h = webhooks::Headers::from_pairs(pairs.iter().map(|(a, b)| (a.as_str(), b.as_str())))
-        .map_err(|e| JsValue::from(js_sys::Error::new(&e.to_string())))?;
-    // The delivery must be fresh: within 5 minutes of this machine's clock.
-    let now = (js_sys::Date::now() / 1000.0) as u64;
-    let key =
-        webhooks::PublicKey::from_pem(public_key_pem).map_err(|e| JsValue::from(js_sys::Error::new(&e.to_string())))?;
-    webhooks::verify(&key, &h, body.as_bytes(), webhooks::Freshness::at(now))
-        .map_err(|e| JsValue::from(js_sys::Error::new(&e.to_string())))?;
-    let event = webhooks::parse(&h.event_type, body).map_err(fail)?;
+    webhooks::Headers::from_pairs(pairs.iter().map(|(a, b)| (a.as_str(), b.as_str()))).map_err(webhook_error)
+}
+
+/// A `now` in seconds this large is far in the future (the year 5138): it
+/// is `Date.now()`'s milliseconds by mistake.
+const NOW_SECS_LIMIT: u64 = 100_000_000_000;
+
+/// This machine's clock, Unix seconds.
+fn machine_now() -> u64 {
+    // Date.now() is a whole number of ms, positive and far below 2^53.
+    (js_sys::Date::now() / 1000.0).floor().max(0.0) as u64
+}
+
+/// `{now?, toleranceSecs?, skipFreshness?}`; by default within 5 minutes of
+/// this machine's clock.
+fn freshness(options: Option<VerifyOptionsArg>) -> Result<webhooks::Freshness, JsValue> {
+    let options: JsValue = options.map(Into::into).unwrap_or(JsValue::UNDEFINED);
+    if nothing(&options) {
+        return Ok(webhooks::Freshness::at(machine_now()));
+    }
+    if !options.is_object() {
+        return Err(type_error("options must be an object: {now?, toleranceSecs?, skipFreshness?}"));
+    }
+    for key in js_sys::Object::keys(options.unchecked_ref::<js_sys::Object>()).iter() {
+        let key = key.as_string().unwrap_or_default();
+        if !matches!(key.as_str(), "now" | "toleranceSecs" | "skipFreshness") {
+            return Err(type_error(&format!("options: unknown key `{key}` (now, toleranceSecs, skipFreshness)")));
+        }
+    }
+    let get = |key: &str| js_sys::Reflect::get(&options, &key.into());
+    let (now, tolerance, skip) = (get("now")?, get("toleranceSecs")?, get("skipFreshness")?);
+    let skip = match skip.as_bool() {
+        Some(skip) => skip,
+        None if nothing(&skip) => false,
+        None => return Err(type_error("options.skipFreshness must be a boolean")),
+    };
+    if skip {
+        if !nothing(&now) || !nothing(&tolerance) {
+            return Err(type_error("options: give now and toleranceSecs, or skipFreshness, not both"));
+        }
+        return Ok(webhooks::Freshness::Skip);
+    }
+    let now = if nothing(&now) { machine_now() } else { uint("options.now (Unix seconds)", &now, MAX_SAFE)? };
+    if now >= NOW_SECS_LIMIT {
+        return Err(range_error("options.now is Unix seconds; this looks like milliseconds (Date.now() / 1000)"));
+    }
+    let tolerance_secs = if nothing(&tolerance) {
+        webhooks::DEFAULT_TOLERANCE_SECS
+    } else {
+        uint("options.toleranceSecs", &tolerance, MAX_SAFE)?
+    };
+    Ok(webhooks::Freshness::Within { now, tolerance_secs })
+}
+
+fn webhook_error(e: webhooks::WebhookError) -> JsValue {
+    error(&e.to_string())
+}
+
+/// What a delivery that passed comes out as: its headers and typed event.
+fn verified(headers: &webhooks::Headers, body: &[u8]) -> Result<VerifiedWebhook, JsValue> {
+    let event = webhooks::parse(&headers.event_type, body).map_err(fail)?;
     #[derive(Serialize)]
     struct Verified<'a> {
         headers: &'a webhooks::Headers,
         event: webhooks::WebhookEvent,
     }
-    out(&Verified { headers: &h, event })
+    Ok(out(&Verified { headers, event })?.unchecked_into())
+}
+
+/// Reads a delivery's body by its type header, without checking anything.
+/// Throws when the body is not that type's shape. `body` is text or bytes.
+#[wasm_bindgen(js_name = parseWebhook)]
+pub fn parse_webhook(event_type: &str, body: Body) -> Result<JsValue, JsValue> {
+    result(webhooks::parse(event_type, body_bytes(&body)?))
+}
+
+/// Checks a delivery and returns `{headers, event}`, or throws. `headers` as
+/// `[[name, value]…]`, a fetch `Headers` or an object; `body` the raw body,
+/// as text or bytes. The timestamp must be within 5 minutes of this
+/// machine's clock, unless `options` says otherwise: `now` (Unix seconds),
+/// `toleranceSecs`, or `skipFreshness: true` to re-check a stored delivery.
+///
+/// A receiver checking many deliveries reads the key once, with
+/// `new WebhookPublicKey(pem)`, and calls its `verify`.
+#[wasm_bindgen(js_name = verifyWebhook)]
+pub fn verify_webhook(
+    public_key_pem: &str,
+    headers: HeadersArg,
+    body: Body,
+    options: Option<VerifyOptionsArg>,
+) -> Result<VerifiedWebhook, JsValue> {
+    let (h, body, freshness) = (webhook_headers(headers)?, body_bytes(&body)?, freshness(options)?);
+    let key = webhooks::PublicKey::from_pem(public_key_pem).map_err(webhook_error)?;
+    webhooks::verify(&key, &h, &body, freshness).map_err(webhook_error)?;
+    verified(&h, &body)
+}
+
+/// Kick's webhook key, read once: `new WebhookPublicKey(pem)`, then
+/// `key.verify(headers, body, options?)` for each delivery.
+#[wasm_bindgen]
+pub struct WebhookPublicKey(webhooks::PublicKey);
+
+#[wasm_bindgen]
+impl WebhookPublicKey {
+    /// Reads a PEM key (`BEGIN PUBLIC KEY`, as Kick serves it, or
+    /// `BEGIN RSA PUBLIC KEY`); throws if it is not one.
+    #[wasm_bindgen(constructor)]
+    pub fn new(pem: &str) -> Result<WebhookPublicKey, JsValue> {
+        webhooks::PublicKey::from_pem(pem).map(WebhookPublicKey).map_err(webhook_error)
+    }
+
+    /// `verifyWebhook`, with this key.
+    pub fn verify(
+        &self,
+        headers: HeadersArg,
+        body: Body,
+        options: Option<VerifyOptionsArg>,
+    ) -> Result<VerifiedWebhook, JsValue> {
+        let (h, body, freshness) = (webhook_headers(headers)?, body_bytes(&body)?, freshness(options)?);
+        webhooks::verify(&self.0, &h, &body, freshness).map_err(webhook_error)?;
+        verified(&h, &body)
+    }
 }

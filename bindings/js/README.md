@@ -32,6 +32,23 @@ Everything else - `channelRequest` / `parseChannel`, `historyRequest`,
 `livestreamsRequests`, `verifyWebhook`, `parseEvent`, `parseContent`, … -
 returns plain request objects for your `fetch` and parses what comes back.
 Parsers throw an `Error` with a `status` when Kick answered with an error.
+Ids and counts must be whole numbers (ids at most `Number.MAX_SAFE_INTEGER`);
+anything else throws rather than being rounded into another id.
+
+**Webhooks.** Read Kick's key once and check each delivery against the raw
+body (text or bytes), its headers (pairs, a fetch `Headers`, or an object),
+and the clock: the timestamp must be within 5 minutes of `now` (Unix
+seconds; this machine's clock by default).
+
+```js
+const key = new kick.WebhookPublicKey(pem);   // from publicKeyRequest / parsePublicKey
+const { headers, event } = key.verify(req.headers, rawBody);
+// or: kick.verifyWebhook(pem, headers, rawBody, { now, toleranceSecs })
+// a stored delivery, checked again later: { skipFreshness: true }
+```
+
+A valid signature means Kick sent this body to *some* app (every app shares
+the key): deduplicate on `headers.message_id`. See `docs/KICK.md` §4.3.
 
 See the repository's `docs/KICK.md` for everything known about Kick, with
 sources. MIT OR Apache-2.0. Not affiliated with Kick.
