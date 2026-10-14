@@ -40,14 +40,8 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: binaryen 120 (apt's is too old for wasm-bindgen's tables)
-        run: |
-          curl -sSL https://github.com/WebAssembly/binaryen/releases/download/version_120/binaryen-version_120-x86_64-linux.tar.gz | tar xz
-          echo "$PWD/binaryen-version_120/bin" >> "$GITHUB_PATH"
-      - name: wasm-bindgen-cli at the version Cargo.lock pins
-        run: |
-          v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
-          cargo install wasm-bindgen-cli --version "$v" --locked
+      # wasm-bindgen-cli at the version Cargo.lock pins, and a checked binaryen.
+      - run: scripts/install-wasm-tools.sh
       - uses: actions/setup-node@v5
         with:
           node-version: 22

@@ -295,11 +295,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - run: |
-          v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
-          cargo install wasm-bindgen-cli --version "$v" --locked
-          curl -sSL https://github.com/WebAssembly/binaryen/releases/download/version_120/binaryen-version_120-x86_64-linux.tar.gz | tar xz
-          echo "$PWD/binaryen-version_120/bin" >> "$GITHUB_PATH"
+      - run: scripts/install-wasm-tools.sh
       - uses: actions/setup-node@v5
         with:
           node-version: 24

@@ -34,11 +34,7 @@ jobs:
           elixir-version: "1.19"
       - uses: astral-sh/setup-uv@v6
       - name: Tools for the WebAssembly
-        run: |
-          v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
-          cargo install wasm-bindgen-cli --version "$v" --locked
-          curl -sSL https://github.com/WebAssembly/binaryen/releases/download/version_120/binaryen-version_120-x86_64-linux.tar.gz | tar xz
-          echo "$PWD/binaryen-version_120/bin" >> "$GITHUB_PATH"
+        run: scripts/install-wasm-tools.sh
       - name: Python with kicksdk, pdoc and markdown
         working-directory: bindings/python
         run: |
