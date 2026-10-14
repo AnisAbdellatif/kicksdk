@@ -1,4 +1,5 @@
 export * from './pkg/kicksdk.js';
+import type { Endpoints } from './pkg/kicksdk.js';
 
 /** The Origin Kick's realtime server accepts. */
 export const REQUIRED_ORIGIN: 'https://kick.com';
@@ -26,7 +27,8 @@ export interface ChatOptions {
   onDrop?(reason: string): void;
   fetch?: typeof fetch;
   createSocket?(url: string): WebSocket;
-  endpoints?: Partial<{ api: string; id: string; website: string; realtime: string }>;
+  /** Kick's URLs to use instead; a key left out or undefined stays Kick's. */
+  endpoints?: Endpoints | undefined;
   now?(): number;
 }
 
