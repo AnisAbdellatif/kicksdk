@@ -15,17 +15,58 @@
 //! Strings returned here belong to the library: hand each back to
 //! [`kicksdk_free_string`]. A session from [`kicksdk_session_new`] goes back
 //! to [`kicksdk_session_free`]. A panic never crosses the boundary; it comes
-//! back as an error envelope of kind `panic`.
+//! back as an error envelope of kind `panic`, with the panic's message, and
+//! is not also printed to stderr (see [`quietly`]).
 //!
-//! `include/kicksdk.h` declares the same for C.
+//! `include/kicksdk.h` declares the same for C, and `KICKSDK_ABI_VERSION`,
+//! which is [`ABI_VERSION`].
 
 use kicksdk::dispatch::{self, SessionHandle};
 use serde_json::{Value, json};
+use std::any::Any;
+use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char};
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{self, AssertUnwindSafe, catch_unwind};
+use std::sync::Once;
 
 /// Bumped when a function here changes shape; bindings check it on load.
+/// `KICKSDK_ABI_VERSION` in `include/kicksdk.h` is the same number.
 pub const ABI_VERSION: u32 = 1;
+
+thread_local! {
+    /// Set while this thread is inside [`quietly`].
+    static CATCHING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Runs `f`, catching a panic. The default panic hook would print the panic
+/// to stderr even though it is caught and returned as an envelope: a hook
+/// installed once keeps quiet for panics inside here and hands every other
+/// panic to the hook that was there before, so a program linking this crate
+/// (as an rlib, or with its own Rust) keeps its own panic output.
+fn quietly<T>(f: impl FnOnce() -> T) -> Result<T, String> {
+    static HOOK: Once = Once::new();
+    HOOK.call_once(|| {
+        let previous = panic::take_hook();
+        panic::set_hook(Box::new(move |info| {
+            if !CATCHING.with(Cell::get) {
+                previous(info);
+            }
+        }));
+    });
+    let outer = CATCHING.with(|c| c.replace(true));
+    let result = catch_unwind(AssertUnwindSafe(f));
+    CATCHING.with(|c| c.set(outer));
+    result.map_err(|payload| panic_message(payload.as_ref()))
+}
+
+fn panic_message(payload: &(dyn Any + Send)) -> String {
+    let detail =
+        payload.downcast_ref::<&str>().copied().or_else(|| payload.downcast_ref::<String>().map(String::as_str));
+    match detail {
+        Some(d) => format!("kicksdk panicked: {d}"),
+        None => "kicksdk panicked".to_owned(),
+    }
+}
 
 fn read(ptr: *const c_char) -> Result<String, String> {
     if ptr.is_null() {
@@ -57,7 +98,7 @@ fn give(v: Value) -> *mut c_char {
 }
 
 fn guarded(f: impl FnOnce() -> Value) -> *mut c_char {
-    give(catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| fail("panic", "kicksdk panicked".into())))
+    give(quietly(f).unwrap_or_else(|message| fail("panic", message)))
 }
 
 /// The ABI version, [`ABI_VERSION`].
@@ -66,7 +107,8 @@ pub extern "C" fn kicksdk_abi_version() -> u32 {
     ABI_VERSION
 }
 
-/// Runs one function by name with JSON arguments; returns a JSON envelope.
+/// Runs one function by name with JSON arguments; returns a JSON envelope
+/// (never null) for [`kicksdk_free_string`].
 ///
 /// # Safety
 /// `name` and `args_json` are NUL-terminated UTF-8 strings (or `args_json`
@@ -80,13 +122,14 @@ pub unsafe extern "C" fn kicksdk_call(name: *const c_char, args_json: *const c_c
 }
 
 /// A new realtime session for the feeds in `channels_json` (a JSON list of
-/// strings). Null if the list cannot be read.
+/// strings). **Null** if the list cannot be read (null, not UTF-8, not a
+/// JSON list of strings): check before using it.
 ///
 /// # Safety
 /// `channels_json` is a NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kicksdk_session_new(channels_json: *const c_char) -> *mut SessionHandle {
-    let made = catch_unwind(|| {
+    let made = quietly(|| {
         let channels: Vec<String> = serde_json::from_str(&read(channels_json).ok()?).ok()?;
         Some(Box::into_raw(Box::new(SessionHandle::new(channels))))
     });
@@ -180,5 +223,31 @@ mod tests {
         }
         let bad = CString::new("nope").unwrap();
         assert!(unsafe { kicksdk_session_new(bad.as_ptr()) }.is_null());
+        assert!(unsafe { kicksdk_session_new(std::ptr::null()) }.is_null());
+    }
+
+    #[test]
+    fn the_header_has_the_abi_version() {
+        let header = include_str!("../include/kicksdk.h");
+        let line =
+            header.lines().find(|l| l.starts_with("#define KICKSDK_ABI_VERSION")).expect("no KICKSDK_ABI_VERSION");
+        let n: u32 = line.split_whitespace().nth(2).unwrap().trim_end_matches('u').parse().unwrap();
+        assert_eq!(n, ABI_VERSION);
+        assert_eq!(kicksdk_abi_version(), ABI_VERSION);
+    }
+
+    #[test]
+    fn a_panic_comes_back_with_its_message() {
+        let out = quietly(|| -> u8 { panic!("boom") });
+        assert_eq!(out, Err("kicksdk panicked: boom".to_owned()));
+        let out = quietly(|| -> u8 { panic!("{}", String::from("formatted")) });
+        assert_eq!(out, Err("kicksdk panicked: formatted".to_owned()));
+        let out = guarded(|| panic!("x"));
+        let envelope: Value = serde_json::from_str(unsafe { CStr::from_ptr(out) }.to_str().unwrap()).unwrap();
+        unsafe { kicksdk_free_string(out) };
+        assert_eq!(envelope["error"], json!({"kind": "panic", "status": null, "message": "kicksdk panicked: x"}));
+        assert_eq!(quietly(|| 1), Ok(1));
+        // Outside, panics reach the previous hook again.
+        assert!(!CATCHING.with(Cell::get));
     }
 }
