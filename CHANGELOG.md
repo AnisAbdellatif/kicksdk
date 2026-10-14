@@ -188,6 +188,44 @@ version stays 0.1.1 until release.
   outside the default location; Android source builds link for the app's
   minimum NDK API.
 
+### Elixir (kicksdk)
+
+- **Breaking**: builders that can refuse their arguments return
+  `{:ok, request} | {:error, reason}`: `Website.channel_request`,
+  `channel_user_request` and the acting builders, `PublicApi`'s
+  `livestreams_requests`, `subscriptions_request`, `unsubscribe_requests`,
+  `top_livestreams_request`, and `Content.emote_url`. `Kicksdk.call`
+  returns request headers as `{k, v}` tuples, like the wrappers.
+- **Breaking**: `Webhooks.verify/4` takes `:now` (default
+  `System.os_time(:second)`), `:tolerance_secs` and `:skip_freshness`, and
+  verifies the raw bytes; failures are `{:error, {:webhook, message}}`.
+  New `Webhooks.public_key/1` reads Kick's key once.
+- Non-UTF-8 input returns `{:error, _}` instead of raising (webhook bodies
+  verify byte for byte).
+- `Session` takes any integer `now`, `System.monotonic_time(:millisecond)`
+  included; `deadline/1` answers on the caller's clock. A poisoned session
+  raises a clear `RuntimeError`; `closed/1` recovers it.
+- New: `Realtime.should_reconnect?/1`, `Kicksdk.Realtime.Backoff` (with
+  `next_delay_jittered/2`).
+- **Breaking**: endpoints with an unknown key or a non-string value raise
+  `ArgumentError`; HTTP statuses outside 0..65535 are `{:error, {:invalid, _}}`.
+- NIFs whose work grows with the input run on a dirty scheduler above 4 KiB.
+- `config :rustler_precompiled, :force_build, kicksdk: true` works; changing
+  `KICKSDK_BUILD`, `KICKSDK_BASE_URL` or `TARGET_*` recompiles the module;
+  an unrecognised system architecture or a `TARGET_*` cross build falls back
+  to a source build instead of failing.
+- `examples/elixir/chat.exs` ticks, refreshes its token, and reconnects or
+  stops as the session says.
+- Integers beyond 64 bits in Kick's JSON still arrive as floats (the core
+  reads JSON without arbitrary precision); documented.
+
+### Dispatch
+
+- **Breaking**: `endpoints` must be an object whose keys are the
+  `Endpoints` fields; an unknown key is a `call` error instead of being
+  ignored (a misspelt key would have sent that request to kick.com). A
+  `null` value keeps Kick's URL.
+
 ### Release
 
 - The Linux libraries are built with `cross` and checked against a glibc

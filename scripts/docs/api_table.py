@@ -91,7 +91,8 @@ def dart() -> dict[str, str]:
 def elixir() -> dict[str, str]:
     nif_src = (ROOT / "crates/kicksdk-nif/src/lib.rs").read_text()
     nif_to_core: dict[str, str] = {}
-    for chunk in nif_src.split("#[rustler::nif]")[1:]:
+    # `#[rustler::nif]` and `#[rustler::nif(schedule = "DirtyCpu")]` alike.
+    for chunk in re.split(r"#\[rustler::nif(?:\([^)]*\))?\]", nif_src)[1:]:
         f = re.search(r"fn (\w+)", chunk)
         m = re.search(MODULES + r"::(\w+)\(", chunk)
         if f and m:

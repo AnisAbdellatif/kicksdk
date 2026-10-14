@@ -124,9 +124,22 @@ impl Args<'_> {
     }
     fn endpoints(&self) -> Result<Endpoints, DispatchError> {
         let mut base = serde_json::to_value(Endpoints::default()).unwrap_or_default();
-        if let (Some(b), Some(Value::Object(given))) = (base.as_object_mut(), self.0.get("endpoints")) {
+        let given = match self.0.get("endpoints") {
+            None | Some(Value::Null) => return Ok(Endpoints::default()),
+            Some(Value::Object(given)) => given,
+            Some(_) => return Err(DispatchError::call("`endpoints` must be an object")),
+        };
+        if let Some(b) = base.as_object_mut() {
             for (k, v) in given {
-                b.insert(k.clone(), v.clone());
+                // A misspelt key would otherwise leave that URL at Kick's:
+                // a host that meant a test server would talk to kick.com.
+                if !b.contains_key(k) {
+                    return Err(DispatchError::call(format!("`endpoints`: unknown key `{k}`")));
+                }
+                // null keeps Kick's URL, like a key left out.
+                if !v.is_null() {
+                    b.insert(k.clone(), v.clone());
+                }
             }
         }
         serde_json::from_value(base).map_err(|e| DispatchError::call(format!("`endpoints`: {e}")))
@@ -591,5 +604,15 @@ mod tests {
         assert_eq!(out[0]["action"], "send");
         assert_eq!(s.call("is_connected", &Value::Null).unwrap(), json!(false));
         assert_eq!(s.call("deadline", &Value::Null).unwrap(), json!(45_000));
+    }
+
+    #[test]
+    fn endpoints_refuse_unknown_keys() {
+        let call_with = |e: Value| call("website.channel_request", &json!({"slug": "somechannel", "endpoints": e}));
+        assert!(call_with(json!({"websit": "http://localhost:1"})).is_err());
+        assert!(call_with(json!("http://localhost:1")).is_err());
+        let r = call_with(json!({"website": "http://localhost:1", "api": null})).unwrap();
+        assert!(r["url"].as_str().unwrap().starts_with("http://localhost:1/"));
+        assert!(call_with(Value::Null).is_ok());
     }
 }

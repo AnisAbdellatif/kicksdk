@@ -138,8 +138,11 @@ Per language:
   with snake_case keys, as Kick writes them. About 370 KB after wasm-opt,
   most of it RSA for webhooks; a browser-only build without the `webhooks`
   feature would be much smaller, if that ever matters.
-- **Elixir** (`bindings/elixir`, hex `kicksdk`): a NIF. Every call returns in
-  microseconds, so none needs a dirty scheduler. Values come back as
+- **Elixir** (`bindings/elixir`, hex `kicksdk`): a NIF. Chat-sized inputs
+  take microseconds; work grows with the input (about 20 µs per KiB of
+  JSON), so each NIF that parses or verifies has a `DirtyCpu` twin, which
+  the wrappers use above 4 KiB. Builders that can refuse their arguments
+  return `{:ok, _} | {:error, _}`. Values come back as
   JSON-shaped terms with **string keys**, not atoms: much of it is Kick's own
   data, and atom keys from it would let Kick grow the atom table.
 - **Python** (`bindings/python`, PyPI `kicksdk-py`, imported as `kicksdk`): PyO3 over `dispatch`,
