@@ -30,7 +30,9 @@
 //! signed URL for its stream (`ChatMoveToSupportedChannelEvent` on
 //! `channel.<id>` carries the hosting channel's). Nothing on the feed needs
 //! it, so [`Action::Event`]'s `data` never has a `playback_url` key: it is
-//! removed, at any depth, before the event is handed on.
+//! removed, at any depth, before the event is handed on. Only data that had
+//! one is encoded again; any other string is handed on as Kick sent it,
+//! byte for byte.
 
 use crate::events::{self, KickEvent};
 use serde::Serialize;
@@ -223,23 +225,31 @@ fn redact_tokens(text: &str) -> String {
 }
 
 /// `data` without `playback_url`, at any depth. A JSON string (Kick's
-/// usual form) is decoded, cleaned and encoded again only when it has one.
+/// usual form) is decoded, cleaned and encoded again only when a
+/// `playback_url` key was actually removed; otherwise it is passed on as
+/// Kick sent it, byte for byte (a chat message can mention `playback_url`).
 fn without_playback_urls(data: Value) -> Value {
-    fn strip(v: &mut Value) {
+    /// Whether anything was removed.
+    fn strip(v: &mut Value) -> bool {
         match v {
             Value::Object(map) => {
+                let before = map.len();
                 map.retain(|k, _| k != "playback_url");
-                map.values_mut().for_each(strip);
+                let removed = map.len() != before;
+                map.values_mut().fold(removed, |r, v| strip(v) | r)
             }
-            Value::Array(list) => list.iter_mut().for_each(strip),
-            _ => {}
+            Value::Array(list) => list.iter_mut().fold(false, |r, v| strip(v) | r),
+            _ => false,
         }
     }
     match data {
         Value::String(s) if s.contains("playback_url") => match serde_json::from_str::<Value>(&s) {
             Ok(mut v) => {
-                strip(&mut v);
-                Value::String(v.to_string())
+                if strip(&mut v) {
+                    Value::String(v.to_string())
+                } else {
+                    Value::String(s)
+                }
             }
             Err(_) => Value::String(s),
         },
@@ -599,6 +609,13 @@ mod tests {
         // Without one, the string is passed on as it was.
         let plain = Value::String("{\"b\":1,\"a\":2}".into());
         assert_eq!(without_playback_urls(plain.clone()), plain);
+        // Mentioned, not a key: Kick's string, byte for byte (escapes and
+        // key order kept).
+        let said = r#"{"id":"m1","content":"what is a playback_url? caf\u00e9 \/ ok","chatroom_id":1}"#;
+        assert_eq!(without_playback_urls(Value::String(said.into())), Value::String(said.into()));
+        // Not JSON at all: passed on too.
+        let odd = Value::String("playback_url {".into());
+        assert_eq!(without_playback_urls(odd.clone()), odd);
     }
 
     #[test]

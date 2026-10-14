@@ -89,8 +89,10 @@ version stays 0.1.1 until release.
   `Unsubscribed` actions before the connect `Send`.
 - A feed listed twice in `SessionOptions::channels` is subscribed once.
 - `Action::Event`'s `data` never contains a `playback_url` (removed at any
-  depth, e.g. from `ChatMoveToSupportedChannelEvent`). `Action`'s `Debug`
-  hides the token in connect/refresh frames.
+  depth, e.g. from `ChatMoveToSupportedChannelEvent`). Only data that had
+  one is re-encoded; any other `data` string (a chat message that merely
+  mentions `playback_url`, say) is handed on byte for byte as Kick sent it.
+  `Action`'s `Debug` hides the token in connect/refresh frames.
 - `Backoff::new` clamps a first wait of 0 to 1 ms and a max below the first
   up to it. New `Backoff::next_delay_jittered(random: f64) -> u64`: the
   delay spread over [half, all] by a host-drawn number in [0, 1).

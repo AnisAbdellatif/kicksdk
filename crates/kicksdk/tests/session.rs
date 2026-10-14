@@ -255,3 +255,18 @@ fn signed_urls_never_reach_the_host() {
     );
     assert!(!format!("{out:?}").contains("sekrit"));
 }
+
+#[test]
+fn a_chat_message_that_mentions_playback_url_is_passed_on_untouched() {
+    let mut s = Session::new(SessionOptions::new(vec!["chatrooms.1.v2".into()]));
+    s.open("t", 0);
+    s.receive(r#"{"id":1,"connect":{"ping":25}}"#, 0);
+    // As Kick encodes it: `\/` and `é` escapes, its own key order.
+    let data = r##"{"id":"m1","chatroom_id":1,"content":"where is the playback_url? café \/ ok","type":"message","created_at":"2026-10-01T00:00:00+00:00","sender":{"id":2,"username":"somechannel","slug":"somechannel","identity":{"color":"#fff","badges":[]}}}"##;
+    let frame = serde_json::json!({"push": {"channel": "chatrooms.1.v2", "pub": {"data": {
+        "event": "App\\Events\\ChatMessageEvent", "data": data}}}});
+    let out = s.receive(&frame.to_string(), 1);
+    let [Action::Event { data: got, event, .. }] = out.as_slice() else { panic!("{out:?}") };
+    assert_eq!(got.as_str(), Some(data), "byte for byte");
+    assert!(matches!(event, kicksdk::KickEvent::ChatMessage(m) if m.content == "where is the playback_url? café / ok"));
+}
