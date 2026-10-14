@@ -177,7 +177,8 @@ fn parsed<'a, T: Serialize>(
 
 /// The endpoints override: a JSON object with any of `api`, `id`, `website`,
 /// `realtime` as URL strings (null for the default). Anything else is
-/// raised: a typo must not quietly send the request to kick.com.
+/// raised, an unknown key even with a null value (as `dispatch` does): a
+/// typo must not quietly send the request to kick.com.
 fn endpoints(json: &[u8]) -> NifResult<Endpoints> {
     let mut e = Endpoints::default();
     if json.is_empty() {
@@ -186,21 +187,21 @@ fn endpoints(json: &[u8]) -> NifResult<Endpoints> {
     let given: serde_json::Map<String, Value> =
         serde_json::from_slice(json).map_err(|_| argument_error("endpoints must be a map of URL strings"))?;
     for (key, value) in given {
-        let url = match value {
-            Value::Null => continue,
-            Value::String(url) => url,
-            _ => return Err(argument_error(format!("endpoints: `{key}` must be a URL string"))),
-        };
-        e = match key.as_str() {
-            "api" => e.with_api(url),
-            "id" => e.with_id(url),
-            "website" => e.with_website(url),
-            "realtime" => e.with_realtime(url),
+        let set: fn(Endpoints, String) -> Endpoints = match key.as_str() {
+            "api" => Endpoints::with_api,
+            "id" => Endpoints::with_id,
+            "website" => Endpoints::with_website,
+            "realtime" => Endpoints::with_realtime,
             other => {
                 return Err(argument_error(format!(
                     "endpoints: unknown key `{other}` (expected api, id, website, realtime)"
                 )));
             }
+        };
+        e = match value {
+            Value::Null => e,
+            Value::String(url) => set(e, url),
+            _ => return Err(argument_error(format!("endpoints: `{key}` must be a URL string"))),
         };
     }
     Ok(e)

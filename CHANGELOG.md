@@ -253,8 +253,11 @@ version stays 0.1.1 until release.
 - **Breaking**: the session's `"close"` action has `"code"`, `"reason"`,
   `"terminal"` and `"retry_after_ms"` instead of `"reconnect"`; a terminal
   close means "wait longer and come back as a new client", never "stop".
-- **Breaking**: endpoints with an unknown key or a non-string value raise
+- **Breaking**: endpoints with an unknown key (even with a `nil` value), a
+  non-string value, or a struct (`%URI{}`) instead of a map raise
   `ArgumentError`; HTTP statuses outside 0..65535 are `{:error, {:invalid, _}}`.
+  The `Kicksdk.endpoints` type says what is accepted: atom or string keys,
+  `nil` values for Kick's own.
 - NIFs whose work grows with the input run on a dirty scheduler above 4 KiB.
 - `config :rustler_precompiled, :force_build, kicksdk: true` works; changing
   `KICKSDK_BUILD`, `KICKSDK_BASE_URL` or `TARGET_*` recompiles the module,
