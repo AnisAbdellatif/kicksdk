@@ -25,8 +25,13 @@
 //!
 //! Failures come back as a [`DispatchError`]: `kind` is `status` (Kick
 //! answered an error status, in `status`), `shape`, `json`, `invalid`
-//! (refused before sending), `webhook` (a delivery that does not verify), or
-//! `call` (no such function, or arguments that do not fit it).
+//! (refused before sending), `webhook` (a delivery that does not verify: a
+//! header missing or malformed, a bad key, a signature that does not match,
+//! a stale timestamp), or `call` (no such function, or arguments that do
+//! not fit it). `webhooks.verify` on a delivery that verifies but whose body
+//! is not the claimed type's shape fails with `shape` (`json` if it is not
+//! JSON): the type header is not signed, so that is a mismatched header or
+//! a body Kick changed, not a forgery.
 
 use crate::http::{Endpoints, Error};
 use crate::ids::{ChannelId, ChatroomId, UserId};
@@ -406,7 +411,10 @@ fn webhook_verify(a: &Args<'_>) -> Out {
     let body = a.body()?;
     let freshness = a.freshness()?;
     webhooks::verify_pem(a.str("public_key_pem")?, &headers, &body, freshness).map_err(|e| refuse(e.to_string()))?;
-    let event = webhooks::parse(&headers.event_type, &body).map_err(|e| refuse(e.to_string()))?;
+    // Signed, but not the claimed type's shape (or not JSON): `shape` /
+    // `json`, so a host can tell a forged delivery from a mismatched type
+    // header or a body Kick changed.
+    let event = webhooks::parse(&headers.event_type, &body)?;
     Ok(serde_json::json!({ "headers": to(&headers)?, "event": to(event)? }))
 }
 
@@ -590,6 +598,25 @@ mod tests {
         assert_eq!(e.kind, "webhook");
         let e = call("webhooks.verify", &args(json!({"body": body, "body_base64": b64, "now": 0}))).unwrap_err();
         assert_eq!(e.kind, "call");
+
+        // Signed, but the (unsigned) type header claims another type: not a
+        // forgery, a shape failure.
+        let mut retyped = headers.clone();
+        retyped["kick-event-type"] = json!("kicks.gifted");
+        let e = call(
+            "webhooks.verify",
+            &json!({"public_key_pem": pem, "headers": retyped, "body": body, "now": 1_790_217_344}),
+        )
+        .unwrap_err();
+        assert_eq!(e.kind, "shape", "{}", e.message);
+        let mut forged = headers.clone();
+        forged["kick-event-message-id"] = json!("01M38M9K3YRKV8E6Q68C18ZWG5");
+        let e = call(
+            "webhooks.verify",
+            &json!({"public_key_pem": pem, "headers": forged, "body": body, "now": 1_790_217_344}),
+        )
+        .unwrap_err();
+        assert_eq!(e.kind, "webhook", "{}", e.message);
 
         let parsed = call("webhooks.parse", &json!({"event_type": "channel.followed", "body": body})).unwrap();
         assert_eq!(parsed["type"], "followed");

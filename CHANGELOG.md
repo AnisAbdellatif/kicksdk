@@ -25,13 +25,20 @@ version stays 0.1.1 until release.
   require the message id to be a ULID and the timestamp RFC 3339, so no
   header can move the `id.timestamp.body` boundary of the signed text.
 - **Breaking**: `webhooks::parse(event_type: &str, body: impl AsRef<[u8]>) -> Result<WebhookEvent, kicksdk::Error>`
-  (was `serde_json::Error`). It refuses (`Error::Shape`) a body that is not
-  the shape of the claimed type: the type header is unsigned, so a signed
-  follow can no longer be passed off as, say, a Kicks gift. Unknown types
-  still come out as `Other`, unchecked; `.new` and `.renewal` subscriptions
-  share one shape.
+  (was `serde_json::Error`). It refuses (`Error::Shape`) a body that lacks
+  the claimed type's own field (`is_live`, `metadata` with a
+  title/language/category, `follower`, `subscriber`, `giftees`, `gift`):
+  the type header is unsigned, so a signed follow can no longer be passed
+  off as, say, a Kicks gift. No known type's body has another's own field,
+  so every re-typing between known types is refused (tested pairwise and
+  against the recordings). Other fields, including ones Kick adds later,
+  are ignored. Unknown types still come out as `Other`, unchecked; `.new`
+  and `.renewal` subscriptions share one shape.
 - Docs (`webhooks` module, KICK.md §4.3): a valid signature means "Kick
   sent this to some app"; deduplicate on the message id and check freshness.
+  A Kick retry (none seen yet) would likely carry the original timestamp
+  and come back `Stale`; a receiver that prefers late retries to losing
+  them can widen the tolerance and must remember message ids as long.
 - `rsa` stays (verify only); RUSTSEC-2023-0071 does not apply and is
   recorded in `deny.toml` and `.cargo/audit.toml`.
 
@@ -253,6 +260,13 @@ version stays 0.1.1 until release.
     UTF-8. Missing `now` is a `call` error.
   - `webhooks.parse {event_type, body | body_base64}`; a body that is not
     the type's shape fails with kind `shape` (was always `json`).
+  - `webhooks.verify`: a delivery whose signature verifies but whose body
+    is not the claimed type's shape now fails with kind `shape` (`json` if
+    the body is not JSON), no longer `webhook`. `webhook` is kept for what
+    makes a delivery untrustworthy (missing/malformed header, bad key,
+    signature mismatch, stale timestamp). Bindings that map kinds (Elixir's
+    `{:error, {:webhook, msg}}`, Python's and Dart's exceptions) should
+    surface `shape` distinctly.
   - Numbers must be exact integers in their range (`1.0` is accepted;
     `1.5`, `-1`, `1e30`, 2^32+ for `limit`/`version`/`minutes` are `call`
     errors instead of being rounded or truncated).

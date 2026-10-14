@@ -122,7 +122,23 @@ fn webhook_bodies_are_read_by_type() {
             .map(|h| (h[0].as_str().unwrap().to_owned(), h[1].as_str().unwrap().to_owned()))
             .collect();
         let h = webhooks::Headers::from_pairs(headers.iter().map(|(a, b)| (a.as_str(), b.as_str()))).unwrap();
-        let event = webhooks::parse(&h.event_type, v["request"]["body"].as_str().unwrap()).unwrap();
+        let body = v["request"]["body"].as_str().unwrap();
+        let event = webhooks::parse(&h.event_type, body).unwrap();
+        // The type header is unsigned: no recorded body passes as another
+        // type this crate reads.
+        for other in [
+            "livestream.status.updated",
+            "livestream.metadata.updated",
+            "channel.followed",
+            "channel.subscription.new",
+            "channel.subscription.renewal",
+            "channel.subscription.gifts",
+            "kicks.gifted",
+        ] {
+            if other != h.event_type {
+                assert!(webhooks::parse(other, body).is_err(), "{} passed as {other}", path.display());
+            }
+        }
         match (h.event_type.as_str(), &event) {
             ("channel.followed", webhooks::WebhookEvent::Followed { follower, .. }) => {
                 assert!(follower.as_ref().unwrap().user_id.is_some())

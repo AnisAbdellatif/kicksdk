@@ -196,8 +196,12 @@ Details worth knowing:
   - keep the message ids it has seen for at least that window and drop
     repeats (needed for Kick's own duplicates anyway);
   - read the body by its own shape, not only the type header (kicksdk
-    refuses a body that is not the claimed type's shape; `.new` and
-    `.renewal` subscriptions share one shape and cannot be told apart);
+    refuses a body that lacks the claimed type's own field - `is_live`,
+    `metadata` with a title/language/category, `follower`, `subscriber`,
+    `giftees`, `gift` - which no other type's body has; fields it does not
+    know are ignored, so a field Kick adds does not break deliveries;
+    `.new` and `.renewal` subscriptions share one shape and cannot be told
+    apart);
   - expect the message id to be a ULID and the timestamp RFC 3339: neither
     can then contain the `.` that separates the signed parts.
 - **Fast**: 0.6 to 0.9s on average from Kick's timestamp to our receipt, for
@@ -210,6 +214,13 @@ Details worth knowing:
   exist, and none arrived afterwards (checked two hours later).
   *(production, once)* Treat a failed delivery as lost; the ingress
   Worker retries on the backup receiver itself (KickTracker's project.md §15.2).
+  **If Kick does retry**, the retry most likely carries the original message
+  id and timestamp (they are what is signed), so a freshness check refuses
+  one that comes later than its tolerance (kicksdk: `Stale`). 5 minutes
+  suits a receiver that is up; one that would rather take late retries
+  than lose them can widen the tolerance (to a day, say) and must then
+  remember message ids for as long, since that window is also how long a
+  captured delivery can be replayed. *(inference, unverified)*
 - **Missed webhooks are lost.** Stream state and metadata can be recovered
   by polling; follows, subs, gifts and Kicks cannot.
 - No viewer-count event and **no raid/host event** among webhooks.
