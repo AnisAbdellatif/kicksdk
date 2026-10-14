@@ -51,17 +51,19 @@ def verify(
         args["now"] = int(time.time() if now is None else now)
         if tolerance_secs is not None:
             args["tolerance_secs"] = tolerance_secs
-    return _call("webhooks.verify", **args)
+    out: dict[str, Any] = _call("webhooks.verify", **args)
+    return out
 
 
 def parse(event_type: str, body: Body) -> dict[str, Any]:
     """Reads a body by its type header, without checking its signature.
     Raises :class:`kicksdk.KickError` (kind ``shape``) for a body that is not
     that type's shape: the type header is not signed."""
-    return _call("webhooks.parse", event_type=event_type, **_body(body))
+    out: dict[str, Any] = _call("webhooks.parse", event_type=event_type, **_body(body))
+    return out
 
 
-def _body(body: Body) -> dict[str, str]:
+def _body(body: Body) -> dict[str, Any]:
     if isinstance(body, str):
         return {"body": body}
     if isinstance(body, (bytes, bytearray, memoryview)):
