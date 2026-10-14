@@ -93,12 +93,16 @@ abstract final class Realtime {
 
 /// One connection's worth of Kick's Centrifugo protocol. Each method returns
 /// the actions to carry out: `{"action": "send", "text": ...}`,
-/// `{"action": "close", "code", "reason", "reconnect"}` (close the socket,
-/// call [closed], and reconnect only if `reconnect` is true),
+/// `{"action": "close", "code", "reason", "terminal", "retry_after_ms"}`
+/// (close the socket, call [closed], wait
+/// `Backoff.nextDelayFor(retry_after_ms, random)` and reconnect, with a new
+/// client id if `terminal`: never stop for good on one, docs/KICK.md §6.1),
 /// `refresh_token` (fetch a token for the same client id and pass it to
 /// [refresh]; if that fails, carry on: Kick ends the connection when the old
 /// token runs out), `connected`, `subscribed`, `unsubscribed`,
-/// `subscribe_failed`, `event`. Times are milliseconds.
+/// `subscribe_failed`, `event`. `subscribed` for the chat feed (the first of
+/// [Realtime.chatChannels]) is when to call [Backoff.reset]. Times are
+/// milliseconds.
 class Session {
   final native.NativeSession _s;
 
@@ -119,13 +123,17 @@ class Session {
   void dispose() => _s.close();
 }
 
-/// Reconnect delays: 1 s doubling to 30 s, back to 1 s once connected. The
-/// core's `realtime::Backoff`, in milliseconds: a first wait under 1 ms
-/// counts as 1 ms, and a longest wait below the first is raised to it.
+/// Reconnect delays: 1 s doubling to 30 s, back to 1 s once connected, and
+/// a slower stage for terminal closes (5, 10, 20, then 30 minutes, see
+/// [nextDelayFor]). The core's `realtime::Backoff`, in milliseconds: a first
+/// wait under 1 ms counts as 1 ms, and a longest wait below the first is
+/// raised to it.
 class Backoff {
   final Duration initial;
   final Duration max;
   late Duration _next = initial;
+  // Terminal closes since the last reset.
+  var _terminalCloses = 0;
 
   Backoff({Duration initial = const Duration(seconds: 1), Duration max = const Duration(seconds: 30)})
     : this._(initial < _min ? _min : initial, max);
@@ -133,6 +141,13 @@ class Backoff {
   Backoff._(this.initial, Duration max) : max = max < initial ? initial : max;
 
   static const _min = Duration(milliseconds: 1);
+
+  // The longest terminal wait, as a multiple of the shortest: 5 → 30 minutes.
+  static const _terminalCap = 6;
+
+  // The most milliseconds a Duration holds (it counts microseconds in an
+  // int); terminal waits saturate here, where the core's saturate at 2^64-1.
+  static const _maxMs = 0x7fffffffffffffff ~/ 1000;
 
   /// How long to wait before the next attempt; the one after waits longer.
   Duration next() {
@@ -148,13 +163,49 @@ class Backoff {
   /// clamped; NaN counts as 0. Never less than 1 ms.
   Duration nextDelayJittered(double random) {
     final ms = next().inMilliseconds;
-    final r = random.isNaN ? 0.0 : random.clamp(0.0, 1.0);
     final half = ms ~/ 2;
-    return Duration(milliseconds: (half + ((ms - half) * r).floor()).clamp(1, ms));
+    return Duration(milliseconds: (half + _spread(ms - half, random)).clamp(1, ms));
   }
 
-  /// A connection worked: the next failure starts from the beginning.
-  void reset() => _next = initial;
+  /// How long to wait after a close that asks for at least `retryAfterMs`
+  /// (a session `close` action's `retry_after_ms`, or [Realtime.retryAfterMs]
+  /// of the socket's close code), spread by `random` from [0, 1) (out of
+  /// range clamped, NaN as 0).
+  ///
+  /// - 0, an ordinary drop: [nextDelayJittered].
+  /// - More, a terminal close: `retryAfterMs` doubled for each terminal close
+  ///   before this one since the last [reset], at most six times
+  ///   `retryAfterMs`, plus `random` times a quarter of that. Never less than
+  ///   `retryAfterMs`. The ordinary stage is left as it was.
+  ///
+  /// With Kick's 300000 and `random` 0: 5, 10, 20, 30, 30 … minutes; with
+  /// `random` 0.5, an eighth more each. A negative `retryAfterMs` is a
+  /// [RangeError].
+  Duration nextDelayFor(int retryAfterMs, double random) {
+    RangeError.checkNotNegative(retryAfterMs, 'retryAfterMs');
+    if (retryAfterMs == 0) return nextDelayJittered(random);
+    final doubled = 1 << (_terminalCloses < 3 ? _terminalCloses : 3);
+    final factor = doubled < _terminalCap ? doubled : _terminalCap;
+    _terminalCloses++;
+    final least = retryAfterMs < _maxMs ? retryAfterMs : _maxMs;
+    final wait = least > _maxMs ~/ factor ? _maxMs : least * factor;
+    final total = wait + _spread(wait ~/ 4, random);
+    return Duration(milliseconds: total < _maxMs ? total : _maxMs);
+  }
+
+  /// The chat feed is subscribed: the next failure starts from the
+  /// beginning, and so does the next terminal close.
+  void reset() {
+    _next = initial;
+    _terminalCloses = 0;
+  }
+
+  // `random` (from [0, 1); out of range clamped, NaN as 0) times `span`.
+  static int _spread(int span, double random) {
+    final r = random.isNaN ? 0.0 : random.clamp(0.0, 1.0);
+    final x = (span * r).floor();
+    return x < span ? x : span;
+  }
 }
 
 /// Kick's official API (`api.kick.com/public/v1`).

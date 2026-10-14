@@ -134,13 +134,40 @@ void main() {
     expect(Backoff(initial: const Duration(milliseconds: 1)).nextDelayJittered(0).inMilliseconds, 1);
   });
 
-  test('close codes: terminal ones are not worth a reconnect', () {
-    expect(Realtime.shouldReconnect(1006), isTrue);
-    expect(Realtime.shouldReconnect(3000), isTrue);
-    expect(Realtime.shouldReconnect(3501), isFalse);
-    expect(Realtime.shouldReconnect(4499), isTrue);
-    expect(Realtime.shouldReconnect(4500), isFalse);
-    expect(() => Realtime.shouldReconnect(70000), throwsA(isA<KickException>().having((e) => e.kind, 'kind', 'call')));
+  test('terminal backoff: 5, 10, 20, 30 minutes, then 30; reset starts over', () {
+    // The CHANGELOG's vectors for every binding.
+    final b = Backoff();
+    expect(
+      [for (var i = 0; i < 5; i++) b.nextDelayFor(300000, 0.0).inMilliseconds],
+      [300000, 600000, 1200000, 1800000, 1800000],
+    );
+    b.reset();
+    expect(b.nextDelayFor(300000, 0.0).inMilliseconds, 300000);
+    expect(Backoff().nextDelayFor(300000, 0.5).inMilliseconds, 337500);
+    expect(Backoff().nextDelayFor(0, 0.0).inMilliseconds, 500);
+  });
+
+  test('terminal backoff leaves the ordinary stage alone, and saturates', () {
+    final b = Backoff();
+    expect(b.nextDelayFor(0, 0).inMilliseconds, 500);
+    expect(b.nextDelayFor(300000, 1).inMilliseconds, 375000);
+    expect(b.nextDelayFor(300000, double.nan).inMilliseconds, 600000);
+    expect(b.nextDelayFor(300000, -3).inMilliseconds, 1200000);
+    // The ordinary stage went on from where it was: 2 s, halved at 0.
+    expect(b.nextDelayFor(0, 0).inMilliseconds, 1000);
+    expect(b.nextDelayFor(1, 0.99).inMilliseconds, 6);
+    final huge = Backoff().nextDelayFor(0x7fffffffffffffff, 1);
+    expect(huge.inMilliseconds, 0x7fffffffffffffff ~/ 1000);
+    expect(() => Backoff().nextDelayFor(-1, 0), throwsRangeError);
+  });
+
+  test('close codes: terminal ones wait 5 minutes, others the ordinary backoff', () {
+    expect(Realtime.retryAfterMs(1006), 0);
+    expect(Realtime.retryAfterMs(3000), 0);
+    expect(Realtime.retryAfterMs(3501), 300000);
+    expect(Realtime.retryAfterMs(4499), 0);
+    expect(Realtime.retryAfterMs(4500), 300000);
+    expect(() => Realtime.retryAfterMs(70000), throwsA(isA<KickException>().having((e) => e.kind, 'kind', 'call')));
   });
 
   test('arguments JSON cannot hold are refused before the call', () {
