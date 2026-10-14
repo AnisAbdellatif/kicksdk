@@ -17,6 +17,7 @@
   "sideEffects": false,
   "scripts": {
     "build": "../../scripts/build-js.sh",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "typecheck": "tsc -p test/types/tsconfig.json"
   }
 }
