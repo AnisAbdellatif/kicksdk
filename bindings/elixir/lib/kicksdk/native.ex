@@ -134,7 +134,7 @@ defmodule Kicksdk.Native do
   def token_request(_e, _client_id), do: err()
   def parse_token(_status, _body), do: err()
   def parse_token_dirty(_status, _body), do: err()
-  def should_reconnect(_code), do: err()
+  def retry_after_ms(_code), do: err()
   def backoff_new(_initial_ms, _max_ms), do: err()
   def backoff_next(_backoff, _random), do: err()
   def backoff_reset(_backoff), do: err()

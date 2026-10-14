@@ -13,6 +13,14 @@
 //!    before then, for the **same** client id.
 //! 3. Open a WebSocket to the server's URL and drive a [`Session`] with what
 //!    arrives on it.
+//! 4. When the connection ends ([`Action::Close`], or the socket closing by
+//!    itself with a code), reconnect after
+//!    [`Backoff::next_delay_for`]`(retry_after_ms, random)`: the close's
+//!    `retry_after_ms`, or [`retry_after_ms`] of the socket's close code.
+//!    A terminal close (`retry_after_ms` > 0: a ban, a refused token, a
+//!    connection limit) waits 5 minutes and more, and starts again from
+//!    step 1 with a **new client id**; it is never the end for good.
+//!    [`Backoff::reset`] once the chat feed is subscribed.
 //!
 //! **Origin.** The WebSocket server refuses the handshake (403) unless its
 //! Origin is `https://kick.com`, and the two endpoints above answer CORS for
@@ -26,7 +34,7 @@ mod backoff;
 mod session;
 
 pub use backoff::Backoff;
-pub use session::{Action, Session, SessionOptions, should_reconnect};
+pub use session::{Action, Session, SessionOptions, TERMINAL_RETRY_MS, retry_after_ms};
 
 use crate::http::{self, Endpoints, Error, Method, Request};
 use crate::ids::{ChannelId, ChatroomId};

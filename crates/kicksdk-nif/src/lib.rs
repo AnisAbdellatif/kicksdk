@@ -290,8 +290,8 @@ fn parse_token_dirty<'a>(env: Env<'a>, status: Term<'a>, body: Binary<'a>) -> Ni
 }
 
 #[rustler::nif]
-fn should_reconnect(code: u16) -> bool {
-    realtime::should_reconnect(code)
+fn retry_after_ms(code: u16) -> u64 {
+    realtime::retry_after_ms(code)
 }
 
 /// `realtime::Backoff` as three integers, `{initial_ms, max_ms, next_ms}`,

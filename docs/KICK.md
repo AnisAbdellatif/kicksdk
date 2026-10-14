@@ -359,10 +359,30 @@ key 32cbd69e4b950bf97679 not in this cluster…"}}` and closes. Noticed
   `push.disconnect`, or the WebSocket close frame's code) of 3000-3499 or
   4000-4499 is worth a reconnect, **3500-3999 and 4500-4999 are terminal**
   (reconnecting as before would be refused again). A refused connect or
-  refresh is worth retrying only for 109 (token expired), an error marked
-  `temporary`, or a transport error. An `unsub` push with a code from
-  **2500 to 2999 asks the client to subscribe again**; kicksdk's session
-  does so itself. None of these has been seen from Kick yet.
+  refresh is worth retrying at once only for 109 (token expired), an error
+  marked `temporary`, or a transport error. An `unsub` push with a code
+  from **2500 to 2999 asks the client to subscribe again**; kicksdk's
+  session does so itself. None of these has been seen from Kick yet.
+- **Terminal is not for good** *(kicksdk's choice)*: for a guest reading
+  chat, what makes a close terminal - a refused guest token, a connection
+  or rate limit, an IP briefly blocked - usually passes, and a reader that
+  stops for good on one goes quiet until someone restarts it. So kicksdk
+  never stops on its own: a terminal close waits **5 minutes**, then
+  reconnects as a **new client** (a new client id, so a new guest token,
+  and a new connection request). Terminal closes in a row, with no chat
+  feed subscribed in between, wait longer each time: **5, 10, 20, then 30
+  minutes**, each plus up to a quarter, at random, so readers refused
+  together do not return together. The chat feed subscribing ends the
+  streak. How every driver does it:
+
+  | Event | What the driver calls |
+  |---|---|
+  | The session says `close` | close the socket, `session.closed()`, then wait `backoff.next_delay_for(close.retry_after_ms, random)`; if `close.terminal`, make a new client id |
+  | The socket closes by itself with a code | `session.closed()`, then wait `backoff.next_delay_for(realtime::retry_after_ms(code), random)`; more than 0 is terminal: new client id |
+  | The socket fails without a code, a request fails | wait `backoff.next_delay_for(0, random)` (the ordinary 1 s → 30 s) |
+  | `subscribed` for the chat feed (the first in `chat_channels`) | `backoff.reset()` |
+
+  A driver stops only when its host asks it to.
 - **No `ping` in the connect reply** means the server will not ping (a
   Centrifugo server can be set up so); the 25 s silence rule then does not
   apply, and kicksdk does not close a quiet feed. Kick has always sent

@@ -203,7 +203,7 @@ pub fn call(name: &str, args: &Value) -> Out {
             let (s, b) = a.status_body()?;
             ok(realtime::parse_token(s, b))
         }
-        "realtime.should_reconnect" => to(realtime::should_reconnect(a.u16("code")?)),
+        "realtime.retry_after_ms" => to(realtime::retry_after_ms(a.u16("code")?)),
 
         "public_api.token_request" => {
             to(public_api::token_request(&a.endpoints()?, a.str("client_id")?, a.str("client_secret")?))
@@ -474,7 +474,7 @@ pub const FUNCTIONS: &[&str] = &[
     "realtime.parse_connection",
     "realtime.token_request",
     "realtime.parse_token",
-    "realtime.should_reconnect",
+    "realtime.retry_after_ms",
     "public_api.token_request",
     "public_api.parse_token",
     "public_api.livestreams_requests",
@@ -564,8 +564,10 @@ mod tests {
         assert!(call("website.history_request", &json!({"channel_id": u64::MAX})).is_ok());
         let mut s = SessionHandle::new(vec![]);
         assert_eq!(s.call("open", &json!({"token": "t", "now": 1.5})).unwrap_err().kind, "call");
-        assert_eq!(call("realtime.should_reconnect", &json!({"code": 3501})).unwrap(), json!(false));
-        assert_eq!(call("realtime.should_reconnect", &json!({"code": 70_000})).unwrap_err().kind, "call");
+        assert_eq!(call("realtime.retry_after_ms", &json!({"code": 3501})).unwrap(), json!(300_000));
+        assert_eq!(call("realtime.retry_after_ms", &json!({"code": 1006})).unwrap(), json!(0));
+        assert_eq!(call("realtime.retry_after_ms", &json!({"code": 70_000})).unwrap_err().kind, "call");
+        assert_eq!(call("realtime.should_reconnect", &json!({"code": 3501})).unwrap_err().kind, "call");
     }
 
     #[test]
@@ -680,6 +682,14 @@ mod tests {
         assert_eq!(out[0]["action"], "send");
         assert_eq!(s.call("is_connected", &Value::Null).unwrap(), json!(false));
         assert_eq!(s.call("deadline", &Value::Null).unwrap(), json!(45_000));
+        // A close, in the order bindings see its keys.
+        let out = s
+            .call("receive", &json!({"text": r#"{"id":1,"error":{"code":101,"message":"unauthorized"}}"#, "now": 1}))
+            .unwrap();
+        assert_eq!(
+            serde_json::to_string(&out).unwrap(),
+            r#"[{"action":"close","code":101,"reason":"Kick refused the connection: 101 unauthorized","terminal":true,"retry_after_ms":300000}]"#
+        );
     }
 
     #[test]

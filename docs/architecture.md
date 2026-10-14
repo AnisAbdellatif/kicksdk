@@ -84,13 +84,23 @@ What Kick sends is bounded before use (a ping of 1 s to 10 min, a token
 lifetime of 1 s to a day) and time sums saturate, so neither Kick nor a
 host's `now` can overflow them.
 
-Reconnecting is the host's. `Action::Close` says whether it makes sense
-(`reconnect`, from Centrifugo's code ranges: 3500-3999 and 4500-4999 are
-terminal), and `realtime::should_reconnect` answers the same for a close
-code the host's socket reports. `Backoff` gives the delays (1 s doubling to
-30 s, reset once the chat feed is subscribed); `next_delay_jittered` spreads
-them with a random number the host draws, since the core has no randomness
-of its own.
+Reconnecting is the host's, timed by the core. `Action::Close` says how
+long at least to wait (`retry_after_ms`: 0 for an ordinary drop, 5 minutes
+for a terminal close, from Centrifugo's code ranges: 3500-3999 and
+4500-4999) and whether it was terminal (`terminal`: reconnect as a new
+client id), and `realtime::retry_after_ms` answers the same for a close
+code the host's socket reports. Nothing is terminal for good: a refused
+guest token or a connection limit usually passes, so a driver never stops
+by itself (KICK.md §6.1). `Backoff::next_delay_for(retry_after_ms, random)`
+gives the delay: with 0, the ordinary 1 s doubling to 30 s; with more, a
+terminal stage that doubles that wait on each terminal close in a row, to
+six times it (5, 10, 20, 30 minutes). Both are spread by a random number
+the host draws, since the core has no randomness of its own, and both
+start over at `reset`, which the host calls once the chat feed is
+subscribed. The escalation lives in `Backoff`, not in `Session`, because a
+socket can close with a terminal code without the session having seen
+anything, and a `Backoff` is what every driver already keeps across
+connections.
 
 ## Webhooks
 

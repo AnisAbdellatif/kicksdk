@@ -70,18 +70,28 @@ impl SessionOptions {
     }
 }
 
-/// Whether a connection closed with this code is worth opening again, by
-/// Centrifugo's convention: 3500-3999 and 4500-4999 are terminal (the
-/// server does not want this client back as it is: a bad token, a ban, a
-/// refused request); anything else - 3000-3499, 4000-4499, the WebSocket
-/// codes below 3000 (a network drop is 1006) - is worth a reconnect, with
-/// a [`super::Backoff`].
+/// The least a host waits before reconnecting after a terminal close: 5
+/// minutes. [`super::Backoff::next_delay_for`] lengthens it for terminal
+/// closes in a row.
+pub const TERMINAL_RETRY_MS: u64 = 300_000;
+
+/// How long at least to wait before reconnecting after the socket closed
+/// with this code, ms: [`TERMINAL_RETRY_MS`] for Centrifugo's terminal
+/// codes, 3500-3999 and 4500-4999 (the server does not want this client
+/// back as it is: a bad token, a ban, a refused request, too many
+/// connections), and 0 - the ordinary backoff - for anything else:
+/// 3000-3499, 4000-4499, the WebSocket codes below 3000 (a network drop is
+/// 1006).
 ///
-/// For the close code the host's socket reports, and for
-/// [`Action::Close`]'s `code` (which already carries the answer in
-/// `reconnect`).
-pub fn should_reconnect(code: u16) -> bool {
-    !matches!(code, 3500..=3999 | 4500..=4999)
+/// A terminal close is not the end: for a guest reading chat, a refused
+/// token or a connection limit usually passes. Reconnect after
+/// [`super::Backoff::next_delay_for`] of this, with a **new client id**
+/// and so a new guest token. More than 0 means terminal.
+///
+/// For the close code the host's socket reports; [`Action::Close`] already
+/// carries the answer in `terminal` and `retry_after_ms`.
+pub fn retry_after_ms(code: u16) -> u64 {
+    if matches!(code, 3500..=3999 | 4500..=4999) { TERMINAL_RETRY_MS } else { 0 }
 }
 
 /// What the host should do, or know, after a call.
@@ -100,21 +110,32 @@ pub enum Action {
         /// The frame.
         text: String,
     },
-    /// Close the socket, then call [`Session::closed`]. Reconnect (with a
-    /// [`super::Backoff`]) only if `reconnect` says so and the connection is
-    /// still wanted: a terminal code means the same connection would be
-    /// refused again.
+    /// Close the socket, then call [`Session::closed`]. If the connection
+    /// is still wanted, reconnect after
+    /// [`super::Backoff::next_delay_for`]`(retry_after_ms, random)`, with a
+    /// new token; after a terminal close, for a new client id too.
+    ///
+    /// Serialized: `{"action":"close","code":3501,"reason":"…",
+    /// "terminal":true,"retry_after_ms":300000}`.
     #[non_exhaustive]
     Close {
         /// Why: Kick's disconnect code (3000-4999, see
-        /// [`should_reconnect`]), Kick's error code when it refused the
+        /// [`retry_after_ms`]), Kick's error code when it refused the
         /// connect or a token refresh (101 unauthorized, 109 token
         /// expired, …), or 0 when the session gave up itself (silence).
         code: i64,
         /// Why, for a log line.
         reason: String,
-        /// Whether opening a new connection (with a new token) makes sense.
-        reconnect: bool,
+        /// Kick does not want this client back as it is: a terminal
+        /// disconnect code, or a refused connect or refresh that is not
+        /// worth retrying at once. Reconnect all the same, after the long
+        /// wait, with a new client id and token; worth a log line or a
+        /// report.
+        terminal: bool,
+        /// The least to wait before reconnecting, ms: [`TERMINAL_RETRY_MS`]
+        /// when `terminal`, else 0 (the ordinary backoff). Pass it to
+        /// [`super::Backoff::next_delay_for`].
+        retry_after_ms: u64,
     },
     /// Fetch a new token for the same client id ([`super::token_request`])
     /// and pass it to [`Session::refresh`]. If that fails, do nothing: Kick
@@ -170,11 +191,12 @@ impl fmt::Debug for Action {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Action::Send { text } => f.debug_struct("Send").field("text", &redact_tokens(text)).finish(),
-            Action::Close { code, reason, reconnect } => f
+            Action::Close { code, reason, terminal, retry_after_ms } => f
                 .debug_struct("Close")
                 .field("code", code)
                 .field("reason", reason)
-                .field("reconnect", reconnect)
+                .field("terminal", terminal)
+                .field("retry_after_ms", retry_after_ms)
                 .finish(),
             Action::RefreshToken => f.write_str("RefreshToken"),
             Action::Connected { client } => f.debug_struct("Connected").field("client", client).finish(),
@@ -266,8 +288,10 @@ fn quoted(s: &str) -> String {
 }
 
 /// Whether, after a refused connect or refresh, a new connection could fare
-/// better: as Centrifugo's own client decides, for a transport error
-/// (below 100), an error Kick marks `temporary`, and 109 (token expired).
+/// better at once: as Centrifugo's own client decides, for a transport
+/// error (below 100), an error Kick marks `temporary`, and 109 (token
+/// expired). Any other refusal is terminal: the long wait, then a new
+/// client id.
 fn retryable(code: i64, temporary: bool) -> bool {
     code < 100 || temporary || code == 109
 }
@@ -420,7 +444,7 @@ impl Session {
         match (pending, error) {
             (Pending::Connect, Some((code, message, temporary))) => {
                 let reason = format!("Kick refused the connection: {code} {message}");
-                self.close(code, reason, retryable(code, temporary), out);
+                self.close(code, reason, !retryable(code, temporary), out);
             }
             (Pending::Connect, None) => {
                 let reply = msg.get("connect").cloned().unwrap_or_default();
@@ -449,7 +473,7 @@ impl Session {
             }
             (Pending::Refresh, Some((code, message, temporary))) => {
                 let reason = format!("Kick refused the new token: {code} {message}");
-                self.close(code, reason, retryable(code, temporary), out);
+                self.close(code, reason, !retryable(code, temporary), out);
             }
             (Pending::Refresh, None) => {
                 let reply = msg.get("refresh").cloned().unwrap_or_default();
@@ -463,12 +487,12 @@ impl Session {
         if let Some(d) = push.get("disconnect") {
             let code = d.get("code").and_then(Value::as_i64).unwrap_or(0);
             let reason = d.get("reason").and_then(Value::as_str).unwrap_or("");
-            let reconnect = match u16::try_from(code) {
-                Ok(c @ 3000..=4999) => should_reconnect(c),
+            let terminal = match u16::try_from(code) {
+                Ok(c @ 3000..=4999) => retry_after_ms(c) > 0,
                 // Outside Centrifugo's ranges: what the push says, if anything.
-                _ => d.get("reconnect").and_then(Value::as_bool).unwrap_or(true),
+                _ => d.get("reconnect").and_then(Value::as_bool) == Some(false),
             };
-            self.close(code, format!("Kick disconnected: {code} {reason}"), reconnect, out);
+            self.close(code, format!("Kick disconnected: {code} {reason}"), terminal, out);
         } else if let Some(u) = push.get("unsub") {
             if self.subscribed.remove(&channel) {
                 let code = u.get("code").and_then(Value::as_i64).unwrap_or(0);
@@ -499,10 +523,11 @@ impl Session {
         });
     }
 
-    fn close(&mut self, code: i64, reason: String, reconnect: bool, out: &mut Vec<Action>) {
+    fn close(&mut self, code: i64, reason: String, terminal: bool, out: &mut Vec<Action>) {
         if self.phase != Phase::Closing {
             self.phase = Phase::Closing;
-            out.push(Action::Close { code, reason, reconnect });
+            let retry_after_ms = if terminal { TERMINAL_RETRY_MS } else { 0 };
+            out.push(Action::Close { code, reason, terminal, retry_after_ms });
         }
     }
 
@@ -514,7 +539,7 @@ impl Session {
             return out;
         }
         if self.silence_deadline().is_some_and(|d| now >= d) {
-            self.close(0, "Kick went quiet".into(), true, &mut out);
+            self.close(0, "Kick went quiet".into(), false, &mut out);
             return out;
         }
         if let Some(at) = self.refresh_at
@@ -620,11 +645,12 @@ mod tests {
 
     #[test]
     fn terminal_codes() {
-        assert!(should_reconnect(1006) && should_reconnect(3000) && should_reconnect(3499));
-        assert!(!should_reconnect(3500) && !should_reconnect(3999));
-        assert!(should_reconnect(4000) && should_reconnect(4499));
-        assert!(!should_reconnect(4500) && !should_reconnect(4999));
-        assert!(should_reconnect(5000));
+        for code in [0, 1000, 1006, 2999, 3000, 3499, 4000, 4499, 5000, u16::MAX] {
+            assert_eq!(retry_after_ms(code), 0, "{code}");
+        }
+        for code in [3500, 3501, 3999, 4500, 4501, 4999] {
+            assert_eq!(retry_after_ms(code), 300_000, "{code}");
+        }
         assert!(retryable(109, false) && retryable(100, true) && retryable(0, false));
         assert!(!retryable(101, false) && !retryable(103, false));
     }
