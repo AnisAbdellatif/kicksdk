@@ -812,7 +812,8 @@ fn parse_webhook_dirty<'a>(env: Env<'a>, event_type: Binary<'a>, body: Binary<'a
 /// Any core function by name (`kicksdk::dispatch`), arguments as JSON:
 /// `{:ok, value}` or `{:error, reason}` shaped as everywhere else here, plus
 /// `{:call, message}` for a call that does not fit and `{:webhook, message}`
-/// for a delivery that does not verify.
+/// for a delivery that does not verify (one that verifies but is not its
+/// type's shape is `{:shape, _}`, the dispatch error's kind, like any other).
 #[rustler::nif]
 fn call<'a>(env: Env<'a>, name: Binary<'a>, args_json: Binary<'a>) -> NifResult<Term<'a>> {
     dispatch(env, &name, &args_json)

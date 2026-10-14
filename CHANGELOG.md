@@ -236,7 +236,10 @@ version stays 0.1.1 until release.
   returns request headers as `{k, v}` tuples, like the wrappers.
 - **Breaking**: `Webhooks.verify/4` takes `:now` (default
   `System.os_time(:second)`), `:tolerance_secs` and `:skip_freshness`, and
-  verifies the raw bytes; failures are `{:error, {:webhook, message}}`.
+  verifies the raw bytes. A delivery that cannot be trusted (header, key,
+  signature, timestamp) is `{:error, {:webhook, message}}`; a signed one
+  whose body is not the claimed type's shape is `{:error, {:shape, what}}`
+  (`{:json, _}` if not JSON), from `verify/4` and `Kicksdk.call/2` alike.
   New `Webhooks.public_key/1` reads Kick's key once.
 - Non-UTF-8 input returns `{:error, _}` instead of raising (webhook bodies
   verify byte for byte).

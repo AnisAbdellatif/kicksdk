@@ -31,8 +31,10 @@ defmodule Kicksdk do
       `call/2`.
     * `reason` is `{:status, code, excerpt}` (Kick answered an error status),
       `{:shape, what}`, `{:json, message}`, `{:invalid, what}` (refused
-      before sending), `{:webhook, message}` (a delivery that does not
-      verify) or `{:call, message}` (`call/2` arguments that do not fit).
+      before sending), `{:webhook, message}` (a webhook delivery that cannot
+      be trusted; a signed one whose body is not its type's shape is
+      `{:shape, what}`, see `Kicksdk.Webhooks.verify/4`) or
+      `{:call, message}` (`call/2` arguments that do not fit).
     * An argument no call could use - endpoints with an unknown key or a
       value that is not a URL string, text that is not UTF-8 where a plain
       value is returned - raises `ArgumentError`.
