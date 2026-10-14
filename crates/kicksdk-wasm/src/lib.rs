@@ -373,7 +373,12 @@ impl Session {
     }
 }
 
-/// Reconnect delays: 1 s doubling to 30 s.
+/// The largest `retryAfterMs` `nextDelayFor` takes: its wait, at most 7.5
+/// times this, stays within what a JS number holds exactly.
+const MAX_RETRY_AFTER_MS: u64 = MAX_SAFE / 8;
+
+/// Reconnect delays: 1 s doubling to 30 s, and a slower stage for terminal
+/// closes (`nextDelayFor`).
 #[wasm_bindgen]
 pub struct Backoff(realtime::Backoff);
 
@@ -403,7 +408,24 @@ impl Backoff {
         self.0.next_delay_jittered(random) as f64
     }
 
-    /// A connection worked.
+    /// The wait before reconnecting after a connection ended, ms.
+    /// `retryAfterMs` is what the end asked for: a `close` action's
+    /// `retry_after_ms`, `retryAfterMs(code)` for a socket's close code, or 0
+    /// for a failure without a code. With 0, exactly `nextDelayJittered`.
+    /// With more (a terminal close), at least that, doubling with each
+    /// terminal close since `reset()` up to six times it (300000: 5, 10, 20,
+    /// then 30 minutes), plus up to a quarter more by `random`. Reconnect
+    /// with a new client id after a terminal close.
+    #[wasm_bindgen(js_name = nextDelayFor)]
+    pub fn next_delay_for(&mut self, retry_after_ms: f64, random: f64) -> Result<f64, JsValue> {
+        let retry_after_ms = whole("retryAfterMs", retry_after_ms, MAX_RETRY_AFTER_MS)?;
+        // At most 7.5 times `retryAfterMs`, or `nextDelay()`'s: exact as a JS
+        // number.
+        Ok(self.0.next_delay_for(retry_after_ms, random) as f64)
+    }
+
+    /// The chat feed subscribed: back to the first wait, and the terminal
+    /// streak ends.
     pub fn reset(&mut self) {
         self.0.reset()
     }
