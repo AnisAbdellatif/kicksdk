@@ -518,6 +518,31 @@ async def test_a_refresh_that_fails_after_the_fetch_is_logged_not_lost(
     assert any("refresh broke" in r.getMessage() for r in caplog.records)
 
 
+@run
+async def test_leaving_the_block_never_hangs_on_a_busy_feed() -> None:
+    # Before Python 3.12, asyncio.wait_for swallowed the cancel when a frame
+    # arrived at the same moment, and leaving the block waited forever.
+    async def flood(ws: ServerConnection, kick: Kick) -> None:
+        await accept(ws)
+        n = 0
+        while True:
+            await ws.send("\n".join(chat_message(n + i) for i in range(5)))
+            n += 5
+            await asyncio.sleep(0)
+
+    async with Kick(flood) as kick:
+        for i in range(20):
+            chat = kick.feed()
+            await chat.__aenter__()
+            k = 0
+            async for _ in chat:
+                k += 1
+                if k == 3 + i % 7:
+                    break
+            await asyncio.wait_for(chat.__aexit__(None, None, None), 2)
+            assert chat.done
+
+
 def test_bad_options_are_refused() -> None:
     with pytest.raises(ValueError):
         aio.connect_chat(CHATROOM, overflow="block")

@@ -36,7 +36,7 @@ true while it waits. Terminal closes are logged as warnings, other drops as
 info (logger ``kicksdk.aio``).
 
 **Stopping.** Iteration ends with the ``async with`` block, which closes the
-socket normally (1000). Only an
+socket normally (1000) and returns once the feed has stopped. Only an
 unexpected error (a bug, arguments that do not fit) ends the feed before
 that: the ``async for`` raises it, after the events received before, then
 stops; :attr:`ChatFeed.error` keeps it.
@@ -64,7 +64,7 @@ import logging
 import random
 import time
 import uuid
-from typing import Any, Deque, Dict, Mapping, Optional
+from typing import Any, Deque, Dict, Mapping, Optional, Union
 
 try:
     import httpx
@@ -229,6 +229,8 @@ class ChatFeed:
         self._ready: Optional[asyncio.Event] = None
         self._room: Optional[asyncio.Event] = None
         self._done = False
+        self._stopping = False  # the block has ended: the task must stop
+        self._closing = False  # the task is closing its socket or client: no cancel then
         self._retrying = False
         self._error: Optional[BaseException] = None
         self._error_raised = False
@@ -261,11 +263,25 @@ class ChatFeed:
         return self
 
     async def __aexit__(self, *exc: object) -> None:
+        self._stopping = True
+        if self._room is not None:
+            self._room.set()
         task = self._task
-        if task is not None and not task.done():
-            # The task closes its socket normally (1000) on the way out.
-            task.cancel()
-            await asyncio.wait({task})
+        if task is not None:
+            try:
+                # One cancel is not always enough: before Python 3.12 a
+                # wait_for anywhere below (in websockets, say) can swallow it.
+                # So cancel until the task ends; it also checks _stopping at
+                # each step. Not while it is closing a socket (or its HTTP
+                # client): that is how it ends, and a cancel would cut the
+                # close (1000) short.
+                while not task.done():
+                    if not self._closing:
+                        task.cancel()
+                    await asyncio.wait({task}, timeout=0.1)
+            except asyncio.CancelledError:
+                task.cancel()
+                raise
         self._buf.clear()
         self._finish()
 
@@ -296,12 +312,17 @@ class ChatFeed:
         if self._room is not None:
             self._room.set()
 
+    def _check_stop(self) -> None:
+        if self._stopping:
+            raise asyncio.CancelledError()
+
     async def _put(self, event: Event) -> None:
         assert self._ready is not None and self._room is not None
         limit = self.max_queue
         if limit is not None and len(self._buf) >= limit:
             if self.overflow == "backpressure":
                 while len(self._buf) >= limit and not self._done:
+                    self._check_stop()
                     self._room.clear()
                     await self._room.wait()
             else:
@@ -322,7 +343,10 @@ class ChatFeed:
                 await self._keep_up(self._http)
             else:
                 async with httpx.AsyncClient(timeout=10, headers={"user-agent": "Mozilla/5.0"}) as http:
-                    await self._keep_up(http)
+                    try:
+                        await self._keep_up(http)
+                    finally:
+                        self._closing = True  # the client, now: let it close
         except Exception as e:  # noqa: BLE001 - kept for the iterator, which raises it
             self._error = e
             log.warning("chat feed stopped: %s", _describe(e))
@@ -337,6 +361,7 @@ class ChatFeed:
         # refusing this client) makes a new one.
         client_id = str(uuid.uuid4())
         while True:
+            self._check_stop()
             try:
                 drop = await self._connect(http, session, backoff, client_id)
                 self._refusals = 0
@@ -373,6 +398,7 @@ class ChatFeed:
                 )
             else:
                 log.info("chat connection ended (%s); reconnecting in %.1f s", drop.reason, drop.wait)
+            self._check_stop()
             self._retrying = True
             try:
                 await asyncio.sleep(drop.wait)
@@ -393,6 +419,7 @@ class ChatFeed:
         if not found:
             raise KickError("shape", None, "Kick offered no Centrifugo server")
         token = rt.parse_token(*await _send(http, rt.token_request(client_id, self.endpoints)))
+        self._check_stop()
 
         ws = await _ws_connect(
             found[0]["url"],
@@ -402,6 +429,7 @@ class ChatFeed:
             close_timeout=5,
         )
         refresher: Optional[asyncio.Task[None]] = None
+        recv: Optional[asyncio.Task[Union[str, bytes]]] = None
         close_code = 1000
 
         async def apply(actions: list[Event]) -> Optional[Event]:
@@ -450,13 +478,20 @@ class ChatFeed:
             try:
                 close = await apply(session.open(token, _now()))
                 while close is None:
+                    self._check_stop()
+                    if recv is None:
+                        recv = asyncio.create_task(ws.recv())
                     deadline = session.deadline
                     timeout = None if deadline is None else max(0.0, (deadline - _now()) / 1000)
-                    try:
-                        frame = await asyncio.wait_for(ws.recv(), timeout)
-                    except asyncio.TimeoutError:
+                    # Not wait_for: before Python 3.12 it can swallow a
+                    # cancel when the frame arrives at the same moment.
+                    # asyncio.wait leaves the receive running on a timeout.
+                    done, _ = await asyncio.wait({recv}, timeout=timeout)
+                    if not done:
                         close = await apply(session.tick(_now()))
                         continue
+                    received, recv = recv, None
+                    frame = received.result()
                     if isinstance(frame, bytes):
                         frame = frame.decode("utf-8", "replace")
                     close = await apply(session.receive(frame, _now()))
@@ -470,11 +505,18 @@ class ChatFeed:
                 close_code = 1011  # a bug of ours, not the connection's end
             raise
         finally:
-            if refresher is not None and not refresher.done():
-                refresher.cancel()
-                await asyncio.wait({refresher})
-            with contextlib.suppress(Exception):
-                await ws.close(close_code)
+            self._closing = True
+            try:
+                for t in (refresher, recv):
+                    if t is not None and not t.done():
+                        t.cancel()
+                        await asyncio.wait({t}, timeout=5)
+                if recv is not None and recv.done() and not recv.cancelled():
+                    recv.exception()  # retrieved: the socket is closing anyway
+                with contextlib.suppress(Exception):
+                    await ws.close(close_code)
+            finally:
+                self._closing = False
 
 
 def connect_chat(
