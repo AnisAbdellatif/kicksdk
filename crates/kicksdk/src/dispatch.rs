@@ -319,7 +319,7 @@ pub fn call(name: &str, args: &Value) -> Out {
                 Some(r) => Some(website::ReplyTarget {
                     message_id: r.str("message_id")?,
                     content: r.opt_str("content").unwrap_or(""),
-                    sender_id: r.u64("sender_id")?,
+                    sender_id: UserId(r.u64("sender_id")?),
                     sender_username: r.str("sender_username")?,
                 }),
             };

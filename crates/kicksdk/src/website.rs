@@ -192,7 +192,7 @@ pub fn parse_history(status: u16, body: &str) -> Result<History, Error> {
 #[non_exhaustive]
 pub struct ChannelUser {
     /// Their user id.
-    pub id: Option<u64>,
+    pub id: Option<UserId>,
     /// Their username.
     pub username: Option<String>,
     /// Their slug.
@@ -228,7 +228,7 @@ pub fn channel_user_request(endpoints: &Endpoints, channel_slug: &str, username:
 pub fn parse_channel_user(status: u16, body: &str) -> Result<ChannelUser, Error> {
     let v = http::json(status, body)?;
     Ok(ChannelUser {
-        id: uint(&v, "id"),
+        id: uint(&v, "id").map(UserId),
         username: string(&v, "username"),
         slug: string(&v, "slug"),
         profile_pic: string(&v, "profile_pic"),
@@ -359,7 +359,7 @@ pub struct ReplyTarget<'a> {
     /// Its text.
     pub content: &'a str,
     /// Its sender's id.
-    pub sender_id: u64,
+    pub sender_id: UserId,
     /// Its sender's username.
     pub sender_username: &'a str,
 }
@@ -386,7 +386,7 @@ pub fn send_request(
             "message_ref": message_ref,
             "metadata": {
                 "original_message": { "id": r.message_id, "content": r.content },
-                "original_sender": { "id": r.sender_id, "username": r.sender_username }
+                "original_sender": { "id": r.sender_id.0, "username": r.sender_username }
             },
             "thread_parent_id": r.message_id
         }),
@@ -436,7 +436,7 @@ mod tests {
         assert_eq!(r.url, "https://kick.com/api/v2/channels/somechannel/bans");
         assert!(r.headers.contains(&("authorization".into(), "Bearer sess".into())));
         assert!(timeout_request(&e, "s", "x", "b", 0).is_err());
-        let reply = ReplyTarget { message_id: "m1", content: "hi", sender_id: 9, sender_username: "Ann" };
+        let reply = ReplyTarget { message_id: "m1", content: "hi", sender_id: UserId(9), sender_username: "Ann" };
         let r = send_request(&e, "s", ChatroomId(3), "yo", "123", Some(&reply)).unwrap();
         let body: Value = serde_json::from_str(r.body.as_deref().unwrap()).unwrap();
         assert_eq!(body["thread_parent_id"], "m1");

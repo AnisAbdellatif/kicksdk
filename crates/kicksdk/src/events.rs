@@ -9,6 +9,7 @@
 //!
 //! Which feed carries which event is in [`crate::realtime::chat_channels`].
 
+use crate::ids::{ChannelId, ChatroomId, UserId};
 use crate::lenient::{self, array, boolean, get, id_string, int, string, uint};
 use serde::Serialize;
 use serde_json::Value;
@@ -63,7 +64,7 @@ pub mod names {
 #[non_exhaustive]
 pub struct UserRef {
     /// The user id, when Kick sent one.
-    pub id: Option<u64>,
+    pub id: Option<UserId>,
     /// The username, as Kick spells it (case kept).
     pub username: Option<String>,
     /// The slug, when Kick sent one.
@@ -72,7 +73,7 @@ pub struct UserRef {
 
 impl UserRef {
     fn from(v: &Value) -> Option<Self> {
-        let u = UserRef { id: uint(v, "id"), username: string(v, "username"), slug: string(v, "slug") };
+        let u = UserRef { id: uint(v, "id").map(UserId), username: string(v, "username"), slug: string(v, "slug") };
         (u.id.is_some() || u.username.is_some() || u.slug.is_some()).then_some(u)
     }
 }
@@ -111,7 +112,7 @@ pub struct BadgeImage {
 #[non_exhaustive]
 pub struct Sender {
     /// The user id. Missing on the odd malformed event; `None` then.
-    pub id: Option<u64>,
+    pub id: Option<UserId>,
     /// The username, case kept.
     pub username: String,
     /// The slug.
@@ -133,7 +134,7 @@ pub struct ReplyTo {
     /// The parent's text.
     pub content: Option<String>,
     /// The parent's sender's id: replying in turn needs it.
-    pub sender_id: Option<u64>,
+    pub sender_id: Option<UserId>,
     /// The parent's sender.
     pub sender_username: Option<String>,
 }
@@ -145,7 +146,7 @@ pub struct ChatMessage {
     /// The message id (a UUID).
     pub id: String,
     /// The chatroom.
-    pub chatroom_id: Option<u64>,
+    pub chatroom_id: Option<ChatroomId>,
     /// The text, emotes inline as `[emote:<id>:<name>]` (see [`crate::content`]).
     pub content: String,
     /// `message` or `reply` (others may come; kept as sent).
@@ -185,7 +186,7 @@ pub struct KicksGift {
 #[non_exhaustive]
 pub struct Hosted {
     /// The hosted channel's id (a channel id, not a user id).
-    pub channel_id: Option<u64>,
+    pub channel_id: Option<ChannelId>,
     /// Its slug.
     pub slug: Option<String>,
     /// Its username.
@@ -380,7 +381,7 @@ pub fn parse(name: &str, data: &Value) -> KickEvent {
             let h = get(&d, "hosted").cloned().unwrap_or(Value::Null);
             Some(KickEvent::HostingOut {
                 hosted: Hosted {
-                    channel_id: uint(&h, "id"),
+                    channel_id: uint(&h, "id").map(ChannelId),
                     slug: string(&h, "slug").or_else(|| string(&d, "slug")),
                     username: string(&h, "username"),
                     viewers: int(&h, "viewers_count"),
@@ -410,12 +411,12 @@ pub fn chat_message(d: &Value) -> Option<ChatMessage> {
     let metadata = get(d, "metadata").cloned().unwrap_or(Value::Null);
     Some(ChatMessage {
         id: id_string(d, "id")?,
-        chatroom_id: uint(d, "chatroom_id"),
+        chatroom_id: uint(d, "chatroom_id").map(ChatroomId),
         content: string(d, "content")?,
         kind: string(d, "type").unwrap_or_else(|| "message".into()),
         created_at: string(d, "created_at"),
         sender: Sender {
-            id: uint(sender, "id"),
+            id: uint(sender, "id").map(UserId),
             username: string(sender, "username")?,
             slug: string(sender, "slug"),
             color: string(&identity, "color"),
@@ -444,7 +445,7 @@ pub fn chat_message(d: &Value) -> Option<ChatMessage> {
             ReplyTo {
                 message_id: id_string(original, "id"),
                 content: string(original, "content"),
-                sender_id: uint(&parent_sender, "id"),
+                sender_id: uint(&parent_sender, "id").map(UserId),
                 sender_username: string(&parent_sender, "username"),
             }
         }),

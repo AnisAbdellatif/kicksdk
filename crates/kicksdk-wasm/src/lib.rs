@@ -383,7 +383,7 @@ pub fn send_request(
         Some(r) => Some(website::ReplyTarget {
             message_id: r["message_id"].as_str().ok_or_else(|| js_sys::Error::new("replyTo.message_id"))?,
             content: r["content"].as_str().unwrap_or(""),
-            sender_id: r["sender_id"].as_u64().ok_or_else(|| js_sys::Error::new("replyTo.sender_id"))?,
+            sender_id: UserId(r["sender_id"].as_u64().ok_or_else(|| js_sys::Error::new("replyTo.sender_id"))?),
             sender_username: r["sender_username"]
                 .as_str()
                 .ok_or_else(|| js_sys::Error::new("replyTo.sender_username"))?,

@@ -22,7 +22,7 @@
 //! ([`Error::Invalid`]): it goes into a header.
 
 use crate::http::{self, Endpoints, Error, Method, Request, encode};
-use crate::ids::UserId;
+use crate::ids::{ChannelId, UserId};
 use crate::lenient::{array, boolean, get, int, string, uint};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -100,7 +100,7 @@ pub struct Livestream {
     /// The broadcaster's user id.
     pub broadcaster_user_id: UserId,
     /// The channel id (the one the `channel.<id>` feeds use).
-    pub channel_id: Option<u64>,
+    pub channel_id: Option<ChannelId>,
     /// The slug.
     pub slug: Option<String>,
     /// Viewers now (refreshed about once a minute).
@@ -186,7 +186,7 @@ pub fn parse_livestreams(status: u16, body: &str) -> Result<Vec<Livestream>, Err
         .filter_map(|s| {
             Some(Livestream {
                 broadcaster_user_id: UserId(uint(s, "broadcaster_user_id")?),
-                channel_id: uint(s, "channel_id"),
+                channel_id: uint(s, "channel_id").map(ChannelId),
                 slug: string(s, "slug"),
                 viewer_count: int(s, "viewer_count"),
                 started_at: string(s, "started_at"),

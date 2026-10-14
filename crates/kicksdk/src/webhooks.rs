@@ -38,6 +38,7 @@
 //! private key, which this crate never has; see `deny.toml`.
 
 use crate::http::Error;
+use crate::ids::UserId;
 use crate::lenient::{array, boolean, get, int, string, uint};
 use base64::Engine;
 use rsa::pkcs1::DecodeRsaPublicKey;
@@ -315,7 +316,7 @@ pub fn verify_pem(
 #[non_exhaustive]
 pub struct Person {
     /// Their user id. Null for an anonymous gifter.
-    pub user_id: Option<u64>,
+    pub user_id: Option<UserId>,
     /// Username. Null for an anonymous gifter.
     pub username: Option<String>,
     /// Channel slug.
@@ -332,7 +333,7 @@ impl Person {
     fn from(v: Option<&Value>) -> Option<Self> {
         let v = v?;
         Some(Person {
-            user_id: uint(v, "user_id"),
+            user_id: uint(v, "user_id").map(UserId),
             username: string(v, "username"),
             channel_slug: string(v, "channel_slug"),
             is_verified: boolean(v, "is_verified"),
