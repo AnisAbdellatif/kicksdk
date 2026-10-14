@@ -100,7 +100,12 @@ export interface ChatOptions {
   createSocket?(url: string): ChatSocket;
   /** Kick's URLs to use instead; a key left out or undefined stays Kick's. */
   endpoints?: Endpoints | undefined;
-  /** The session's clock, ms, only ever going forward. Default: `performance.now()`. */
+  /**
+   * The session's clock, ms, only ever going forward. Default:
+   * `performance.now()`. A reading that is not a number from 0 to
+   * `Number.MAX_SAFE_INTEGER` (or a throw) is reported to `onError` once,
+   * and connectChat carries on with `performance.now()`.
+   */
   now?(): number;
   /**
    * How long a request, or the WebSocket handshake, may take, ms: above 0

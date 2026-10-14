@@ -84,6 +84,37 @@ function monotonicClock() {
   return p && typeof p.now === 'function' ? () => p.now() : () => Date.now();
 }
 
+/**
+ * The session's clock, whole ms: the caller's `now`, or performance.now().
+ * A reading of the caller's that is not a number from 0 to
+ * Number.MAX_SAFE_INTEGER (or a `now` that throws) is reported once, and the
+ * clock goes on with performance.now() from the last good reading: the
+ * session could do nothing with it, and every attempt would fail the same way.
+ */
+function sessionClock(given, report) {
+  const mono = monotonicClock();
+  if (!given) return () => Math.floor(mono());
+  let last = 0;
+  let fallback = null;
+  return () => {
+    if (!fallback) {
+      let bad;
+      try {
+        const t = given();
+        if (typeof t === 'number' && t >= 0 && t <= Number.MAX_SAFE_INTEGER) return (last = Math.floor(t));
+        bad = new RangeError(`connectChat: now() returned ${String(t)}, not milliseconds; using performance.now()`);
+      } catch (e) {
+        bad = e;
+      }
+      report(bad);
+      const base = last;
+      const start = mono();
+      fallback = () => base + Math.floor(mono() - start);
+    }
+    return fallback();
+  };
+}
+
 /** A guest client id, a v4 UUID. Not a secret: it names the connection. */
 function guestId() {
   const c = globalThis.crypto;
@@ -125,6 +156,11 @@ function socketFactory(o) {
  */
 export function connectChat(o) {
   if (!o || typeof o.onEvent !== 'function') throw new TypeError('connectChat: onEvent is required');
+  for (const name of ['onState', 'onDrop', 'onError', 'fetch', 'createSocket', 'WebSocket', 'now']) {
+    if (o[name] != null && typeof o[name] !== 'function') {
+      throw new TypeError(`connectChat: ${name} must be a function`);
+    }
+  }
   const timeoutMs = o.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   // setTimeout fires a longer wait (Infinity among them) at once: every
   // request would time out before it began, and nothing would connect.
@@ -142,8 +178,7 @@ export function connectChat(o) {
   const createSocket = socketFactory(o);
   // It would fail the same way on every attempt.
   if (!createSocket) throw new TypeError(`connectChat: ${NO_WEBSOCKET}`);
-  const clock = o.now || monotonicClock();
-  const now = () => Math.max(0, Math.floor(clock()));
+  const now = sessionClock(o.now, (e) => report(e));
 
   let session = new Session(channels);
   let backoff = new Backoff();
@@ -249,7 +284,9 @@ export function connectChat(o) {
         timer = null;
         if (!closed) apply(session.tick(now()));
       }),
-      Math.max(0, at - now())
+      // A clock that jumped could ask for more than setTimeout holds; a tick
+      // before the deadline does nothing, and arms the rest.
+      Math.min(MAX_TIMEOUT_MS, Math.max(0, at - now()))
     );
   }
 

@@ -376,6 +376,23 @@ test('the reconnect delay is jittered with Math.random', async (t) => {
   assert.equal(kick.sockets.length, 2);
 });
 
+test('a clock that returns NaN is reported once, and performance.now() takes over', async (t) => {
+  let reading = 0;
+  const { kick, log, advance } = harness(t, { now: () => reading });
+  await advance(100);
+  assert.ok(subscribed(log));
+  reading = NaN;
+  kick.last().push('{}');
+  kick.last().push(chatPush('still here'));
+  await advance(100);
+  assert.equal(log.errors.length, 1);
+  assert.ok(log.errors[0] instanceof RangeError);
+  assert.match(log.errors[0].message, /now\(\) returned NaN/);
+  assert.equal(kick.last().sent.at(-1), '{}', 'the ping was answered');
+  assert.equal(log.events.at(-1).event.content, 'still here');
+  assert.deepEqual(log.drops, []);
+});
+
 test('mistakes in the options throw at once', () => {
   const base = { chatroomId: CHATROOM, onEvent() {} };
   assert.throws(() => sdk.connectChat({ ...base, chatroomId: '1' }), TypeError);
@@ -387,6 +404,9 @@ test('mistakes in the options throw at once', () => {
   }
   sdk.connectChat({ ...base, timeoutMs: 2 ** 31 - 1, WebSocket: class {} }).close();
   assert.throws(() => sdk.connectChat({ chatroomId: 1 }), TypeError);
+  for (const name of ['onState', 'onDrop', 'onError', 'fetch', 'createSocket', 'WebSocket', 'now']) {
+    assert.throws(() => sdk.connectChat({ ...base, [name]: 5 }), /must be a function/, name);
+  }
   // undefined endpoints, as a Partial<> carries them, are fine.
   sdk.connectChat({ ...base, endpoints: { realtime: undefined }, WebSocket: class {} }).close();
 });
