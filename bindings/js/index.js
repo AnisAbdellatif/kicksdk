@@ -126,8 +126,10 @@ function socketFactory(o) {
 export function connectChat(o) {
   if (!o || typeof o.onEvent !== 'function') throw new TypeError('connectChat: onEvent is required');
   const timeoutMs = o.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  if (typeof timeoutMs !== 'number' || !(timeoutMs > 0)) {
-    throw new RangeError('connectChat: timeoutMs must be a positive number');
+  // setTimeout fires a longer wait (Infinity among them) at once: every
+  // request would time out before it began, and nothing would connect.
+  if (typeof timeoutMs !== 'number' || !(timeoutMs > 0 && timeoutMs <= MAX_TIMEOUT_MS)) {
+    throw new RangeError(`connectChat: timeoutMs must be a number of ms above 0, at most ${MAX_TIMEOUT_MS}`);
   }
   // Ids and endpoints are checked here, where a mistake throws, rather than
   // failing every reconnect.

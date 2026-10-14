@@ -381,7 +381,11 @@ test('mistakes in the options throw at once', () => {
   assert.throws(() => sdk.connectChat({ ...base, chatroomId: '1' }), TypeError);
   assert.throws(() => sdk.connectChat({ ...base, channelId: -1 }), RangeError);
   assert.throws(() => sdk.connectChat({ ...base, endpoints: { realtme: 'x' } }), /unknown key/);
-  assert.throws(() => sdk.connectChat({ ...base, timeoutMs: 0 }), RangeError);
+  // setTimeout fires anything longer than 2^31 - 1 ms at once.
+  for (const timeoutMs of [0, -1, NaN, Infinity, 2 ** 31, '5000']) {
+    assert.throws(() => sdk.connectChat({ ...base, timeoutMs }), RangeError, String(timeoutMs));
+  }
+  sdk.connectChat({ ...base, timeoutMs: 2 ** 31 - 1, WebSocket: class {} }).close();
   assert.throws(() => sdk.connectChat({ chatroomId: 1 }), TypeError);
   // undefined endpoints, as a Partial<> carries them, are fine.
   sdk.connectChat({ ...base, endpoints: { realtime: undefined }, WebSocket: class {} }).close();

@@ -102,7 +102,12 @@ export interface ChatOptions {
   endpoints?: Endpoints | undefined;
   /** The session's clock, ms, only ever going forward. Default: `performance.now()`. */
   now?(): number;
-  /** How long a request, or the WebSocket handshake, may take, ms. Default 10000. */
+  /**
+   * How long a request, or the WebSocket handshake, may take, ms: above 0
+   * and at most 2147483647 (setTimeout's limit; there is no "no timeout").
+   * Default 10000. Out of range, or not a number: connectChat throws a
+   * RangeError.
+   */
   timeoutMs?: number | undefined;
 }
 
