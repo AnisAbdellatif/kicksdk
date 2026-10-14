@@ -101,13 +101,13 @@ ChatConnection connectChat({
   Backoff? backoff,
 }) {
   final feeds = channels ?? Realtime.chatChannels(chatroomId, channelId);
+  Session? session = Session(feeds);
   final http = HttpClient()..connectionTimeout = timeout;
   final delays = backoff ?? Backoff();
   final random = Random();
   final clock = Stopwatch()..start();
   int now() => clock.elapsedMilliseconds;
   final done = Completer<void>();
-  Session? session = Session(feeds);
   var closed = false;
   WebSocket? ws;
   Timer? deadline;
@@ -265,9 +265,14 @@ ChatConnection connectChat({
       drop(code == null ? 'socket closed' : 'socket closed: $code${reason.isEmpty ? '' : ' $reason'}');
       terminal = code != null && !Realtime.shouldReconnect(code);
     }
-    final s = session;
-    if (s != null) apply(s.closed());
-    state();
+    // The feeds it had come back unsubscribed, which reports the state;
+    // with none, report it here.
+    final lostFeeds = session?.closed() ?? const [];
+    if (lostFeeds.isEmpty) {
+      state();
+    } else {
+      apply(lostFeeds);
+    }
     if (terminal) {
       stop();
     } else {
