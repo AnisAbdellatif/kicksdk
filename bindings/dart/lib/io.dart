@@ -14,16 +14,44 @@ export 'kicksdk.dart';
 class ChatConnection {
   final void Function() _close;
 
-  /// Completes when the connection has ended for good: after [close], or
-  /// after Kick closed it with a code that means "do not come back" (a bad
-  /// token, a ban; `onDrop` had the reason).
+  /// Completes once [close] has been called. Nothing else ends a connection:
+  /// a terminal close from Kick (a refused token, a limit, a ban) is waited
+  /// out and followed by a reconnect as a new client (docs/KICK.md §6.1).
   final Future<void> done;
 
   ChatConnection._(this._close, this.done);
 
   /// Disconnects for good. Nothing is called back after this, not even
-  /// `onDrop`.
+  /// `onDrop`. Safe to call more than once, and from inside a callback.
   void close() => _close();
+}
+
+/// A connection lost or not made, for `onDropInfo` in [connectChat]. A
+/// reconnect follows after [retryIn], unless the connection is closed first.
+final class ChatDrop {
+  /// What `onDrop` gets.
+  final String reason;
+
+  /// The close code: Kick's disconnect code, or its error code for a refused
+  /// connect or refresh (0 when the session gave up on a silent socket), or
+  /// the code the WebSocket closed with. Null for a failure without one: a
+  /// request or the handshake failing, a network error.
+  final int? code;
+
+  /// Whether Kick would refuse the same client again right away (a refused
+  /// token, a connection limit, a ban: Centrifugo's 3500-3999 and
+  /// 4500-4999). The reconnect then waits 5 minutes or more, longer for
+  /// each terminal close in a row, and comes back as a new client.
+  final bool terminal;
+
+  /// How long until the next attempt.
+  final Duration retryIn;
+
+  const ChatDrop(this.reason, {this.code, this.terminal = false, required this.retryIn});
+
+  @override
+  String toString() =>
+      '$reason (${terminal ? 'terminal, ' : ''}retrying in ${(retryIn.inMilliseconds / 1000).toStringAsFixed(1)} s)';
 }
 
 String _uuid() {
@@ -65,8 +93,19 @@ Future<WebSocket> _openSocket(String url, HttpClient http, Duration timeout) asy
   try {
     return await pending.timeout(timeout);
   } on TimeoutException {
-    unawaited(pending.then((s) => s.close(), onError: (Object _) {}));
+    // Whatever comes of it, the handshake or the close, is of no interest.
+    pending.then((s) => s.close()).ignore();
     throw TimeoutException('WebSocket ${Uri.parse(url).replace(query: '')}: no handshake', timeout);
+  }
+}
+
+/// Closes `socket` without waiting: on a half-open socket, dart:io waits
+/// several seconds for the other side's close. Its errors are of no interest.
+void _discard(WebSocket socket) {
+  try {
+    socket.close().ignore();
+  } catch (_) {
+    // Already closing.
   }
 }
 
@@ -74,15 +113,23 @@ Future<WebSocket> _openSocket(String url, HttpClient http, Duration timeout) asy
 ///
 /// `onEvent` gets `{"channel", "name", "data", "event"}` for each event, the
 /// typed one in `event`. `onState` gets whether the socket is connected and
-/// which feeds are subscribed, whenever that changes. `onDrop` gets why a
-/// connection was lost or could not be made; a reconnect follows, after a
-/// jittered [Backoff], unless Kick's code says it would be refused again: then
-/// the connection ends, and [ChatConnection.done] completes.
+/// which feeds are subscribed, whenever that changes.
+///
+/// `onDrop` gets why a connection was lost or could not be made, and
+/// `onDropInfo` the same with what comes next, as a [ChatDrop]. A reconnect
+/// always follows (docs/KICK.md §6.1), after `backoff`'s wait
+/// ([Backoff.nextDelayFor], jittered): 1 s doubling to 30 s for an ordinary
+/// drop or failure, and 5, 10, 20, then 30 minutes for terminal closes in a
+/// row (Kick refused the token or the connection, or closed with a code that
+/// means it would refuse the same client again), each followed by a new
+/// client id. The chat feed subscribing starts the backoff over. Only
+/// [ChatConnection.close] stops it.
 ///
 /// `onError` gets what the connection carried on through: an exception
-/// thrown by `onEvent`, `onState` or `onDrop` (the rest of that batch of
-/// frames is still handled), and a token refresh that failed (retried while
-/// the connection lasts). Without `onError`, these are printed to stderr.
+/// thrown by `onEvent`, `onState`, `onDrop` or `onDropInfo` (the rest of
+/// that batch of frames is still handled), and a token refresh that failed
+/// (retried while the connection lasts). Without `onError`, or after
+/// [ChatConnection.close], these are printed to stderr.
 ///
 /// `timeout` bounds each HTTP request and the WebSocket handshake. Running
 /// out is a failed attempt, retried like any other.
@@ -95,6 +142,7 @@ ChatConnection connectChat({
   required void Function(Map<String, dynamic> event) onEvent,
   void Function(bool connected, List<String> subscribed)? onState,
   void Function(String reason)? onDrop,
+  void Function(ChatDrop drop)? onDropInfo,
   void Function(Object error, StackTrace stack)? onError,
   Map<String, String>? endpoints,
   Duration timeout = const Duration(seconds: 10),
@@ -110,18 +158,18 @@ ChatConnection connectChat({
   final done = Completer<void>();
   var closed = false;
   WebSocket? ws;
+  StreamSubscription<dynamic>? frames;
   Timer? deadline;
   Timer? retry;
   Timer? refreshRetry;
   var clientId = '';
-  // For the socket in `ws`: whether onDrop has had its reason (from a close
-  // action), and whether that reason rules out a reconnect.
-  var dropped = false;
-  var terminal = false;
 
+  // After close(), nothing is called back, onError included: what still
+  // goes wrong (a callback that closed the connection, then threw) goes to
+  // stderr.
   void report(Object error, StackTrace stack) {
     final handler = onError;
-    if (handler != null) {
+    if (!closed && handler != null) {
       try {
         handler(error, stack);
         return;
@@ -142,20 +190,24 @@ ChatConnection connectChat({
     }
   }
 
-  void drop(String reason) {
-    final handler = onDrop;
-    if (!closed && handler != null) guard(() => handler(reason));
+  // Lets go of the socket in `ws`, if any, at once: its frames are no longer
+  // read, and its close is not waited for.
+  WebSocket? detach() {
+    final socket = ws;
+    ws = null;
+    frames?.cancel().ignore();
+    frames = null;
+    deadline?.cancel();
+    refreshRetry?.cancel();
+    if (socket != null) _discard(socket);
+    return socket;
   }
 
   void stop() {
     if (closed) return;
     closed = true;
-    deadline?.cancel();
     retry?.cancel();
-    refreshRetry?.cancel();
-    final socket = ws;
-    ws = null;
-    socket?.close();
+    detach();
     session?.dispose();
     session = null;
     http.close(force: true);
@@ -174,15 +226,15 @@ ChatConnection connectChat({
     guard(() => handler(connected, subscribed));
   }
 
-  late final void Function() again;
   late final void Function() refreshToken;
   late final void Function(List<Map<String, dynamic>>) apply;
+  late final Future<void> Function() connect;
 
   void schedule() {
     deadline?.cancel();
     deadline = null;
     final s = session;
-    if (closed || s == null) return;
+    if (closed || s == null || ws == null) return;
     final at = s.deadline;
     if (at == null) return;
     deadline = Timer(Duration(milliseconds: max(0, at - now())), () {
@@ -191,10 +243,61 @@ ChatConnection connectChat({
     });
   }
 
+  // The connection in `ws` is lost, or none could be made: report it, and
+  // reconnect after the backoff's wait for `retryAfterMs` (KICK.md §6.1).
+  // connect() makes a new client id for every connection, which a terminal
+  // close needs.
+  void lost(String reason, {int? code, bool terminal = false, int retryAfterMs = 0}) {
+    final hadSocket = detach() != null;
+    if (closed) return;
+    // The feeds it had come back unsubscribed, which reports the state.
+    final lostFeeds = hadSocket ? session?.closed() ?? const [] : const <Map<String, dynamic>>[];
+    final wait = delays.nextDelayFor(retryAfterMs, random.nextDouble());
+    final info = ChatDrop(reason, code: code, terminal: terminal, retryIn: wait);
+    final handler = onDrop;
+    if (handler != null) guard(() => handler(reason));
+    final infoHandler = onDropInfo;
+    if (!closed && infoHandler != null) guard(() => infoHandler(info));
+    if (closed) return;
+    if (lostFeeds.isNotEmpty) {
+      apply(lostFeeds);
+    } else if (hadSocket) {
+      state();
+    }
+    if (closed) return;
+    retry?.cancel();
+    retry = Timer(wait, () => connect().catchError(report));
+  }
+
+  // The socket closed by itself (no close action first): its close code
+  // says whether that was terminal.
+  void ended(WebSocket socket, [Object? error]) {
+    if (ws != socket) return;
+    final code = socket.closeCode;
+    if (code == null) {
+      lost(error == null ? 'socket closed' : 'socket failed: $error');
+      return;
+    }
+    final text = socket.closeReason ?? '';
+    var retryAfterMs = 0;
+    try {
+      retryAfterMs = Realtime.retryAfterMs(code);
+    } catch (e, s) {
+      report(e, s);
+    }
+    lost(
+      'socket closed: $code${text.isEmpty ? '' : ' $text'}',
+      code: code,
+      terminal: retryAfterMs > 0,
+      retryAfterMs: retryAfterMs,
+    );
+  }
+
   apply = (actions) {
     if (closed) return;
     var changed = false;
     try {
+      batch:
       for (final a in actions) {
         if (closed) return;
         switch (a['action']) {
@@ -205,10 +308,17 @@ ChatConnection connectChat({
               // The socket is closing; its onDone takes it from here.
             }
           case 'close':
-            terminal = a['reconnect'] == false;
-            dropped = true;
-            drop(a['reason'] as String);
-            ws?.close();
+            // Treated as lost at once: dart:io would hold the socket's
+            // onDone for seconds on a half-open connection. What the batch
+            // has after it was for that connection.
+            changed = false;
+            lost(
+              a['reason'] as String,
+              code: a['code'] as int,
+              terminal: a['terminal'] == true,
+              retryAfterMs: a['retry_after_ms'] as int,
+            );
+            break batch;
           case 'refresh_token':
             refreshToken();
           case 'subscribed':
@@ -254,34 +364,10 @@ ChatConnection connectChat({
     attempt();
   };
 
-  void lost(WebSocket socket) {
-    if (ws != socket) return;
-    ws = null;
-    deadline?.cancel();
-    refreshRetry?.cancel();
-    if (!dropped) {
-      final code = socket.closeCode;
-      final reason = socket.closeReason ?? '';
-      drop(code == null ? 'socket closed' : 'socket closed: $code${reason.isEmpty ? '' : ' $reason'}');
-      terminal = code != null && !Realtime.shouldReconnect(code);
-    }
-    // The feeds it had come back unsubscribed, which reports the state;
-    // with none, report it here.
-    final lostFeeds = session?.closed() ?? const [];
-    if (lostFeeds.isEmpty) {
-      state();
-    } else {
-      apply(lostFeeds);
-    }
-    if (terminal) {
-      stop();
-    } else {
-      again();
-    }
-  }
-
-  Future<void> connect() async {
+  connect = () async {
     if (closed) return;
+    // A new client, so a new guest token, for every connection: after a
+    // terminal close, Kick would refuse the old one.
     final id = clientId = _uuid();
     final String token;
     final WebSocket socket;
@@ -303,34 +389,25 @@ ChatConnection connectChat({
       // After close(), a request fails because the client was shut: nothing
       // to report then.
       if (closed) return;
-      drop('$e');
-      again();
+      lost('$e');
       return;
     }
     final s = session;
     if (closed || s == null) {
-      await socket.close();
+      _discard(socket);
       return;
     }
     ws = socket;
-    dropped = false;
-    terminal = false;
-    socket.listen(
+    frames = socket.listen(
       (frame) {
         final s = session;
         if (ws == socket && s != null && frame is String) apply(s.receive(frame, now()));
       },
-      onError: (Object _) => lost(socket),
-      onDone: () => lost(socket),
+      onError: (Object e) => ended(socket, e),
+      onDone: () => ended(socket),
       cancelOnError: true,
     );
     apply(s.open(token, now()));
-  }
-
-  again = () {
-    if (closed) return;
-    retry?.cancel();
-    retry = Timer(delays.nextDelayJittered(random.nextDouble()), () => connect().catchError(report));
   };
 
   connect().catchError(report);
