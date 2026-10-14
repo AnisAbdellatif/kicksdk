@@ -26,12 +26,17 @@ final chat = connectChat(
 and `status`.
 
 **The native library.** The package's build hook downloads it, precompiled,
-from the GitHub release matching the package version, for Linux, macOS,
-Windows (x64, arm64), Android (arm64, arm, x64) and iOS (device and
-simulator), and checks it against the SHA-256 published with the package. On
-any other target, if the download fails, or when asked to, it builds it from
-the Rust sources shipped in the package, which needs a Rust toolchain
-(`rustup target add <triple>`):
+from the GitHub release matching the package version, for Linux (glibc),
+macOS, Windows (x64, arm64), Android (arm64, arm, x64) and iOS (device and
+simulator), and checks it against the SHA-256 published with the package. A
+download that does not match fails the build: it is never loaded, and never
+quietly replaced by a source build. Otherwise the hook builds the library
+from the Rust sources shipped in the package, and says why on stderr: on any
+other target (Linux arm, riscv64 or musl, Windows ia32, ...), when the
+download fails (offline, not found, TLS, too slow), or when asked to. That
+needs a Rust toolchain with the target (`rustup target add <triple>`); for
+Android, the NDK's clang that Flutter passes in links it, for the app's
+minimum API level.
 
 ```yaml
 # your app's pubspec.yaml
@@ -40,7 +45,19 @@ hooks:
     kicksdk:
       build_from_source: true          # always build
       # binary_base_url: https://…     # a mirror of the release assets
+      # Hooks only see PATH and HOME, not CARGO_HOME or RUSTUP_HOME. A
+      # toolchain outside ~/.cargo and ~/.rustup is named here:
+      # cargo_path: /opt/rust/bin/cargo
+      # cargo_home: /opt/cargo
+      # rustup_home: /opt/rustup
 ```
+
+A source build fetches the crates it depends on from crates.io the first
+time; the package carries kicksdk's own sources but not theirs. To build
+offline, fetch them beforehand (`cargo fetch` in the package's `native/`
+directory, with the same `CARGO_HOME`), or point Cargo at a vendored copy
+(`cargo vendor`, and the `[source]` replacement it prints, in
+`$CARGO_HOME/config.toml`).
 
 Kick's realtime server only accepts `Origin: https://kick.com`; `connectChat`
 sends it. MIT OR Apache-2.0. Not affiliated with Kick.
