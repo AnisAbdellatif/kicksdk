@@ -385,6 +385,10 @@ jobs:
         working-directory: bindings/js
       - run: mkdir -p ../../dist && npm pack --pack-destination ../../dist
         working-directory: bindings/js
+      # The release publishes this file by path; a bare `dist/x.tgz` would
+      # be read as a GitHub `user/repo` (it was, for 0.2.0).
+      - run: npm publish --dry-run --access public ../../dist/*.tgz
+        working-directory: bindings/js
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: js-package

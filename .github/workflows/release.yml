@@ -320,7 +320,7 @@ jobs:
       # token publish; without it, npm's trusted publishing through this
       # job's OIDC token (npm 11.5+, Node 24's). Provenance either way.
       - if: steps.published.outputs.yes != 'true'
-        run: npm publish dist/*.tgz --provenance --access public
+        run: npm publish ./dist/*.tgz --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
