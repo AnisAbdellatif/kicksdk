@@ -20,7 +20,7 @@ import initWasm, {
   parseConnection,
   tokenRequest,
   parseToken,
-  shouldReconnect
+  retryAfterMs
 } from './pkg/kicksdk.js';
 
 export * from './pkg/kicksdk.js';
@@ -67,6 +67,9 @@ const isNode = typeof process !== 'undefined' && !!(process.versions && process.
 /** How long one step of connecting (a fetch, the WebSocket handshake) may take. */
 const DEFAULT_TIMEOUT_MS = 10_000;
 
+/** The longest wait setTimeout holds; a longer one fires at once. */
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
+
 const NO_WEBSOCKET =
   'no WebSocket in this runtime (Node 22 and later have one): pass connectChat a `WebSocket` ' +
   "constructor (the `ws` package's will do) or `createSocket`";
@@ -107,9 +110,11 @@ function socketFactory(o) {
 }
 
 /**
- * Connects to one channel's chat and keeps the connection up until close(),
- * or until Kick ends it for good: a terminal close code, after which onDrop
- * says `reconnect: false` and onState `stopped: true`.
+ * Connects to one channel's chat and keeps the connection up until close().
+ * Whatever ends a connection, connectChat waits and connects again; after one
+ * of Kick's terminal closes (a refused token, a ban, a connection limit) the
+ * wait is long - 5, 10, 20, then 30 minutes in a row, see KICK.md §6.1 - and
+ * each new connection is a new guest client.
  *
  * Callbacks are isolated: one that throws is reported to `onError` (or
  * console.error) and the connection carries on. None is called after
@@ -133,21 +138,20 @@ export function connectChat(o) {
 
   const fetchImpl = o.fetch || ((...a) => globalThis.fetch(...a));
   const createSocket = socketFactory(o);
+  // It would fail the same way on every attempt.
+  if (!createSocket) throw new TypeError(`connectChat: ${NO_WEBSOCKET}`);
   const clock = o.now || monotonicClock();
   const now = () => Math.max(0, Math.floor(clock()));
 
   let session = new Session(channels);
   let backoff = new Backoff();
   let closed = false; // close() was called
-  let stopped = false; // Kick ended it for good
   let ws = null;
   let attempt = null; // aborts the current connection's fetches
   let clientId = null;
   let timer = null; // session.deadline()
   let handshake = null;
   let retry = null;
-
-  const live = () => !closed && !stopped;
 
   function report(error) {
     if (o.onError) {
@@ -179,7 +183,7 @@ export function connectChat(o) {
         return fn(...args);
       } catch (e) {
         report(e);
-        if (live()) end(`kicksdk: ${message(e)}`, 0, true);
+        if (!closed) end(`kicksdk: ${message(e)}`, 0, 0, false);
       }
     };
   }
@@ -225,24 +229,23 @@ export function connectChat(o) {
   }
 
   function state() {
-    if (!live()) return;
+    if (closed) return;
     callback('onState', {
       connected: session.isConnected(),
-      subscribed: channels.filter((c) => session.isSubscribed(c)),
-      stopped: false
+      subscribed: channels.filter((c) => session.isSubscribed(c))
     });
   }
 
   function arm() {
     clearTimeout(timer);
     timer = null;
-    if (!live()) return;
+    if (closed) return;
     const at = session.deadline();
     if (at === undefined || at === null) return;
     timer = setTimeout(
       guard(() => {
         timer = null;
-        if (live()) apply(session.tick(now()));
+        if (!closed) apply(session.tick(now()));
       }),
       Math.max(0, at - now())
     );
@@ -252,7 +255,7 @@ export function connectChat(o) {
     let changed = false;
     for (const a of actions) {
       // A callback may have called close().
-      if (!live()) return;
+      if (closed) return;
       switch (a.action) {
         case 'send':
           if (ws && ws.readyState === 1) ws.send(a.text);
@@ -260,12 +263,14 @@ export function connectChat(o) {
         case 'close':
           // Kick said goodbye, or went quiet. The socket is finished now: a
           // dead connection may not deliver its close event for minutes.
-          end(a.reason, a.code, a.reconnect);
+          end(a.reason, a.code, a.retry_after_ms, a.terminal);
           return;
         case 'refresh_token':
           refresh();
           break;
         case 'subscribed':
+          // The chat feed is up: back to short waits, and a terminal streak
+          // is over.
           if (a.channel === channels[0]) backoff.reset();
           changed = true;
           break;
@@ -290,7 +295,7 @@ export function connectChat(o) {
       .then((r) => parseToken(r.status, r.body))
       .then(
         guard((token) => {
-          if (live() && attempt === ctrl) apply(session.refresh(token, now()));
+          if (!closed && attempt === ctrl) apply(session.refresh(token, now()));
         }),
         // Kick ends the connection when the old token runs out; the
         // reconnect fetches a new one.
@@ -328,50 +333,44 @@ export function connectChat(o) {
     session = backoff = null;
   }
 
-  /** A connection, or an attempt at one, ended: try again, or give up. */
-  function drop(reason, code, reconnect) {
-    if (!live()) return;
-    callback('onDrop', reason, { code, reconnect });
-    if (!live()) return;
+  /**
+   * A connection, or an attempt at one, ended: wait, then connect again.
+   * `retryAfterMs` is the least wait the end asked for (0: the ordinary
+   * backoff); `terminal`, that Kick will not take this client back.
+   */
+  function drop(reason, code, retryAfterMs, terminal) {
+    if (closed) return;
+    const waitMs = Math.min(backoff.nextDelayFor(retryAfterMs, Math.random()), MAX_TIMEOUT_MS);
+    callback('onDrop', reason, { code, terminal, waitMs });
+    if (closed) return;
     clearTimeout(retry);
-    if (reconnect) {
-      retry = setTimeout(start, backoff.nextDelayJittered(Math.random()));
-      return;
-    }
-    stopped = true;
-    retry = null;
-    detach();
-    release();
-    callback('onState', { connected: false, subscribed: [], stopped: true });
+    // connect() makes a new client id (so a new guest token) every time,
+    // which a terminal close needs; after any other end it does no harm.
+    retry = setTimeout(start, waitMs);
   }
 
   /** The socket is finished, however it ended. */
-  function end(reason, code, reconnect) {
+  function end(reason, code, retryAfterMs, terminal) {
     detach();
-    if (!live()) return;
+    if (closed) return;
     session.closed();
-    if (reconnect) state();
-    drop(reason, code, reconnect);
+    state();
+    drop(reason, code, retryAfterMs, terminal);
   }
 
   function start() {
     retry = null;
     connect().catch((e) => {
       report(e);
-      if (live()) end(`kicksdk: ${message(e)}`, 0, true);
+      if (!closed) end(`kicksdk: ${message(e)}`, 0, 0, false);
     });
   }
 
   async function connect() {
-    if (!live()) return;
-    if (!createSocket) {
-      // It would fail the same way every time: say so once.
-      drop(NO_WEBSOCKET, 0, false);
-      return;
-    }
+    if (closed) return;
     const ctrl = new AbortController();
     attempt = ctrl;
-    const mine = () => live() && attempt === ctrl;
+    const mine = () => !closed && attempt === ctrl;
     let url;
     let token;
     try {
@@ -393,7 +392,7 @@ export function connectChat(o) {
       // Closed meanwhile: nobody is left to tell.
       if (!mine()) return;
       attempt = null;
-      drop(message(e), 0, true);
+      drop(message(e), 0, 0, false);
       return;
     }
 
@@ -402,14 +401,14 @@ export function connectChat(o) {
       socket = createSocket(url);
     } catch (e) {
       attempt = null;
-      drop(`could not open a WebSocket: ${message(e)}`, 0, true);
+      drop(`could not open a WebSocket: ${message(e)}`, 0, 0, false);
       return;
     }
     ws = socket;
     handshake = setTimeout(
       guard(() => {
         handshake = null;
-        if (ws === socket) end(`WebSocket handshake: no answer in ${timeoutMs} ms`, 0, true);
+        if (ws === socket) end(`WebSocket handshake: no answer in ${timeoutMs} ms`, 0, 0, false);
       }),
       timeoutMs
     );
@@ -427,7 +426,9 @@ export function connectChat(o) {
       // A refused handshake ends here too (1006), with no open before it.
       const code = e && Number.isInteger(e.code) && e.code >= 0 && e.code <= 65535 ? e.code : 1006;
       const why = e && e.reason ? `: ${e.reason}` : '';
-      end(`WebSocket closed (${code})${why}`, code, shouldReconnect(code));
+      // 3500-3999 and 4500-4999 are terminal: a long wait, then a new client.
+      const after = retryAfterMs(code);
+      end(`WebSocket closed (${code})${why}`, code, after, after > 0);
     });
     // A close event follows an error.
     socket.onerror = noop;

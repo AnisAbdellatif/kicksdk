@@ -18,24 +18,29 @@ const chat = kick.connectChat({
   onEvent: ({ event }) => {
     if (event.type === 'chat_message') console.log(`${event.sender.username}: ${event.content}`);
   },
-  onState: ({ connected, subscribed, stopped }) => {},
-  onDrop: (reason, { code, reconnect }) => {
-    if (!reconnect) console.error(`Kick ended the connection for good: ${reason}`);
+  onState: ({ connected, subscribed }) => {},
+  onDrop: (reason, { code, terminal, waitMs }) => {
+    if (terminal) console.warn(`Kick refused this client (${reason}); back in ${waitMs / 60_000} min`);
   },
 });
 chat.close();
 ```
 
-`connectChat` reconnects with a jittered backoff whenever a connection ends
+`connectChat` keeps the chat up until `close()`. Whenever a connection ends
 (Kick went quiet, the socket closed, a request or the handshake took longer
-than `timeoutMs`, 10 s by default), and stops for good on Kick's terminal
-codes: `onDrop` then says `reconnect: false` and `onState` `stopped: true`.
+than `timeoutMs`, 10 s by default), `onDrop` says why and how long it waits
+before connecting again (`waitMs`): a jittered backoff from 0.5 s to 30 s.
+After one of Kick's terminal closes (a refused token, a ban, a connection
+limit: `terminal: true`) it never gives up, but waits long - 5, 10, 20, then
+30 minutes for terminal closes in a row, each plus up to a quarter - and
+comes back as a new guest client (a new client id, so a new token). The chat
+feed subscribing again ends the streak. `docs/KICK.md` §6.1 has the rules.
 A callback that throws is reported to `onError` (or `console.error`) without
 disturbing the connection; none fires after `close()`.
 
 Node 22 and later have a `WebSocket`. On older Node, pass one:
 `connectChat({ ..., WebSocket })` with the `ws` package's class. Without
-one, `onDrop` says so once and the driver stops.
+one, `connectChat` throws.
 
 **Where the feed works.** Kick's realtime server only accepts a WebSocket whose
 Origin is `https://kick.com`. Node: works (the driver sets the header). Browser:

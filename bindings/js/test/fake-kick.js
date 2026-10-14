@@ -39,11 +39,14 @@ export function chatPush(content) {
  * @param {object} [opts]
  * @param {'open' | 'hang' | 'refuse'} [opts.socket]  what a new socket does
  * @param {'answer' | 'hang' | 'fail'} [opts.fetch]   what a request does
+ * @param {{code: number, message: string}} [opts.connectError]  Centrifugo's
+ *   answer to a connect, instead of accepting it
  */
 export function fakeKick(opts = {}) {
   const kick = {
     socketMode: opts.socket || 'open',
     fetchMode: opts.fetch || 'answer',
+    connectError: opts.connectError || null,
     /** Every request: {url, init}. */
     asked: [],
     /** Every socket, in order. */
@@ -100,7 +103,7 @@ export function fakeKick(opts = {}) {
       for (const line of text.split('\n')) {
         const f = JSON.parse(line);
         if (f.connect) {
-          this.push({ id: f.id, connect: CONNECTED });
+          this.push(kick.connectError ? { id: f.id, error: kick.connectError } : { id: f.id, connect: CONNECTED });
         } else if (f.subscribe) {
           this.push({ id: f.id, subscribe: {} });
         }
@@ -130,5 +133,11 @@ export function fakeKick(opts = {}) {
 
   kick.WebSocket = FakeSocket;
   kick.last = () => kick.sockets.at(-1);
+  /** The client id each connection and token request was made for, in order. */
+  kick.clientIds = () =>
+    kick.asked.map(({ init }) => {
+      const body = JSON.parse(init.body);
+      return body.client_id ?? body.client.id;
+    });
   return kick;
 }

@@ -36,12 +36,14 @@ export async function main(pem: string, body: Uint8Array, headers: Headers): Pro
   kick.topLivestreamsRequest('token', null, null, 'loudest');
 
   // The realtime pieces.
-  const reconnect: boolean = kick.shouldReconnect(1006);
+  const after: number = kick.retryAfterMs(1006);
   const backoff = new kick.Backoff();
   const wait: number = backoff.nextDelayJittered(Math.random());
+  const long: number = backoff.nextDelayFor(after, Math.random());
+  backoff.reset();
   backoff.free();
-  void reconnect;
   void wait;
+  void long;
 
   // Webhooks: the key once, bodies as text or bytes, freshness options.
   const key = new kick.WebhookPublicKey(pem);
@@ -65,9 +67,9 @@ export async function main(pem: string, body: Uint8Array, headers: Headers): Pro
     channels: feeds,
     endpoints: { realtime: config.realtime },
     onEvent: ({ channel, event }) => console.log(channel, event.type),
-    onState: (s: ChatState) => console.log(s.connected, s.subscribed, s.stopped),
+    onState: (s: ChatState) => console.log(s.connected, s.subscribed),
     onDrop: (reason: string, drop: ChatDrop) => {
-      if (!drop.reconnect) console.log('stopped', reason, drop.code);
+      if (drop.terminal) console.warn(reason, drop.code, `back in ${drop.waitMs} ms`);
     },
     onError: (e: unknown) => console.error(e),
     fetch,

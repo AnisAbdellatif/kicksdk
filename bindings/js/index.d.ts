@@ -30,11 +30,9 @@ export interface ChatState {
   connected: boolean;
   /** The feeds subscribed now. */
   subscribed: string[];
-  /** connectChat gave up for good (a terminal close, or no WebSocket): nothing follows. */
-  stopped: boolean;
 }
 
-/** Why a connection, or an attempt at one, ended. */
+/** Why a connection, or an attempt at one, ended, and when the next one starts. */
 export interface ChatDrop {
   /**
    * Kick's disconnect or error code, the socket's close code (1006 for a
@@ -42,8 +40,19 @@ export interface ChatDrop {
    * silence).
    */
   code: number;
-  /** Whether connectChat tries again (after a backoff). False: it has stopped. */
-  reconnect: boolean;
+  /**
+   * Kick will not take this client back as it is (a refused token, a ban, a
+   * connection limit: codes 3500-3999 and 4500-4999, among others). Not the
+   * end: connectChat waits longer (`waitMs`, 5 minutes or more) and comes
+   * back as a new guest client. Worth a warning.
+   */
+  terminal: boolean;
+  /**
+   * How long connectChat waits before connecting again, ms: the ordinary
+   * backoff (0.5 s growing to 30 s, jittered), or after a terminal close 5,
+   * 10, 20, then 30 minutes in a row, plus up to a quarter.
+   */
+  waitMs: number;
 }
 
 /**
@@ -98,9 +107,11 @@ export interface ChatOptions {
 }
 
 /**
- * Connects to one channel's chat and keeps it up until `close()`, or until
- * Kick ends it for good (`onDrop` with `reconnect: false`, then `onState`
- * with `stopped: true`). No callback fires after `close()`, which may be
- * called more than once, and from inside a callback.
+ * Connects to one channel's chat and keeps it up until `close()`: whatever
+ * ends a connection, `onDrop` says why and how long connectChat waits before
+ * the next (long after a `terminal` one). No callback fires after `close()`,
+ * which may be called more than once, and from inside a callback. Throws at
+ * once on a mistake in the options, or when the runtime has no WebSocket and
+ * none is given.
  */
 export function connectChat(options: ChatOptions): { close(): void };
