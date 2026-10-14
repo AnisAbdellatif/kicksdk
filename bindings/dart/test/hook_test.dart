@@ -87,6 +87,16 @@ void main() {
     expect(() => hook.rustTriple(OS.linux, Architecture.arm), throwsUnsupportedError);
     expect(hook.hostIsMusl('7f00-7f01 r-xp 0 08:01 1 /lib/ld-musl-x86_64.so.1'), isTrue);
     expect(hook.hostIsMusl('7f00-7f01 r-xp 0 08:01 1 /usr/lib/x86_64-linux-gnu/libc.so.6'), isFalse);
+    expect(hook.hostIsMusl('7f00-7f01 r-xp 0 08:01 1 /lib/libc.musl-x86_64.so.1'), isTrue);
+    expect(
+      hook.hostIsMusl(
+        '5600-5601 r--p 0 08:01 9 /home/ci/build-musl-ci/ld-musl-tools/dart\n'
+        '7f00-7f01 r-xp 0 08:01 1 /usr/lib/x86_64-linux-gnu/libc.so.6\n'
+        '7f02-7f03 rw-p 0 00:00 0 [heap]',
+      ),
+      isFalse,
+    );
+    expect(hook.hostIsMusl('7f00-7f01 r-xp 0 08:01 1 /lib/ld-musl-aarch64.so.1 (deleted)'), isTrue);
   });
 
   group('download or build', () {

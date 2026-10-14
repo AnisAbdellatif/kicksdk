@@ -185,14 +185,22 @@ String? targetTriple(OS os, Architecture arch, {bool iosSimulator = false, bool 
 }
 
 /// Whether this process runs on musl (Alpine, ...), where a library built
-/// for glibc does not load: the C library mapped into it says.
+/// for glibc does not load: the C library mapped into it says. Only a mapped
+/// file's own name counts, so a directory such as `build-musl-ci/` on a
+/// glibc system does not.
 bool hostIsMusl([String? maps]) {
   try {
     maps ??= File('/proc/self/maps').readAsStringSync();
   } on FileSystemException {
     return false;
   }
-  return maps.contains('ld-musl-') || maps.contains('libc.musl-');
+  for (final line in const LineSplitter().convert(maps)) {
+    // The path is the last field; a line without one (`[heap]`, anonymous
+    // memory) has no '/', and its start is an address, which matches nothing.
+    final name = line.substring(line.lastIndexOf('/') + 1);
+    if (name.startsWith('ld-musl-') || name.startsWith('libc.musl-')) return true;
+  }
+  return false;
 }
 
 Future<Map<String, String>> readChecksums(Uri file) async {
