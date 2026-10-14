@@ -92,5 +92,21 @@ def test_a_recorded_session_replays():
         assert s.is_subscribed(channels[0])
 
 
+def test_reconnect_codes_and_backoff():
+    assert not realtime.should_reconnect(3501)
+    assert not realtime.should_reconnect(4500)
+    assert realtime.should_reconnect(1006) and realtime.should_reconnect(3000)
+    with pytest.raises(KickError) as e:
+        realtime.should_reconnect(70_000)
+    assert e.value.kind == "call"
+
+    b = realtime.Backoff()
+    assert [b.next_delay() for _ in range(7)] == [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]
+    b.reset()
+    assert (b.next_delay_jittered(0.0), b.next_delay_jittered(0.5), b.next()) == (500, 1_500, 4.0)
+    assert (b.initial, b.maximum) == (1.0, 30.0)
+    assert realtime.Backoff(0, 0).next_delay() == 1, "never a busy loop"
+
+
 def test_every_core_function_is_reachable():
     assert "website.channel_request" in kicksdk._native.FUNCTIONS
