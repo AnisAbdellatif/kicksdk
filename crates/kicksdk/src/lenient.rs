@@ -24,21 +24,36 @@ pub(crate) fn string(v: &Value, key: &str) -> Option<String> {
     get(v, key).and_then(Value::as_str).map(str::to_owned)
 }
 
-/// An integer, from a number or a numeric string.
-pub(crate) fn int(v: &Value, key: &str) -> Option<i64> {
-    get(v, key).and_then(as_int)
+/// The largest integer an `f64` holds exactly: 2^53 - 1.
+const EXACT_F64: f64 = 9_007_199_254_740_991.0;
+
+/// A float that is a whole number an `f64` holds exactly (`1.0`, not `1.5`
+/// and not `1e30`, which has long lost its low digits).
+fn exact_whole(f: f64) -> Option<f64> {
+    (f.fract() == 0.0 && f.abs() <= EXACT_F64).then_some(f)
 }
 
-pub(crate) fn as_int(v: &Value) -> Option<i64> {
-    match v {
-        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)),
+/// An integer, from a number or a numeric string. Out of `i64`'s range, or
+/// a fraction, is `None`: never a clamped or truncated number.
+pub(crate) fn int(v: &Value, key: &str) -> Option<i64> {
+    match get(v, key)? {
+        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().and_then(exact_whole).map(|f| f as i64)),
         Value::String(s) => s.trim().parse().ok(),
         _ => None,
     }
 }
 
+/// A non-negative integer (an id, a count), from a number or a numeric
+/// string, over the whole `u64` range. Negative, out of range or a fraction
+/// is `None`: an id is right or missing, never a different id.
 pub(crate) fn uint(v: &Value, key: &str) -> Option<u64> {
-    int(v, key).and_then(|n| u64::try_from(n).ok())
+    match get(v, key)? {
+        Value::Number(n) => {
+            n.as_u64().or_else(|| n.as_f64().and_then(exact_whole).filter(|f| *f >= 0.0).map(|f| f as u64))
+        }
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
 }
 
 pub(crate) fn boolean(v: &Value, key: &str) -> Option<bool> {
@@ -85,5 +100,22 @@ mod tests {
         assert_eq!(decode_twice(&json!("{\"x\":1}")), json!({"x": 1}));
         assert_eq!(decode_twice(&json!({"x": 1})), json!({"x": 1}));
         assert_eq!(decode_twice(&json!("not json")), json!("not json"));
+    }
+
+    #[test]
+    fn ids_are_right_or_missing() {
+        let v = json!({
+            "big": u64::MAX, "big_s": "18446744073709551615", "over_i64": 9_223_372_036_854_775_808u64,
+            "neg": -1, "half": 1.5, "huge": 1e30, "too_big_s": "18446744073709551616"
+        });
+        assert_eq!(uint(&v, "big"), Some(u64::MAX));
+        assert_eq!(uint(&v, "big_s"), Some(u64::MAX));
+        assert_eq!(uint(&v, "over_i64"), Some(9_223_372_036_854_775_808));
+        assert_eq!(int(&v, "over_i64"), None, "not clamped to i64::MAX");
+        assert_eq!(uint(&v, "neg"), None);
+        assert_eq!(int(&v, "neg"), Some(-1));
+        assert_eq!((int(&v, "half"), uint(&v, "half")), (None, None));
+        assert_eq!((int(&v, "huge"), uint(&v, "huge")), (None, None));
+        assert_eq!(uint(&v, "too_big_s"), None);
     }
 }
