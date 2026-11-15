@@ -94,7 +94,7 @@ LANGS = [
     },
     {
         "name": "Elixir",
-        "install": '{:kicksdk, "~> 0.2"}',
+        "install": '{:kicksdk, "~> 0.3.0"}',
         "how": "A precompiled NIF. Values come back as string-keyed maps.",
         "ref": "elixir/index.html",
         "registry": ("hex", "https://hex.pm/packages/kicksdk"),
@@ -149,6 +149,28 @@ def landing() -> str:
 feed speaks, how webhooks are signed. Your code sends the requests and holds the sockets; kicksdk does the rest,
 from one Rust core, in five languages.</p>
 
+<h2>New in 0.3.0</h2>
+<p>Available on <a href="{REPO}/releases/tag/v0.3.0">GitHub</a> and all five language registries.</p>
+<ul>
+<li><strong>OAuth user tokens:</strong> authorization code with PKCE S256, secure state/PKCE helpers in bindings,
+refresh, revocation, introspection and scope handling.</li>
+<li><strong>Official API actions:</strong> chat send/reply/delete, timeout/ban/unban, channel edits,
+rewards and redemptions, ads and drops claims.</li>
+<li><strong>Current public reads:</strong> v2 livestream cursor pagination, streams by user,
+users, categories, live totals and the Kicks leaderboard.</li>
+<li><strong>Bindings and safety:</strong> matching APIs in Rust, JavaScript, Python, Dart and Elixir,
+new typed webhook events, request-secret redaction improvements and realtime recovery fixes.</li>
+</ul>
+<p class="note"><strong>Live verification, 2026-11-15.</strong> OAuth exchange/refresh/revoke/introspection,
+app and user reads, user chat send/reply/delete, timeout/ban/unban and reward create/update/delete
+were recorded against Kick. Bot send returned 404; channel editing was skipped because no original
+title could be restored. Ad breaks, enrollment, drops and redemption accept/reject remain
+documentation-based. Check granted OAuth scopes before protected calls; never log tokens or requests
+carrying them. See the <a href="kick.html">Kick reference</a> for evidence and limits.</p>
+<p><strong>Upgrading:</strong> the API base is now <code>https://api.kick.com</code>, with versions in
+individual request paths. The old sorted livestream API was replaced with user-based reads and v2
+cursor pages. Review the <a href="changelog.html">0.3.0 changelog</a> before upgrading.</p>
+
 <h2>Install</h2>
 <div class="cards">{cards}</div>
 
@@ -188,6 +210,7 @@ def main(site: Path) -> None:
     (site / "architecture.html").write_text(
         markdown_page(ROOT / "docs/architecture.md", "Architecture - kicksdk", "Architecture")
     )
+    (site / "changelog.html").write_text(markdown_page(ROOT / "CHANGELOG.md", "Changelog - kicksdk", "Changelog"))
     (site / ".nojekyll").write_text("")
 
 
