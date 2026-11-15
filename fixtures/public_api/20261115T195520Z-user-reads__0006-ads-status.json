@@ -1,0 +1,21 @@
+{
+  "elapsed_ms": 660,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:55:25.969Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/ads/ad-break-status"
+  },
+  "response": {
+    "body": "{\"data\":{\"opted_in\":false,\"remaining_ad_breaks\":0,\"limits\":{\"max\":0,\"period_seconds\":0},\"ads_blocked\":false,\"auto_ads_active\":false,\"ad_breaks\":[]},\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

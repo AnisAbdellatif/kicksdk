@@ -1,0 +1,21 @@
+{
+  "elapsed_ms": 215,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:56:45.053Z",
+  "request": {
+    "json": null,
+    "method": "POST",
+    "params": {},
+    "url": "https://id.kick.com/oauth/token/introspect"
+  },
+  "response": {
+    "body": "{\"data\":{},\"message\":\"Unauthorized\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 401
+  }
+}

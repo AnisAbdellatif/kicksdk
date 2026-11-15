@@ -49,9 +49,12 @@ current livestreams endpoints' answer, which nobody has recorded yet (§3).
   token needs the `events:subscribe` scope and only covers its own channel.
   *(docs; confirmed in production for every event type we use)*
 - A **user token** is only for acting as someone (chat, moderation, editing
-  a channel) or private data. KickTracker does not use one; `kicksdk`
-  builds the flow from the docs and spec (2026-11-15), and nothing below has
-  been recorded yet. *(docs)*
+  a channel) or private data. KickTracker does not use one. On 2026-11-15,
+  `tools/record-api.mjs` recorded authorization-code exchange with PKCE,
+  refresh, introspection and revocation against Kick. Both revokes returned
+  200; introspection after revocation returned 401. The first authorization
+  granted only four requested scopes; reauthorization granted twelve.
+  Check the returned scopes before attempting protected operations. *(recording)*
   - **Flow:** OAuth 2.1 authorization code with PKCE, `S256` only, on
     `https://id.kick.com`. The app sends the user's browser to
     `GET /oauth/authorize?response_type=code&client_id=…&redirect_uri=…&scope=…&code_challenge=…&code_challenge_method=S256&state=…`;
@@ -182,9 +185,15 @@ answer, `started_at`'s format) has not been checked on them.
 
 Every endpoint below takes a **user token** (§2) with the scope shown and
 acts on the token's own channel, except where a channel is named in the
-body. All are *(docs)*: Kick's spec (`api.kick.com/swagger/doc.json`) and,
-for drops, its drops guide, read 2026-11-15; none is recorded yet. The
-documented examples are in `fixtures/docs/public_api/actions-*.json`; in
+body. Contracts below come from Kick's spec (`api.kick.com/swagger/doc.json`)
+and, for drops, its drops guide, read 2026-11-15. Live recordings on that date
+confirmed user chat send/reply/delete, timeout/ban/unban, reward
+create/update/list/delete, empty redemption lists and ads status. All performed
+changes were cleaned up. Bot send returned 404; channel editing was skipped
+because no original title was available to restore. Ad breaks, enrollment,
+drops and redemption accept/reject were not performed. Documented limits and
+unobserved fields remain *(docs)*. See `fixtures/public_api/README.md`.
+The documented examples are in `fixtures/docs/public_api/actions-*.json`; in
 kicksdk they are `public_api::{chat, moderation, channels, rewards, ads,
 drops}`. An answer with nothing to read (204, or `{"data": {}, "message":
 "OK"}`) is just success. *(docs)*

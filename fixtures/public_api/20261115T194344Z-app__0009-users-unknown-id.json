@@ -1,0 +1,23 @@
+{
+  "elapsed_ms": 730,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:43:54.023Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "id": 900000051
+    },
+    "url": "https://api.kick.com/public/v1/users"
+  },
+  "response": {
+    "body": "{\"data\":[],\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

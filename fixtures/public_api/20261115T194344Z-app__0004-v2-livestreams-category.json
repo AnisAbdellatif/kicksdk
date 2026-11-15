@@ -1,0 +1,24 @@
+{
+  "elapsed_ms": 736,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:43:48.876Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "category_id": 11779,
+      "limit": 10
+    },
+    "url": "https://api.kick.com/public/v2/livestreams"
+  },
+  "response": {
+    "body": "{\"data\":[{\"id\":\"00000000-0000-4000-8000-000000000001\",\"title\":\"text-1\",\"language_code\":\"en\",\"tags\":[\"text-2\",\"text-3\",\"text-4\",\"text-5\"],\"has_mature_content\":false,\"viewer_count\":0,\"thumbnail\":\"https://example.invalid/asset/1\",\"started_at\":\"2026-07-01T19:04:01Z\",\"category\":{\"id\":11779,\"name\":\"Terminator 2D: NO FATE\",\"thumbnail\":\"https://example.invalid/asset/2\"},\"channel\":{\"slug\":\"user0001\"},\"broadcaster_user\":{\"id\":900000001,\"username\":\"user0001\",\"profile_picture\":\"https://example.invalid/asset/3\"}}],\"message\":\"OK\",\"pagination\":{\"next_cursor\":\"\"}}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

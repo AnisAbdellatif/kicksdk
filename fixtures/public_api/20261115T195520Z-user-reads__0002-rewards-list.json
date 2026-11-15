@@ -1,0 +1,21 @@
+{
+  "elapsed_ms": 214,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:55:22.950Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/channels/rewards"
+  },
+  "response": {
+    "body": "{\"data\":[],\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

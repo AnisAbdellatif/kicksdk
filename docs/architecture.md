@@ -200,3 +200,12 @@ Python, Dart and Elixir suites all read them. A Kick change goes like this: reco
 every suite fail, fix the core, and every binding passes again. Recordings
 never hold a token, a real name, real text or a signed URL; see
 CONTRIBUTING.md.
+
+### Official API recording
+
+`tools/record-api.mjs` uses the JS binding to build requests and parse real
+responses. Raw exchanges and tokens stay outside the repository in private
+files; only anonymized envelopes enter `fixtures/public_api/` and
+`fixtures/id/`. Documentation-derived examples stay in `fixtures/docs/`
+and must not be described as live evidence. See `CONTRIBUTING.md` for the
+recording flow, scope checks and cleanup requirements.

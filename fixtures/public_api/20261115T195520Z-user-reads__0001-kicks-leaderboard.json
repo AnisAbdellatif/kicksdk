@@ -1,0 +1,23 @@
+{
+  "elapsed_ms": 209,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:55:22.339Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "top": 10
+    },
+    "url": "https://api.kick.com/public/v1/kicks/leaderboard"
+  },
+  "response": {
+    "body": "{\"data\":{\"lifetime\":[],\"month\":[],\"week\":[]},\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "elapsed_ms": 603,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:49:04.528Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/ads/ad-break-status"
+  },
+  "response": {
+    "body": "{\"data\":{},\"message\":\"Unauthorized\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 401
+  }
+}

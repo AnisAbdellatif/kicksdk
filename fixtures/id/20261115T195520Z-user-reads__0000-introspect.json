@@ -1,0 +1,21 @@
+{
+  "elapsed_ms": 605,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:55:20.594Z",
+  "request": {
+    "json": null,
+    "method": "POST",
+    "params": {},
+    "url": "https://id.kick.com/oauth/token/introspect"
+  },
+  "response": {
+    "body": "{\"data\":{\"active\":true,\"client_id\":\"[redacted]\",\"token_type\":\"user\",\"scope\":\"ads:read ads:write channel:read channel:write channel:rewards:read channel:rewards:write chat:write events:subscribe kicks:read moderation:ban moderation:chat_message:manage user:read\",\"exp\":1794779714},\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

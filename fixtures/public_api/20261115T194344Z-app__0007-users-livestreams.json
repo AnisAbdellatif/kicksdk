@@ -1,0 +1,27 @@
+{
+  "elapsed_ms": 720,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:43:52.229Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "user_id": [
+        900000001,
+        900000002,
+        900000003
+      ]
+    },
+    "url": "https://api.kick.com/public/v1/users/livestreams"
+  },
+  "response": {
+    "body": "{\"data\":[{\"id\":\"00000000-0000-4000-8000-000000000003\",\"title\":\"text-7\",\"language_code\":\"en\",\"tags\":[],\"has_mature_content\":false,\"viewer_count\":2,\"thumbnail\":\"https://example.invalid/asset/7\",\"started_at\":\"2026-11-11T21:22:25Z\",\"category\":{\"id\":246,\"name\":\"Music Stations\",\"thumbnail\":\"https://example.invalid/asset/8\"},\"channel\":{\"slug\":\"user0003\"},\"broadcaster_user\":{\"id\":900000003,\"username\":\"user0003\",\"profile_picture\":\"https://example.invalid/asset/9\"}},{\"id\":\"00000000-0000-4000-8000-000000000002\",\"title\":\"text-6\",\"language_code\":\"es\",\"tags\":[],\"has_mature_content\":false,\"viewer_count\":2,\"thumbnail\":\"https://example.invalid/asset/4\",\"started_at\":\"2026-11-11T20:50:46Z\",\"category\":{\"id\":15,\"name\":\"Just Chatting\",\"thumbnail\":\"https://example.invalid/asset/5\"},\"channel\":{\"slug\":\"user0002\"},\"broadcaster_user\":{\"id\":900000002,\"username\":\"user0002\",\"profile_picture\":\"https://example.invalid/asset/6\"}},{\"id\":\"00000000-0000-4000-8000-000000000001\",\"title\":\"text-1\",\"language_code\":\"en\",\"tags\":[\"text-2\",\"text-3\",\"text-4\",\"text-5\"],\"has_mature_content\":false,\"viewer_count\":0,\"thumbnail\":\"https://example.invalid/asset/1\",\"started_at\":\"2026-07-01T19:04:01Z\",\"category\":{\"id\":11779,\"name\":\"Terminator 2D: NO FATE\",\"thumbnail\":\"https://example.invalid/asset/2\"},\"channel\":{\"slug\":\"user0001\"},\"broadcaster_user\":{\"id\":900000001,\"username\":\"user0001\",\"profile_picture\":\"https://example.invalid/asset/3\"}}],\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

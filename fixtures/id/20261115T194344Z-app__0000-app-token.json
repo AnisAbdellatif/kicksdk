@@ -1,0 +1,26 @@
+{
+  "elapsed_ms": 360,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:43:44.676Z",
+  "request": {
+    "form": {
+      "grant_type": "client_credentials",
+      "client_id": "[redacted]",
+      "client_secret": "[redacted]"
+    },
+    "json": null,
+    "method": "POST",
+    "params": {},
+    "url": "https://id.kick.com/oauth/token"
+  },
+  "response": {
+    "body": "{\"access_token\":\"[redacted]\",\"expires_in\":5184000,\"token_type\":\"Bearer\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json;charset=UTF-8"
+      ]
+    ],
+    "status": 200
+  }
+}

@@ -82,3 +82,17 @@ directory, with the same `CARGO_HOME`), or point Cargo at a vendored copy
 
 Kick's realtime server only accepts `Origin: https://kick.com`; `connectChat`
 sends it. MIT OR Apache-2.0. Not affiliated with Kick.
+
+## Live API coverage
+
+The shared core was checked against Kick on 2026-11-15: OAuth code exchange
+with PKCE, refresh/revocation/introspection, app and user reads, chat
+send/reply/delete, timeout/ban/unban and reward create/update/delete.
+Bot send returned 404; channel editing was skipped because no original title
+was available to restore. Ad breaks, enrollment, drops and redemption
+accept/reject remain documentation-based. See the repository `docs/KICK.md`
+and `fixtures/{public_api,id}/README.md` for evidence and limits.
+
+Check granted OAuth scopes before protected calls: Kick can grant fewer than
+requested. Never log tokens, client secrets, authorization codes, PKCE
+verifiers or requests carrying them.

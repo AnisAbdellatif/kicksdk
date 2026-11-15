@@ -1,0 +1,21 @@
+{
+  "elapsed_ms": 331,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:55:21.606Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/users"
+  },
+  "response": {
+    "body": "{\"data\":[{\"user_id\":900000001,\"name\":\"user0001\",\"email\":\"user0001@example.invalid\",\"profile_picture\":\"https://example.invalid/asset/1\"}],\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

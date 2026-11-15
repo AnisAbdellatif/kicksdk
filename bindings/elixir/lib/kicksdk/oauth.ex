@@ -82,7 +82,7 @@ defmodule Kicksdk.OAuth do
   def parse_user_token(status, body),
     do: Kicksdk.call("oauth.parse_user_token", %{status: status, body: body})
 
-  @doc "Revokes an access or refresh token; `token_type_hint` is `\"access_token\"` or `\"refresh_token\"`."
+  @doc ~S|Revokes an access or refresh token; `token_type_hint` is `"access_token"` or `"refresh_token"`.|
   @spec revoke_request(String.t(), String.t() | nil, Kicksdk.endpoints()) :: Kicksdk.result(Kicksdk.request())
   def revoke_request(token, token_type_hint \\ nil, endpoints \\ nil),
     do:
@@ -106,7 +106,7 @@ defmodule Kicksdk.OAuth do
   def parse_introspect(status, body),
     do: Kicksdk.call("oauth.parse_introspect", %{status: status, body: body})
 
-  @doc "The scopes Kick documents, e.g. `\"chat:write\"`."
+  @doc ~S|The scopes Kick documents, e.g. `"chat:write"`.|
   @spec scopes() :: [String.t()]
   def scopes do
     {:ok, scopes} = Kicksdk.call("oauth.scopes", %{})

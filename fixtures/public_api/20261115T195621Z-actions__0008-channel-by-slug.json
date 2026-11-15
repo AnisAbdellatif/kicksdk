@@ -1,0 +1,23 @@
+{
+  "elapsed_ms": 713,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:56:29.047Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "slug": "user0002"
+    },
+    "url": "https://api.kick.com/public/v1/channels"
+  },
+  "response": {
+    "body": "{\"data\":[{\"broadcaster_user_id\":900000002,\"slug\":\"user0002\",\"channel_description\":\"\",\"banner_picture\":\"\",\"stream\":{\"url\":\"\",\"key\":\"\",\"is_live\":false,\"is_mature\":false,\"language\":\"\",\"start_time\":\"0001-01-01T00:00:00Z\",\"viewer_count\":0,\"thumbnail\":\"\"},\"stream_title\":\"\",\"category\":{\"id\":0,\"name\":\"\",\"thumbnail\":\"\"},\"active_subscribers_count\":0,\"active_gifted_subscribers_count\":0,\"canceled_subscribers_count\":0}],\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

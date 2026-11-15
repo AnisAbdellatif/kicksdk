@@ -1,0 +1,23 @@
+{
+  "elapsed_ms": 682,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:43:57.921Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "limit": 5
+    },
+    "url": "https://api.kick.com/public/v2/categories"
+  },
+  "response": {
+    "body": "{\"data\":[{\"id\":1,\"name\":\"Apex Legends\",\"thumbnail\":\"https://example.invalid/asset/57\",\"tags\":[\"FPS\",\"Shooter\",\"Battle Royale\"]},{\"id\":2,\"name\":\"Call of Duty: Modern Warfare II\",\"thumbnail\":\"https://example.invalid/asset/119\",\"tags\":[\"FPS\",\"Shooter\",\"Action\"]},{\"id\":3,\"name\":\"Fortnite\",\"thumbnail\":\"https://example.invalid/asset/120\",\"tags\":[\"Shooter\",\"Battle Royale\"]},{\"id\":4,\"name\":\"Call of Duty: Warzone 2.0\",\"thumbnail\":\"https://example.invalid/asset/121\",\"tags\":[\"FPS\",\"Shooter\",\"Battle Royale\"]},{\"id\":5,\"name\":\"League of Legends\",\"thumbnail\":\"https://example.invalid/asset/122\",\"tags\":[\"MOBA\",\"Action\"]}],\"message\":\"OK\",\"pagination\":{\"next_cursor\":\"cursor-5\"}}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

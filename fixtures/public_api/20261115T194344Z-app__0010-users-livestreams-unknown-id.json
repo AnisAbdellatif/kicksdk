@@ -1,0 +1,23 @@
+{
+  "elapsed_ms": 231,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:43:55.159Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "user_id": 900000051
+    },
+    "url": "https://api.kick.com/public/v1/users/livestreams"
+  },
+  "response": {
+    "body": "{\"data\":[],\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

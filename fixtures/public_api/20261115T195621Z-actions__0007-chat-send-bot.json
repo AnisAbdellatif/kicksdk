@@ -1,0 +1,24 @@
+{
+  "elapsed_ms": 242,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:56:28.403Z",
+  "request": {
+    "json": {
+      "content": "text-1",
+      "type": "bot"
+    },
+    "method": "POST",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/chat"
+  },
+  "response": {
+    "body": "{\"data\":{},\"message\":\"Not found\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 404
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "elapsed_ms": 655,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:43:59.011Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "limit": 5,
+      "cursor": "cursor-5"
+    },
+    "url": "https://api.kick.com/public/v2/categories"
+  },
+  "response": {
+    "body": "{\"data\":[{\"id\":6,\"name\":\"Overwatch\",\"thumbnail\":\"https://example.invalid/asset/123\",\"tags\":[\"FPS\",\"Shooter\",\"Action\"]},{\"id\":7,\"name\":\"Among Us\",\"thumbnail\":\"https://example.invalid/asset/124\",\"tags\":[\"Strategy\",\"Survival\",\"Action\"]},{\"id\":8,\"name\":\"user0004\",\"thumbnail\":\"https://example.invalid/asset/11\",\"tags\":[\"Shooter\",\"Action\",\"Open World\"]},{\"id\":9,\"name\":\"FIFA 23\",\"thumbnail\":\"https://example.invalid/asset/125\",\"tags\":[\"Sports Game\"]},{\"id\":10,\"name\":\"Minecraft\",\"thumbnail\":\"https://example.invalid/asset/126\",\"tags\":[\"Adventure\",\"MMO\",\"Survival\",\"Open World\"]}],\"message\":\"OK\",\"pagination\":{\"next_cursor\":\"cursor-6\"}}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

@@ -20,3 +20,8 @@ are not Kick's: `"message": "OK"` (what every recorded answer carries) and
 | `v1-users.json` | `GET /public/v1/users` | `endpoints.GetUser` |
 | `v2-categories.json` | `GET /public/v2/categories` | `endpoints.PaginatedResponse-endpoints_CategoryWithTags` |
 | `v1-kicks-leaderboard.json` | `GET /public/v1/kicks/leaderboard` | `endpoints.KicksLeaderboard` |
+
+Live recordings from 2026-11-15 now supplement these examples in
+`fixtures/public_api/` and `fixtures/id/`; see their READMEs for exact
+coverage and untested operations. These files remain documentation-derived,
+including optional shapes not observed in the recordings.

@@ -3,9 +3,10 @@
 **These are not recordings.** They were transcribed on 2026-11-15 from Kick's
 developer docs (github.com/KickEngineering/KickDevDocs@main,
 `getting-started/generating-tokens-oauth2-flow.md`) and API spec
-(`https://api.kick.com/swagger/doc.json`), because no user-token flow has
-been recorded yet (it needs a Kick account to approve an app). Replace or
-join them with recordings when there are some (see CONTRIBUTING.md).
+(`https://api.kick.com/swagger/doc.json`). Live code exchange, refresh,
+introspection and revocation recordings from the same date now supplement
+these examples in `fixtures/id/`; see its README. These examples remain
+documentation-derived, not recordings.
 
 | File | Where it comes from |
 |---|---|

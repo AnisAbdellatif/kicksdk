@@ -1,0 +1,16 @@
+{
+  "elapsed_ms": 302,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:56:24.412Z",
+  "request": {
+    "json": null,
+    "method": "DELETE",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/chat/00000000-0000-4000-8000-000000000001"
+  },
+  "response": {
+    "body": "",
+    "headers": [],
+    "status": 204
+  }
+}

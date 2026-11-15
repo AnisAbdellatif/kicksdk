@@ -1,0 +1,25 @@
+{
+  "elapsed_ms": 319,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:56:25.115Z",
+  "request": {
+    "json": {
+      "broadcaster_user_id": 900000001,
+      "content": "text-1",
+      "type": "user"
+    },
+    "method": "POST",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/chat"
+  },
+  "response": {
+    "body": "{\"data\":{\"message_id\":\"00000000-0000-4000-8000-000000000002\",\"is_sent\":true},\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

@@ -44,9 +44,34 @@ listed is replaced, not kept: to keep a new one, add it to the recorder's
 lists. `import('./tools/record-realtime.mjs')` records nothing, and gives
 `anonFrame`, `anonHttp` and `anonClose` to try on made-up input.
 
-The fixtures under `public_api/`, `v2/`, `webhook/`, `id/`, `probe/` and
+Older fixtures under `public_api/`, `v2/`, `webhook/`, `id/`, `probe/` and
 `pusher-legacy/` came from KickTracker's recorder and anonymizer
 (`mix record.*`, `mix fixtures.anonymize`).
+
+`tools/record-api.mjs` records the official HTTP API with the JS binding.
+Set `KICK_CLIENT_ID_FILE` and `KICK_CLIENT_SECRET_FILE` to private credential
+files; never put their contents in command arguments. Run:
+
+```sh
+node tools/record-api.mjs app
+KICK_REDIRECT_URI=http://localhost:4000/auth/kick/callback node tools/record-api.mjs login
+node tools/record-api.mjs user-reads
+node tools/record-api.mjs actions --target <your-second-account-slug> # plan only
+node tools/record-api.mjs actions --target <your-second-account-slug> --yes
+node tools/record-api.mjs revoke
+node tools/record-api.mjs status
+node --test tools/record-api.test.mjs
+```
+
+Register the exact redirect URI with your Kick app. Check granted scopes
+before actions. Use only accounts you control and explicitly authorize each
+live run. Actions send/delete chat, timeout/ban/unban the target, edit/restore
+the channel title and create/edit/delete a disabled reward. Cleanup is
+attempted even after failure; inspect any `LEFT TO UNDO BY HAND` report.
+No ad breaks, enrollment, drops updates or real redemption decisions run.
+Raw responses contain secrets and stay in a 0700 directory outside the repo
+(`status` prints its location); private files are 0600. Only anonymized
+fixtures go under `fixtures/public_api/` and `fixtures/id/`.
 
 **Read a recording before committing it.** Look for anything that is a real
 person's name or words, a token, a session, or a signed URL (`playback_url`).

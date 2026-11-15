@@ -55,7 +55,7 @@ defmodule Kicksdk.PublicApi do
     Kicksdk.call_request("public_api.livestreams_page_request", args, opts[:endpoints])
   end
 
-  @doc "Reads a `livestreams_page_request/2` answer: `%{\"data\" => [...], \"next_cursor\" => ...}`."
+  @doc ~S|Reads a `livestreams_page_request/2` answer: `%{"data" => [...], "next_cursor" => ...}`.|
   @spec parse_livestreams_page(integer(), binary()) :: Kicksdk.result(map())
   def parse_livestreams_page(status, body),
     do: Kicksdk.call("public_api.parse_livestreams_page", %{status: status, body: body})
@@ -168,7 +168,7 @@ defmodule Kicksdk.PublicApi do
     Kicksdk.call_request("public_api.categories_request", args, opts[:endpoints])
   end
 
-  @doc "Reads a `categories_request/2` answer: `%{\"data\" => [...], \"next_cursor\" => ...}`."
+  @doc ~S|Reads a `categories_request/2` answer: `%{"data" => [...], "next_cursor" => ...}`.|
   @spec parse_categories(integer(), binary()) :: Kicksdk.result(map())
   def parse_categories(status, body),
     do: Kicksdk.call("public_api.parse_categories", %{status: status, body: body})

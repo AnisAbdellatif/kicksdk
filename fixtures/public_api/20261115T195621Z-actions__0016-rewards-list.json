@@ -1,0 +1,21 @@
+{
+  "elapsed_ms": 211,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:56:35.618Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/channels/rewards"
+  },
+  "response": {
+    "body": "{\"data\":[{\"id\":\"00000000000000000000000001\",\"title\":\"text-5\",\"cost\":1,\"description\":\"\",\"is_enabled\":false,\"is_paused\":false,\"background_color\":\"#00e701\",\"is_user_input_required\":false,\"should_redemptions_skip_request_queue\":false}],\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

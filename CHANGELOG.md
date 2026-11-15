@@ -1,11 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 Kick's public API, brought up to date with its docs and spec (2026-11-15).
-The new endpoints and event types follow Kick's documented examples
-(`fixtures/docs/`), not recordings: expect corrections once they are
-recorded.
+Live recordings now cover app reads, OAuth code exchange/refresh/revocation,
+user reads, chat send/reply/delete, moderation and reward CRUD (2026-11-15).
+Successful responses parsed with the SDK. Bot send returned 404; channel
+editing was safely skipped. Ad breaks, enrollment, drops, redemption
+accept/reject and new webhook events remain documentation-based
+(`fixtures/docs/`).
+
+### Recording
+- `tools/record-api.mjs` records app reads, PKCE login, user reads, reversible
+  actions and revocation. Raw exchanges stay in a private directory outside
+  the repo; fixtures are anonymized. Actions require `--yes` and run cleanup.
+- Recorded that granted OAuth scopes can be a subset of requested scopes,
+  and introspection after revocation returns 401.
 
 ### Public API
 - **Breaking:** `Endpoints.api` is `https://api.kick.com`, with no

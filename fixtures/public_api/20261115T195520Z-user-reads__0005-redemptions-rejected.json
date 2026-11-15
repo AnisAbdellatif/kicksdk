@@ -1,0 +1,23 @@
+{
+  "elapsed_ms": 231,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:55:25.336Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "status": "rejected"
+    },
+    "url": "https://api.kick.com/public/v1/channels/rewards/redemptions"
+  },
+  "response": {
+    "body": "{\"data\":[],\"message\":\"OK\",\"pagination\":{\"next_cursor\":\"\"}}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

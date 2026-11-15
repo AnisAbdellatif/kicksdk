@@ -50,6 +50,8 @@ docs/releasing.md has the details.
 | Module | Kick | |
 |---|---|---|
 | `public_api` | `api.kick.com/public/v1` and `/v2`, official | App token, live streams (by user id, 100 a request, or a page of all), `/channels` (50 a request), users, categories, live totals, the Kicks leaderboard, webhook subscriptions, the signing key |
+| `oauth` | `id.kick.com`, official | Authorization code with PKCE S256, refresh, revocation, introspection and scopes; bindings provide secure random state and PKCE helpers |
+| `public_api::{chat, moderation, channels, rewards, ads, drops}` | Official user/app actions | Chat send/reply/delete, timeout/ban/unban, channel edits, rewards and redemptions, ads, drops claims |
 | `website` | `kick.com/api/v2`, Kick's own frontend | Chatroom id, follower total, live state, chat history and pin, user cards; moderating and sending as a viewer |
 | `realtime` | Kick's chat feed (Centrifugo) | Where to connect, the guest token, and a `Session` state machine: connect, subscribe, pings, token refresh, reconnect timing |
 | `events` | The feed's events | Chat messages, deletions, bans, pins, subs, gifted subs, Kicks, rewards, hosts, live/offline, polls, typed. Unknown events come out by name, never as errors |
@@ -58,6 +60,16 @@ docs/releasing.md has the details.
 
 Everything rests on [`docs/KICK.md`](docs/KICK.md): every fact about Kick,
 with where it was seen. Read it before relying on anything unofficial.
+
+**Live API verification (2026-11-15).** App reads, OAuth code exchange,
+refresh/revoke/introspection, user reads, chat send/reply/delete,
+timeout/ban/unban and reward create/update/delete were recorded against Kick;
+all successful responses parsed with the SDK. Bot send returned 404. Channel
+editing was skipped because no original title could be restored. Ad breaks,
+enrollment, drops and redemption accept/reject remain documentation-based.
+See [`fixtures/public_api/README.md`](fixtures/public_api/README.md) and
+[`fixtures/id/README.md`](fixtures/id/README.md). Inspect granted OAuth scopes:
+Kick may grant fewer than requested. Never log tokens or requests carrying them.
 
 ## Two things to know first
 

@@ -1,0 +1,21 @@
+{
+  "elapsed_ms": 706,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:43:46.149Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/livestreams/stats"
+  },
+  "response": {
+    "body": "{\"data\":{\"total_count\":16903},\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

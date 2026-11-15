@@ -1,0 +1,24 @@
+{
+  "elapsed_ms": 303,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:56:30.956Z",
+  "request": {
+    "json": {
+      "broadcaster_user_id": 900000001,
+      "user_id": 900000002
+    },
+    "method": "DELETE",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/moderation/bans"
+  },
+  "response": {
+    "body": "{\"data\":{},\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

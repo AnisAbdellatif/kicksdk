@@ -1,0 +1,19 @@
+{
+  "elapsed_ms": 192,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:49:22.730Z",
+  "request": {
+    "json": null,
+    "method": "POST",
+    "params": {
+      "token": "[redacted]",
+      "token_type_hint": "refresh_token"
+    },
+    "url": "https://id.kick.com/oauth/revoke"
+  },
+  "response": {
+    "body": "",
+    "headers": [],
+    "status": 200
+  }
+}

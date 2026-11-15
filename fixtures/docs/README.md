@@ -47,3 +47,8 @@ Filled in, and not Kick's:
 | `actions-drops-unauthorized.json` | `GET /public/v1/drops/claims` | drops guide, 401 |
 
 The names, ids and texts are Kick's placeholders, not real people's.
+
+Live recordings from 2026-11-15 now supplement these examples in
+`fixtures/public_api/` and `fixtures/id/`; see their READMEs for exact
+coverage and untested operations. These files remain documentation-derived,
+including optional shapes not observed in the recordings.

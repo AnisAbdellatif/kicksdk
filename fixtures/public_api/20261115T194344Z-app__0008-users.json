@@ -1,0 +1,27 @@
+{
+  "elapsed_ms": 271,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:43:53.350Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "id": [
+        900000001,
+        900000002,
+        900000003
+      ]
+    },
+    "url": "https://api.kick.com/public/v1/users"
+  },
+  "response": {
+    "body": "{\"data\":[{\"user_id\":900000002,\"name\":\"user0002\",\"email\":\"\",\"profile_picture\":\"https://example.invalid/asset/6\"},{\"user_id\":900000001,\"name\":\"user0001\",\"email\":\"\",\"profile_picture\":\"https://example.invalid/asset/3\"},{\"user_id\":900000003,\"name\":\"user0003\",\"email\":\"\",\"profile_picture\":\"https://example.invalid/asset/9\"}],\"message\":\"OK\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 200
+  }
+}

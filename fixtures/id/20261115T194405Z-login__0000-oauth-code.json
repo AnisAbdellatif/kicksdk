@@ -1,0 +1,29 @@
+{
+  "elapsed_ms": 835,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:48:45.284Z",
+  "request": {
+    "form": {
+      "grant_type": "authorization_code",
+      "code": "[redacted]",
+      "client_id": "[redacted]",
+      "client_secret": "[redacted]",
+      "redirect_uri": "https://example.invalid/asset/1",
+      "code_verifier": "[redacted]"
+    },
+    "json": null,
+    "method": "POST",
+    "params": {},
+    "url": "https://id.kick.com/oauth/token"
+  },
+  "response": {
+    "body": "{\"access_token\":\"[redacted]\",\"expires_in\":7200,\"refresh_expires_in\":2592000,\"refresh_token\":\"[redacted]\",\"scope\":\"channel:read events:subscribe kicks:read user:read\",\"token_type\":\"Bearer\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json;charset=UTF-8"
+      ]
+    ],
+    "status": 200
+  }
+}

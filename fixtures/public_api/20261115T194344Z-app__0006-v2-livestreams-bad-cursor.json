@@ -1,0 +1,24 @@
+{
+  "elapsed_ms": 725,
+  "kind": "http",
+  "recorded_at": "2026-11-15T19:43:51.096Z",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "limit": 5,
+      "cursor": "cursor-4"
+    },
+    "url": "https://api.kick.com/public/v2/livestreams"
+  },
+  "response": {
+    "body": "{\"data\":{},\"message\":\"Invalid request\"}",
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "status": 400
+  }
+}
