@@ -1,8 +1,18 @@
 export * from './pkg/kicksdk.js';
-import type { Endpoints } from './pkg/kicksdk.js';
+import type { Endpoints, Pkce } from './pkg/kicksdk.js';
 
 /** The Origin Kick's realtime server accepts. */
 export const REQUIRED_ORIGIN: 'https://kick.com';
+
+/**
+ * A new PKCE pair from 32 bytes of `crypto.getRandomValues`, for
+ * `oauthAuthorizeUrl` and `oauthCodeRequest`. The verifier is a secret: keep
+ * it until the user comes back, never log it.
+ */
+export function newPkce(): Pkce;
+
+/** A new OAuth `state`: 32 bytes of `crypto.getRandomValues`, base64url without padding. */
+export function newState(): string;
 
 /**
  * Loads the WebAssembly: a URL, a Response (or a promise of one), the .wasm
@@ -100,7 +110,8 @@ export interface ChatOptions {
   onDrop?: ((reason: string, drop: ChatDrop) => void) | undefined;
   /**
    * A callback above threw, or `now` gave a reading it cannot use. Default:
-   * console.error. The connection carries on either way.
+   * console.error. The connection carries on either way. Not called after
+   * `close()`: what throws then goes to console.error.
    */
   onError?: ((error: unknown) => void) | undefined;
   /** The fetch to make Kick's requests with. Default: the global fetch. */

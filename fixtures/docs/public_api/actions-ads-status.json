@@ -1,0 +1,14 @@
+{
+  "kind": "docs",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/ads/ad-break-status"
+  },
+  "response": {
+    "body": "{\"data\":{\"ad_breaks\":[{\"ad_break_id\":\"Xq3LmP9aB2cD\",\"break_duration_seconds\":30,\"created_at\":\"2026-01-02T03:04:05Z\",\"id\":\"123e4567-e89b-12d3-a456-426614174000\",\"source\":\"public_api\",\"status\":\"inserted\"}],\"ads_blocked\":false,\"auto_ads_active\":false,\"limits\":{\"max\":3,\"period_seconds\":3600},\"opted_in\":true,\"remaining_ad_breaks\":2},\"message\":\"OK\"}",
+    "status": 200
+  },
+  "source": "Kick's spec (api.kick.com/swagger/doc.json), its example values, transcribed 2026-11-15: not a recording"
+}

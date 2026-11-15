@@ -10,6 +10,9 @@ defmodule Kicksdk do
   The same Rust core runs in browsers (npm `kicksdk-js`) and here, as a NIF.
 
     * `Kicksdk.PublicApi` - the official API and the app token.
+    * `Kicksdk.OAuth` - a user's token: sign-in with PKCE, refresh, revoke.
+    * `Kicksdk.Chat`, `Kicksdk.Moderation`, `Kicksdk.Channels`, `Kicksdk.Rewards`,
+      `Kicksdk.Ads`, `Kicksdk.Drops` - acting with a user token (drops: an app token).
     * `Kicksdk.Website` - kick.com's own endpoints: chatroom id, follower totals, history.
     * `Kicksdk.Realtime` and `Kicksdk.Realtime.Session` - the chat feed.
     * `Kicksdk.Events` - chat-feed events, typed.
@@ -19,7 +22,7 @@ defmodule Kicksdk do
   (`event["type"]`, `action["action"]`). Not atoms: most of it is Kick's own
   data, and atom keys from it would let Kick grow the atom table.
 
-  A request is `%{"method" => "GET" | "POST" | "DELETE", "url" => url,
+  A request is `%{"method" => "GET" | "POST" | "PATCH" | "DELETE", "url" => url,
   "headers" => [{name, value}], "body" => binary | nil}`.
 
   One convention throughout:

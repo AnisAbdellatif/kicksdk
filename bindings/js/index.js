@@ -20,12 +20,34 @@ import initWasm, {
   parseConnection,
   tokenRequest,
   parseToken,
-  retryAfterMs
+  retryAfterMs,
+  oauthPkce
 } from './pkg/kicksdk.js';
 
 export * from './pkg/kicksdk.js';
 
 export const REQUIRED_ORIGIN = 'https://kick.com';
+
+// The core draws no random numbers: these two take them from the platform's
+// CSPRNG (crypto.getRandomValues, in browsers and Node alike).
+
+const randomBytes = (n) => crypto.getRandomValues(new Uint8Array(n));
+
+/**
+ * A new PKCE pair, from 32 random bytes. The verifier is a secret: keep it
+ * until the user comes back, never log it.
+ */
+export function newPkce() {
+  return oauthPkce(randomBytes(32));
+}
+
+/** A new OAuth `state`: 32 random bytes, base64url without padding. */
+export function newState() {
+  return btoa(String.fromCharCode(...randomBytes(32)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
 
 let ready = null;
 
@@ -149,7 +171,9 @@ function socketFactory(o) {
  *
  * Callbacks are isolated: one that throws is reported to `onError` (or
  * console.error) and the connection carries on. None is called after
- * close(), which may be called from inside one.
+ * close(), which may be called from inside one; what throws after it goes
+ * to console.error. A panic in the WebAssembly ends the connection, and the
+ * reconnect starts on a new Session.
  *
  * @param {object} o  ChatOptions, in index.d.ts
  * @returns {{ close(): void }}
@@ -192,7 +216,8 @@ export function connectChat(o) {
   let retry = null;
 
   function report(error) {
-    if (o.onError) {
+    // After close() no callback runs, onError included.
+    if (o.onError && !closed) {
       try {
         o.onError(error);
         return;
@@ -371,9 +396,22 @@ export function connectChat(o) {
     }
   }
 
+  /**
+   * Frees `x`, if any. After a panic in the WebAssembly (a trap) a Session
+   * stays borrowed and throws on every call, free included: it is let go
+   * all the same.
+   */
+  function free(x) {
+    try {
+      x?.free();
+    } catch {
+      // Unusable; nothing more to do with it.
+    }
+  }
+
   function release() {
-    if (session) session.free();
-    if (backoff) backoff.free();
+    free(session);
+    free(backoff);
     session = backoff = null;
   }
 
@@ -397,7 +435,14 @@ export function connectChat(o) {
   function end(reason, code, retryAfterMs, terminal) {
     detach();
     if (closed) return;
-    session.closed();
+    try {
+      session.closed();
+    } catch {
+      // A panic (a trap, reported where it happened) left the session
+      // unusable: start over with a new one, which the reconnect opens.
+      free(session);
+      session = new Session(channels);
+    }
     state();
     drop(reason, code, retryAfterMs, terminal);
   }

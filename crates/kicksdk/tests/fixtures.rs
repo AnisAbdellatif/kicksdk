@@ -42,6 +42,8 @@ fn livestreams_polls_are_read() {
             public_api::parse_livestreams(status, &body).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         for s in &streams {
             assert!(s.slug.is_some() && s.viewer_count.is_some(), "{}", path.display());
+            // The deprecated v1 shape: a channel id, no livestream id.
+            assert!(s.channel_id.is_some() && s.id.is_none() && s.stream_title.is_some());
             // `YYYY-MM-DDTHH:MM:SSZ`: the stream's identity, compared as a string.
             let at = s.started_at.as_deref().unwrap();
             assert_eq!(at.len(), 20, "{at}");
@@ -50,6 +52,63 @@ fn livestreams_polls_are_read() {
         live += streams.len();
     }
     assert!(live > 0, "no live stream in any recording");
+}
+
+/// An answer transcribed from Kick's docs (`fixtures/docs/public_api`), not
+/// recorded.
+fn documented(name: &str) -> (u16, String) {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/docs/public_api").join(format!("{name}.json"));
+    response(&path)
+}
+
+/// The current livestreams shape (spec only) reads into the same
+/// [`public_api::Livestream`] as the recorded v1 answers above.
+#[test]
+fn documented_livestreams_are_read() {
+    let (status, body) = documented("v1-users-livestreams");
+    let by_user = public_api::parse_livestreams(status, &body).unwrap();
+    let (status, body) = documented("v2-livestreams");
+    let page = public_api::parse_livestreams_page(status, &body).unwrap();
+    assert_eq!(page.next_cursor.as_deref(), Some("[no example in the spec]"));
+    assert_eq!(public_api::parse_livestreams(status, &body).unwrap(), page.data, "the list alone, without the cursor");
+    for s in [&by_user[0], &page.data[0]] {
+        assert_eq!(s.broadcaster_user_id, kicksdk::UserId(123));
+        assert_eq!(s.id.as_deref(), Some("123e4567-e89b-12d3-a456-426614174000"));
+        assert_eq!((s.slug.as_deref(), s.username.as_deref()), (Some("streamer-123"), Some("streamer_123")));
+        assert_eq!((s.stream_title.as_deref(), s.language.as_deref()), (Some("My Stream Title"), Some("en")));
+        assert_eq!(s.started_at.as_deref(), Some("2022-01-15T03:00:00Z"));
+        assert_eq!((s.viewer_count, s.has_mature_content), (Some(100), Some(true)));
+        assert_eq!(s.tags, ["tag1", "tag2"]);
+        assert_eq!(s.profile_picture.as_deref(), Some("https://example.com/profile.jpg"));
+        assert_eq!(s.category.as_ref().unwrap().id, Some(123));
+        assert_eq!(s.channel_id, None, "the current shape has no channel id");
+    }
+}
+
+#[test]
+fn documented_reads_are_read() {
+    let (status, body) = documented("v1-users");
+    let users = public_api::parse_users(status, &body).unwrap();
+    assert_eq!(users[0].user_id, kicksdk::UserId(123));
+    assert_eq!((users[0].name.as_deref(), users[0].email.as_deref()), (Some("John Doe"), Some("john.doe@example.com")));
+
+    let (status, body) = documented("v2-categories");
+    let categories = public_api::parse_categories(status, &body).unwrap();
+    assert_eq!((categories.data[0].id, categories.data[0].name.as_deref()), (Some(101), Some("Rust")));
+    assert_eq!(categories.data[0].tags, ["FPS", "Shooter", "Adventure"]);
+    assert!(categories.next_cursor.is_some());
+
+    let (status, body) = documented("v1-livestreams-stats");
+    assert_eq!(public_api::parse_livestream_stats(status, &body).unwrap().total_count, Some(100));
+
+    let (status, body) = documented("v1-kicks-leaderboard");
+    let board = public_api::parse_kicks_leaderboard(status, &body).unwrap();
+    for entries in [&board.lifetime, &board.month, &board.week] {
+        let e = &entries[0];
+        assert_eq!((e.user_id, e.username.as_deref()), (kicksdk::UserId(123), Some("john-doe")));
+        assert_eq!((e.rank, e.gifted_amount), (Some(1), Some(100)));
+    }
 }
 
 #[test]

@@ -33,7 +33,14 @@ defmodule Kicksdk.Realtime.Session do
     * `"connected"`, `"subscribed"`, `"unsubscribed"`, `"subscribe_failed"` -
       the connection's state. An `"unsubscribed"` with a code from 2500 to
       2999 is Kick asking to subscribe again: the session has already sent
-      it, and `"subscribed"` or `"subscribe_failed"` follows. Reset the
+      it, and `"subscribed"` or `"subscribe_failed"` follows - or, when Kick
+      asked for that feed before with no event on it since, a `"close"`
+      (not terminal). A `"subscribe_failed"` has `"channel"`, `"code"`,
+      `"message"` and `"temporary"`: when true (109, an error Kick marks
+      temporary such as 111 "too many requests", a transport error) a
+      `"close"` (not terminal) follows, so the reconnect subscribes again;
+      when false (103 "permission denied") the feed stays out and the rest
+      stay up. Reset the
       backoff (`Kicksdk.Realtime.Backoff.reset/1`) when the chat feed (the
       first) is subscribed: that ends a streak of terminal closes too.
     * `"event"` - with `"channel"` (the feed), `"name"` (Kick's event name),

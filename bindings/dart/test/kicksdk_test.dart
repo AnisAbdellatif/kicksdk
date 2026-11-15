@@ -30,7 +30,23 @@ void main() {
     expect(r.method, 'POST');
     expect(r.url.toString(), 'http://x/rt/channels/668/chat/connection');
     expect(r.headers, contains(('origin', 'https://kick.com')));
-    expect(PublicApi.livestreamsRequests('t', List.generate(120, (i) => i + 1)), hasLength(3));
+    final batches = PublicApi.livestreamsRequests(
+      't',
+      List.generate(250, (i) => i + 1),
+      endpoints: {'api': 'http://x'},
+    );
+    expect(batches, hasLength(3));
+    expect(batches[0].url.toString(), startsWith('http://x/public/v1/users/livestreams?user_id=1&'));
+    expect(
+      PublicApi.livestreamsPageRequest(
+        't',
+        categoryIds: [5],
+        languageCodes: ['en'],
+        limit: 10,
+        cursor: 'c',
+      ).url.toString(),
+      'https://api.kick.com/public/v2/livestreams?category_id=5&language_code=en&limit=10&cursor=c',
+    );
   });
 
   test('errors carry the kind and Kick\'s status', () {
@@ -51,6 +67,10 @@ void main() {
         expect(l['started_at'], endsWith('Z'));
       }
     }
+    final (s, b) = response(File.fromUri(fixtures.resolve('docs/public_api/v2-livestreams.json')));
+    final page = PublicApi.parseLivestreamsPage(s, b);
+    expect((page['data'] as List).single['slug'], 'streamer-123');
+    expect(page['next_cursor'], isNotNull);
   });
 
   test('webhook signatures verify', () {

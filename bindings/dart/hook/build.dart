@@ -102,7 +102,7 @@ Future<void> provide(BuildInput input, BuildOutputBuilder output, {Map<String, S
     }
     final built = await buildFromSource(input, code, root, triple, fileName);
     await File.fromUri(built).copy(dest.toFilePath());
-    output.dependencies.add(root.resolve('crates/'));
+    output.dependencies.addAll(sourceDependencies(root));
   }
 
   output.assets.code.add(
@@ -318,6 +318,19 @@ Uri? sourceRoot(Uri packageRoot) {
   }
   return null;
 }
+
+/// What a source build depends on, for the hooks runner to rebuild when it
+/// changes: the workspace's Cargo.toml and Cargo.lock, and every file and
+/// directory under crates/. Each by itself, since the runner hashes a
+/// directory's listing, not what its files hold: declared alone, crates/
+/// would let an edit to a source file go unbuilt.
+List<Uri> sourceDependencies(Uri root) => [
+  for (final name in ['Cargo.toml', 'Cargo.lock'])
+    if (File.fromUri(root.resolve(name)).existsSync()) root.resolve(name),
+  root.resolve('crates/'),
+  for (final e in Directory.fromUri(root.resolve('crates/')).listSync(recursive: true, followLinks: false))
+    if (e is File || e is Directory) e.uri,
+];
 
 /// Where cargo is, and what its environment needs on top of the hook's.
 typedef Cargo = ({String executable, Map<String, String> environment});

@@ -16,13 +16,15 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-default = ["webhooks"]
+default = ["webhooks", "oauth"]
 # Every function by name, JSON in and out, for the C ABI and Python bindings.
 # Its JSON keeps each struct's field order, as the bindings have always
 # returned it, so it needs serde_json's preserve_order; nothing else does.
 dispatch = ["serde_json/preserve_order"]
 # Webhook signature verification (RSA, SHA-256). Pure Rust, works in WASM.
 webhooks = ["dep:rsa", "dep:sha2", "dep:base64", "dep:getrandom"]
+# User tokens: OAuth authorization code with PKCE (SHA-256, base64url).
+oauth = ["dep:sha2", "dep:base64"]
 
 [dependencies]
 serde.workspace = true

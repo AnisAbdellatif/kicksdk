@@ -1,0 +1,14 @@
+{
+  "kind": "docs",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/drops/claims"
+  },
+  "response": {
+    "body": "{\"data\":null,\"message\":\"Unauthorized\"}",
+    "status": 401
+  },
+  "source": "Kick's drops guide (drops/public-api.md in github.com/KickEngineering/KickDevDocs), its examples, transcribed 2026-11-15: not a recording"
+}

@@ -49,7 +49,7 @@ docs/releasing.md has the details.
 
 | Module | Kick | |
 |---|---|---|
-| `public_api` | `api.kick.com/public/v1`, official | App token, `/livestreams` and `/channels` (batched by 50), webhook subscriptions, the signing key |
+| `public_api` | `api.kick.com/public/v1` and `/v2`, official | App token, live streams (by user id, 100 a request, or a page of all), `/channels` (50 a request), users, categories, live totals, the Kicks leaderboard, webhook subscriptions, the signing key |
 | `website` | `kick.com/api/v2`, Kick's own frontend | Chatroom id, follower total, live state, chat history and pin, user cards; moderating and sending as a viewer |
 | `realtime` | Kick's chat feed (Centrifugo) | Where to connect, the guest token, and a `Session` state machine: connect, subscribe, pings, token refresh, reconnect timing |
 | `events` | The feed's events | Chat messages, deletions, bans, pins, subs, gifted subs, Kicks, rewards, hosts, live/offline, polls, typed. Unknown events come out by name, never as errors |

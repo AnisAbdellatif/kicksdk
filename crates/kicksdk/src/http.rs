@@ -11,8 +11,8 @@
 //! or LF would add a header of its own).
 //!
 //! A [`Request`]'s `Debug` hides credentials (the `authorization` header,
-//! a form's `client_secret`); its `Serialize`, which is what a host sends,
-//! does not.
+//! a form's `client_secret`, a `token` in the URL's query); its
+//! `Serialize`, which is what a host sends, does not.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -25,7 +25,9 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Endpoints {
-    /// The official API: `https://api.kick.com/public/v1`.
+    /// The official API's host: `https://api.kick.com`, without a version.
+    /// Each builder adds its path with the version in it
+    /// (`/public/v1/channels`, `/public/v2/livestreams`).
     pub api: String,
     /// OAuth: `https://id.kick.com`.
     pub id: String,
@@ -38,7 +40,7 @@ pub struct Endpoints {
 impl Default for Endpoints {
     fn default() -> Self {
         Self {
-            api: "https://api.kick.com/public/v1".into(),
+            api: "https://api.kick.com".into(),
             id: "https://id.kick.com".into(),
             website: "https://kick.com".into(),
             realtime: "https://web.kick.com/api/v1/realtime".into(),
@@ -47,7 +49,7 @@ impl Default for Endpoints {
 }
 
 impl Endpoints {
-    /// The official API somewhere else.
+    /// The official API somewhere else: its root, without `/public/v1`.
     pub fn with_api(mut self, url: impl Into<String>) -> Self {
         self.api = url.into();
         self
@@ -83,6 +85,8 @@ pub enum Method {
     Post,
     /// DELETE
     Delete,
+    /// PATCH
+    Patch,
 }
 
 /// A request for the host to send.
@@ -142,6 +146,9 @@ impl Request {
 const SECRET_HEADERS: [&str; 3] = ["authorization", "cookie", "x-csrf-token"];
 /// Form fields whose values `Debug` hides.
 const SECRET_FIELDS: [&str; 5] = ["client_secret", "refresh_token", "code", "code_verifier", "password"];
+/// Query parameters whose values `Debug` hides (`oauth::revoke_request`
+/// puts the token in the URL).
+const SECRET_QUERY: [&str; 1] = ["token"];
 const REDACTED: &str = "[redacted]";
 
 impl fmt::Debug for Request {
@@ -161,7 +168,7 @@ impl fmt::Debug for Request {
         let body = self.body.as_deref().map(|b| if form { redact_form(b) } else { b.to_owned() });
         f.debug_struct("Request")
             .field("method", &self.method)
-            .field("url", &self.url)
+            .field("url", &redact_url(&self.url))
             .field("headers", &headers)
             .field("body", &body)
             .finish()
@@ -169,9 +176,30 @@ impl fmt::Debug for Request {
 }
 
 fn redact_form(body: &str) -> String {
-    body.split('&')
+    redact_pairs(body, &SECRET_FIELDS)
+}
+
+fn redact_url(url: &str) -> String {
+    let (url, fragment) = match url.split_once('#') {
+        Some((u, f)) => (u, Some(f)),
+        None => (url, None),
+    };
+    let mut out = match url.split_once('?') {
+        Some((path, q)) => format!("{path}?{}", redact_pairs(q, &SECRET_QUERY)),
+        None => url.to_owned(),
+    };
+    if let Some(f) = fragment {
+        out.push('#');
+        out.push_str(f);
+    }
+    out
+}
+
+fn redact_pairs(pairs: &str, secret: &[&str]) -> String {
+    pairs
+        .split('&')
         .map(|pair| match pair.split_once('=') {
-            Some((k, _)) if SECRET_FIELDS.contains(&k) => format!("{k}={REDACTED}"),
+            Some((k, _)) if secret.contains(&k) => format!("{k}={REDACTED}"),
             _ => pair.to_owned(),
         })
         .collect::<Vec<_>>()
@@ -309,6 +337,19 @@ mod tests {
         // What the host sends is untouched.
         assert!(r.body.as_deref().unwrap().contains("client_secret=sekrit-secret"));
         assert!(r.headers.contains(&("authorization".into(), "Bearer sekrit-token".into())));
+    }
+
+    #[test]
+    fn debug_hides_a_token_in_the_query() {
+        let r = Request::new(Method::Post, "https://x/oauth/revoke?token=sekrit%2Dtoken&token_type_hint=access_token");
+        let shown = format!("{r:?}");
+        assert!(!shown.contains("sekrit"), "{shown}");
+        assert!(shown.contains("revoke?token=[redacted]&token_type_hint=access_token"), "{shown}");
+        assert!(r.url.contains("token=sekrit%2Dtoken"));
+        // Other parameters, and URLs without a query, are shown as they are.
+        let r = Request::new(Method::Get, "https://x/v1/users?id=1&cursor=token");
+        assert!(format!("{r:?}").contains("users?id=1&cursor=token"));
+        assert!(format!("{:?}", Request::new(Method::Get, "https://x/a")).contains(r#"url: "https://x/a""#));
     }
 
     #[test]

@@ -26,9 +26,12 @@
 //!   this crate does not know comes out as [`WebhookEvent::Other`] with the
 //!   header's claim unchecked.
 //! - The message id must be a ULID and the timestamp RFC 3339
-//!   ([`WebhookError::MalformedHeader`]). Neither can then hold the `.`
-//!   that separates them in the signed text, so no header can move bytes
-//!   between the id, the timestamp and the body.
+//!   ([`WebhookError::MalformedHeader`]), so no header can move bytes
+//!   between the id, the timestamp and the body in the signed text: the id
+//!   is 26 characters without a `.`, and a timestamp may hold one (in
+//!   fractional seconds) but ends in `Z` or an offset, which a `.` never
+//!   follows within it. So the separator after each is the first `.` past
+//!   its end.
 //!
 //! What to expect (`docs/KICK.md` §4): the same event can arrive **twice**
 //! (key on the message id); a failed delivery has **not** been seen to be
@@ -54,7 +57,7 @@
 
 use crate::http::Error;
 use crate::ids::UserId;
-use crate::lenient::{array, boolean, get, int, string, uint};
+use crate::lenient::{array, boolean, get, id_string, int, string, uint};
 use base64::Engine;
 use rsa::pkcs1::DecodeRsaPublicKey;
 use rsa::pkcs1v15::{Signature, VerifyingKey};
@@ -111,10 +114,11 @@ pub enum WebhookError {
     /// The public key could not be read.
     #[error("unreadable public key")]
     BadKey,
-    /// The signature is not base64 or not a signature.
+    /// The signature is not base64.
     #[error("malformed signature")]
     MalformedSignature,
-    /// The signature does not match.
+    /// The signature does not match, a signature of the wrong length
+    /// included.
     #[error("signature does not match")]
     Mismatch,
     /// The timestamp is further from now than the tolerance: a replay, or a
@@ -328,7 +332,7 @@ pub fn verify_pem(
 }
 
 /// Someone in a webhook body: broadcaster, follower, subscriber, gifter,
-/// giftee, sender.
+/// giftee, sender, moderator, banned user, redeemer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct Person {
@@ -370,6 +374,55 @@ pub struct Category {
     pub name: Option<String>,
     /// Its picture.
     pub thumbnail: Option<String>,
+}
+
+/// The message a chat message replies to (`chat.message.sent`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct ReplyTo {
+    /// Its id.
+    pub message_id: Option<String>,
+    /// Its text, emotes inline.
+    pub content: Option<String>,
+    /// Who sent it.
+    pub sender: Option<Person>,
+}
+
+/// One emote in a chat message, with where it is in the content
+/// (`chat.message.sent`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct Emote {
+    /// Kick's emote id.
+    pub emote_id: Option<String>,
+    /// Each place it is in the content.
+    pub positions: Vec<EmotePosition>,
+}
+
+/// Where an emote's `[emote:<id>:<name>]` token is in a chat message's
+/// content. In Kick's documented example both ends are inclusive and count
+/// from 0; whether in bytes or characters, an ASCII example cannot tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct EmotePosition {
+    /// The first character (Kick's `s`).
+    pub start: Option<u64>,
+    /// The last character (Kick's `e`).
+    pub end: Option<u64>,
+}
+
+/// The reward in a redemption (`channel.reward.redemption.updated`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct Reward {
+    /// Its id (a ULID in Kick's docs).
+    pub id: Option<String>,
+    /// Its title.
+    pub title: Option<String>,
+    /// What it costs, in channel points.
+    pub cost: Option<i64>,
+    /// Its description.
+    pub description: Option<String>,
 }
 
 /// One webhook event, typed.
@@ -461,9 +514,61 @@ pub enum WebhookEvent {
         /// When.
         created_at: Option<String>,
     },
-    /// A type this crate does not read yet (`moderation.banned`,
-    /// `channel.reward.redemption.updated`, `chat.message.sent`, and anything
-    /// new): the body as sent.
+    /// `chat.message.sent`, typed from Kick's docs (not yet received). The
+    /// content carries its emotes inline, as `[emote:<id>:<name>]` like the
+    /// realtime feed's, so [`crate::content::parse`] reads it; `emotes` says
+    /// the same with positions.
+    ChatMessage {
+        /// The message's id.
+        message_id: Option<String>,
+        /// The message it replies to.
+        replies_to: Option<ReplyTo>,
+        /// The channel.
+        broadcaster: Option<Person>,
+        /// Who sent it.
+        sender: Option<Person>,
+        /// The text, emotes inline.
+        content: Option<String>,
+        /// The emotes in it.
+        emotes: Vec<Emote>,
+        /// When.
+        created_at: Option<String>,
+    },
+    /// `moderation.banned`: a ban or a timeout, typed from Kick's docs (not
+    /// yet received).
+    Banned {
+        /// The channel.
+        broadcaster: Option<Person>,
+        /// Who banned.
+        moderator: Option<Person>,
+        /// Who was banned.
+        banned_user: Option<Person>,
+        /// The reason given.
+        reason: Option<String>,
+        /// When.
+        created_at: Option<String>,
+        /// When a timeout ends; `None` for a permanent ban.
+        expires_at: Option<String>,
+    },
+    /// `channel.reward.redemption.updated`: a channel-points redemption,
+    /// typed from Kick's docs (not yet received).
+    RewardRedemption {
+        /// The redemption's id (a ULID in Kick's docs).
+        id: Option<String>,
+        /// What the viewer typed, if the reward asks.
+        user_input: Option<String>,
+        /// `pending`, `accepted` or `rejected`.
+        status: Option<String>,
+        /// When it was redeemed.
+        redeemed_at: Option<String>,
+        /// The reward.
+        reward: Option<Reward>,
+        /// Who redeemed it.
+        redeemer: Option<Person>,
+        /// The channel.
+        broadcaster: Option<Person>,
+    },
+    /// A type this crate does not read yet (anything new): the body as sent.
     Other {
         /// The type header.
         event_type: String,
@@ -483,6 +588,9 @@ enum Shape {
     Subscription,
     Gifts,
     Kicks,
+    Chat,
+    Banned,
+    Redemption,
 }
 
 impl Shape {
@@ -494,6 +602,9 @@ impl Shape {
             "channel.subscription.new" | "channel.subscription.renewal" => Shape::Subscription,
             "channel.subscription.gifts" => Shape::Gifts,
             "kicks.gifted" => Shape::Kicks,
+            "chat.message.sent" => Shape::Chat,
+            "moderation.banned" => Shape::Banned,
+            "channel.reward.redemption.updated" => Shape::Redemption,
             _ => return None,
         })
     }
@@ -512,6 +623,9 @@ impl Shape {
             Shape::Subscription => object("subscriber"),
             Shape::Gifts => get(v, "giftees").is_some_and(Value::is_array),
             Shape::Kicks => object("gift"),
+            Shape::Chat => id_string(v, "message_id").is_some(),
+            Shape::Banned => object("banned_user"),
+            Shape::Redemption => object("reward"),
         }
     }
 }
@@ -520,7 +634,8 @@ impl Shape {
 ///
 /// The type header is not signed, so the body must have the type's own
 /// field (`follower` for a follow, `is_live` for a status, `gift` for
-/// Kicks, …); other fields, known or not, are ignored, so a field Kick adds
+/// Kicks, `message_id` for a chat message, `banned_user` for a ban, `reward`
+/// for a redemption, …); other fields, known or not, are ignored, so a field Kick adds
 /// later does not break a delivery. Otherwise [`Error::Shape`]; not JSON,
 /// [`Error::Json`]. A type this crate does not read comes out as
 /// [`WebhookEvent::Other`], unchecked.
@@ -590,6 +705,53 @@ pub fn parse(event_type: &str, body: impl AsRef<[u8]>) -> Result<WebhookEvent, E
                 created_at: string(&v, "created_at"),
             }
         }
+        "chat.message.sent" => WebhookEvent::ChatMessage {
+            message_id: id_string(&v, "message_id"),
+            replies_to: get(&v, "replies_to").map(|r| ReplyTo {
+                message_id: id_string(r, "message_id"),
+                content: string(r, "content"),
+                sender: Person::from(get(r, "sender")),
+            }),
+            broadcaster: broadcaster(),
+            sender: Person::from(get(&v, "sender")),
+            content: string(&v, "content"),
+            emotes: array(&v, "emotes")
+                .iter()
+                .map(|e| Emote {
+                    emote_id: id_string(e, "emote_id"),
+                    positions: array(e, "positions")
+                        .iter()
+                        .map(|p| EmotePosition { start: uint(p, "s"), end: uint(p, "e") })
+                        .collect(),
+                })
+                .collect(),
+            created_at: string(&v, "created_at"),
+        },
+        "moderation.banned" => {
+            let m = get(&v, "metadata").cloned().unwrap_or_default();
+            WebhookEvent::Banned {
+                broadcaster: broadcaster(),
+                moderator: Person::from(get(&v, "moderator")),
+                banned_user: Person::from(get(&v, "banned_user")),
+                reason: string(&m, "reason"),
+                created_at: string(&m, "created_at"),
+                expires_at: string(&m, "expires_at"),
+            }
+        }
+        "channel.reward.redemption.updated" => WebhookEvent::RewardRedemption {
+            id: id_string(&v, "id"),
+            user_input: string(&v, "user_input"),
+            status: string(&v, "status"),
+            redeemed_at: string(&v, "redeemed_at"),
+            reward: get(&v, "reward").map(|r| Reward {
+                id: id_string(r, "id"),
+                title: string(r, "title"),
+                cost: int(r, "cost"),
+                description: string(r, "description"),
+            }),
+            redeemer: Person::from(get(&v, "redeemer")),
+            broadcaster: broadcaster(),
+        },
         other => WebhookEvent::Other { event_type: other.to_owned(), body: v },
     })
 }
@@ -680,20 +842,29 @@ mod tests {
             "channel.subscription.new",
             "channel.subscription.gifts",
             "kicks.gifted",
+            "chat.message.sent",
+            "moderation.banned",
+            "channel.reward.redemption.updated",
         ] {
             assert!(matches!(parse(other, follow), Err(Error::Shape(_))), "{other}");
         }
+        // A ban's `metadata` is not a stream's.
         let banned = r#"{"broadcaster":{},"moderator":{},"banned_user":{},"metadata":{"reason":"x"}}"#;
         assert!(matches!(parse("livestream.metadata.updated", banned), Err(Error::Shape(_))));
-        assert!(matches!(parse("moderation.banned", banned), Ok(WebhookEvent::Other { .. })));
+        assert!(matches!(parse("moderation.banned", banned), Ok(WebhookEvent::Banned { .. })));
+        // A type this crate does not know: unchecked.
+        assert!(matches!(
+            parse("channel.something.new", follow),
+            Ok(WebhookEvent::Other { event_type, .. }) if event_type == "channel.something.new"
+        ));
         assert!(matches!(parse("channel.followed", "[]"), Err(Error::Shape(_))));
         assert!(matches!(parse("channel.followed", "{"), Err(Error::Json(_))));
         assert!(matches!(parse("channel.followed", b"\xff"), Err(Error::Json(_))));
     }
 
     /// One body of each type this crate reads, with the fields Kick sends
-    /// (KICK.md §4.1).
-    const BODIES: [(&str, &str); 7] = [
+    /// (KICK.md §4.1; the last three as Kick documents them).
+    const BODIES: [(&str, &str); 10] = [
         (
             "livestream.status.updated",
             r#"{"broadcaster":{"user_id":1},"is_live":true,"title":"t","started_at":"2026-09-24T03:01:11Z","ended_at":null}"#,
@@ -719,12 +890,44 @@ mod tests {
             "kicks.gifted",
             r#"{"broadcaster":{"user_id":1},"sender":{"user_id":2},"gift":{"amount":10,"name":"n","type":"BASIC","tier":"BASIC","message":"m","pinned_time_seconds":0},"created_at":"x"}"#,
         ),
+        (
+            "chat.message.sent",
+            r#"{"message_id":"m","replies_to":null,"broadcaster":{},"sender":{},"content":"hi","emotes":[],"created_at":"x"}"#,
+        ),
+        (
+            "moderation.banned",
+            r#"{"broadcaster":{},"moderator":{},"banned_user":{},"metadata":{"reason":"x","created_at":"x","expires_at":null}}"#,
+        ),
+        (
+            "channel.reward.redemption.updated",
+            r#"{"id":"r","user_input":"u","status":"accepted","redeemed_at":"x","reward":{"id":"1","title":"t","cost":5},"redeemer":{},"broadcaster":{}}"#,
+        ),
+    ];
+
+    /// Kick's documented example bodies of the types not yet received
+    /// (fixtures/docs/webhook/README.md).
+    const DOCS: [(&str, &str); 3] = [
+        (
+            "chat.message.sent",
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/docs/webhook/chat.message.sent.json")),
+        ),
+        (
+            "moderation.banned",
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/docs/webhook/moderation.banned.json")),
+        ),
+        (
+            "channel.reward.redemption.updated",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../fixtures/docs/webhook/channel.reward.redemption.updated.json"
+            )),
+        ),
     ];
 
     #[test]
     fn no_known_body_passes_as_another_known_type() {
         let subscription = |t: &str| t.starts_with("channel.subscription.") && !t.ends_with("gifts");
-        for (own, body) in BODIES {
+        for (own, body) in BODIES.into_iter().chain(DOCS) {
             assert!(parse(own, body).is_ok(), "{own}");
             for (other, _) in BODIES {
                 // `.new` and `.renewal` are one shape (see the module docs).
@@ -734,16 +937,115 @@ mod tests {
                 assert!(matches!(parse(other, body), Err(Error::Shape(_))), "a {own} passed as a {other}");
             }
         }
-        // The unread types' bodies do not pass as a read one either.
-        for body in [
-            r#"{"broadcaster":{},"moderator":{},"banned_user":{},"metadata":{"reason":"x","created_at":"x","expires_at":null}}"#,
-            r#"{"id":"r","user_input":"u","status":"accepted","redeemed_at":"x","reward":{"id":"1","title":"t","cost":5},"redeemer":{},"broadcaster":{}}"#,
-            r#"{"message_id":"m","replies_to":null,"broadcaster":{},"sender":{},"content":"hi","emotes":[],"created_at":"x"}"#,
-        ] {
-            for (claimed, _) in BODIES {
-                assert!(matches!(parse(claimed, body), Err(Error::Shape(_))), "{claimed}: {body}");
-            }
+    }
+
+    fn person(id: u64, name: &str) -> Person {
+        Person {
+            user_id: Some(UserId(id)),
+            username: Some(name.into()),
+            channel_slug: None,
+            is_verified: None,
+            is_anonymous: None,
+            profile_picture: None,
         }
+    }
+
+    /// The fields that tell people apart, to compare with [`person`].
+    fn who(p: &Option<Person>) -> Option<Person> {
+        p.as_ref().map(|p| Person {
+            channel_slug: None,
+            is_verified: None,
+            is_anonymous: None,
+            profile_picture: None,
+            ..p.clone()
+        })
+    }
+
+    #[test]
+    fn a_documented_chat_message() {
+        let Ok(WebhookEvent::ChatMessage { message_id, replies_to, broadcaster, sender, content, emotes, created_at }) =
+            parse(DOCS[0].0, DOCS[0].1)
+        else {
+            panic!("not a chat message");
+        };
+        assert_eq!(message_id.as_deref(), Some("unique_message_id_123"));
+        let reply = replies_to.unwrap();
+        assert_eq!(reply.message_id.as_deref(), Some("unique_message_id_456"));
+        assert_eq!(reply.content.as_deref(), Some("This is the parent message!"));
+        assert_eq!(who(&reply.sender), Some(person(12345, "parent_sender_name")));
+        assert_eq!(who(&broadcaster), Some(person(123_456_789, "broadcaster_name")));
+        let sender = sender.unwrap();
+        assert_eq!(who(&Some(sender.clone())), Some(person(987_654_321, "sender_name")));
+        assert_eq!(sender.channel_slug.as_deref(), Some("sender_channel"));
+        assert_eq!(sender.is_verified, Some(false));
+        assert_eq!(created_at.as_deref(), Some("2025-01-14T16:08:06Z"));
+        let at = |start, end| EmotePosition { start: Some(start), end: Some(end) };
+        assert_eq!(
+            emotes,
+            [
+                Emote { emote_id: Some("4148074".into()), positions: vec![at(6, 30), at(32, 56)] },
+                Emote { emote_id: Some("37226".into()), positions: vec![at(58, 75)] },
+            ]
+        );
+        // The positions are of the inline tokens, ends inclusive.
+        let content = content.unwrap();
+        assert_eq!(&content[6..=30], "[emote:4148074:HYPERCLAP]");
+        assert_eq!(&content[58..=75], "[emote:37226:KEKW]");
+        // The realtime feed's format: content::parse reads it.
+        let parts = crate::content::parse(&content, true);
+        assert!(matches!(&parts[1], crate::content::Part::Emote { id, count: 2, .. } if id == "4148074"));
+        // No reply: `replies_to` null.
+        let alone = r#"{"message_id":7,"replies_to":null,"content":"hi"}"#;
+        assert!(matches!(
+            parse("chat.message.sent", alone),
+            Ok(WebhookEvent::ChatMessage { message_id: Some(id), replies_to: None, .. }) if id == "7"
+        ));
+    }
+
+    #[test]
+    fn a_documented_ban_and_a_permanent_one() {
+        let Ok(WebhookEvent::Banned { broadcaster, moderator, banned_user, reason, created_at, expires_at }) =
+            parse(DOCS[1].0, DOCS[1].1)
+        else {
+            panic!("not a ban");
+        };
+        assert_eq!(who(&broadcaster), Some(person(123_456_789, "broadcaster_name")));
+        assert_eq!(who(&moderator), Some(person(987_654_321, "moderator_name")));
+        assert_eq!(who(&banned_user), Some(person(135_790_135, "banned_user_name")));
+        assert_eq!(reason.as_deref(), Some("banned reason"));
+        assert_eq!(created_at.as_deref(), Some("2025-01-14T16:08:05Z"));
+        assert_eq!(expires_at.as_deref(), Some("2025-01-14T16:10:06Z"));
+        let permanent = DOCS[1].1.replace(r#""2025-01-14T16:10:06Z""#, "null");
+        assert!(matches!(
+            parse("moderation.banned", permanent),
+            Ok(WebhookEvent::Banned { expires_at: None, reason: Some(_), .. })
+        ));
+    }
+
+    #[test]
+    fn a_documented_redemption() {
+        let Ok(WebhookEvent::RewardRedemption { id, user_input, status, redeemed_at, reward, redeemer, broadcaster }) =
+            parse(DOCS[2].0, DOCS[2].1)
+        else {
+            panic!("not a redemption");
+        };
+        assert_eq!(id.as_deref(), Some("01KBHE78QE4HZY1617DK5FC7YD"));
+        assert_eq!(user_input.as_deref(), Some("unban me"));
+        assert_eq!(status.as_deref(), Some("rejected"));
+        assert_eq!(redeemed_at.as_deref(), Some("2025-12-02T22:54:19.323Z"));
+        assert_eq!(
+            reward,
+            Some(Reward {
+                id: Some("01KBHE7RZNHB0SKDV1H86CD4F3".into()),
+                title: Some("Uban Request".into()),
+                cost: Some(1000),
+                description: Some("Only good reasons pls".into()),
+            })
+        );
+        assert_eq!(who(&redeemer), Some(person(123, "naughty-user")));
+        assert_eq!(who(&broadcaster), Some(person(333, "gigachad")));
+        // No `is_anonymous` here, as in kicks.gifted.
+        assert_eq!(redeemer.unwrap().is_anonymous, None);
     }
 
     #[test]
@@ -821,9 +1123,33 @@ mod tests {
             verify(&key, &moved, body, Freshness::Skip),
             Err(WebhookError::MalformedHeader("kick-event-message-id"))
         );
-        let mut garbled = headers;
+        let mut garbled = headers.clone();
         garbled.signature = "not base64!".into();
         assert_eq!(verify(&key, &garbled, body, Freshness::Skip), Err(WebhookError::MalformedSignature));
+        let mut short = headers;
+        short.signature = "AAAA".into();
+        assert_eq!(verify(&key, &short, body, Freshness::Skip), Err(WebhookError::Mismatch));
+    }
+
+    #[test]
+    fn a_timestamp_with_fractional_seconds_verifies_and_stays_put() {
+        // The timestamp's `.` comes before its `Z`: the signed text still
+        // splits one way only.
+        let body = b"{\"a\":1}";
+        let (key, headers) = signed(ID, "2026-09-24T02:35:42.123456Z", body);
+        assert_eq!(verify(&key, &headers, body, Freshness::at(1_790_217_342)), Ok(()));
+        // The same signed bytes, split elsewhere: refused before the
+        // signature is looked at.
+        for (ts, rest) in [("2026-09-24T02:35:42", "123456Z.{\"a\":1}"), ("2026-09-24T02:35:42.123456Z.{", "\"a\":1}")]
+        {
+            let mut moved = headers.clone();
+            moved.timestamp = ts.into();
+            assert_eq!(
+                verify(&key, &moved, rest.as_bytes(), Freshness::Skip),
+                Err(WebhookError::MalformedHeader("kick-event-message-timestamp")),
+                "{ts}"
+            );
+        }
     }
 
     #[test]

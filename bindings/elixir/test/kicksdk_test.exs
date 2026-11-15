@@ -32,7 +32,24 @@ defmodule KicksdkTest do
     assert r["method"] == "POST"
     assert r["url"] == "http://localhost:9/rt/channels/668/chat/connection"
     assert {"origin", "https://kick.com"} in r["headers"]
-    assert {:ok, [_, _, _]} = PublicApi.livestreams_requests("t", Enum.to_list(1..120))
+
+    assert {:ok, [first, _, _]} =
+             PublicApi.livestreams_requests("t", Enum.to_list(1..250), %{api: "http://x"})
+
+    assert String.starts_with?(first["url"], "http://x/public/v1/users/livestreams?user_id=1&")
+
+    assert {:ok,
+            %{
+              "url" =>
+                "https://api.kick.com/public/v2/livestreams?category_id=5&language_code=en&limit=10&cursor=c"
+            }} =
+             PublicApi.livestreams_page_request("t",
+               category_ids: [5],
+               language_codes: ["en"],
+               limit: 10,
+               cursor: "c"
+             )
+
     assert {:error, {:invalid, _}} = PublicApi.channels_by_ids_request("t", [])
   end
 
@@ -42,6 +59,13 @@ defmodule KicksdkTest do
       assert {:ok, streams} = PublicApi.parse_livestreams(status, body)
       for s <- streams, do: assert(String.ends_with?(s["started_at"], "Z"))
     end
+
+    {status, body} = response(Path.join(@fixtures, "docs/public_api/v2-livestreams.json"))
+
+    assert {:ok, %{"data" => [%{"slug" => "streamer-123"}], "next_cursor" => cursor}} =
+             PublicApi.parse_livestreams_page(status, body)
+
+    assert is_binary(cursor)
   end
 
   test "one unknown slug fails a /channels batch" do
@@ -91,7 +115,15 @@ defmodule KicksdkTest do
 
       assert Enum.any?(
                actions,
-               &match?(%{"action" => "subscribe_failed", "code" => 103, "channel" => "private-" <> _}, &1)
+               &match?(
+                 %{
+                   "action" => "subscribe_failed",
+                   "code" => 103,
+                   "temporary" => false,
+                   "channel" => "private-" <> _
+                 },
+                 &1
+               )
              )
 
       assert Session.closed(session) |> Enum.all?(&(&1["action"] == "unsubscribed"))

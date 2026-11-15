@@ -11,6 +11,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pythonize::{depythonize, pythonize};
 use serde_json::Value;
+use std::any::Any;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 create_exception!(kicksdk._native, NativeError, PyException, "A failed call: (kind, status, message).");
 
@@ -21,7 +23,25 @@ fn args(obj: Option<&Bound<'_, PyDict>>) -> PyResult<Value> {
     }
 }
 
-fn result(py: Python<'_>, r: Result<Value, DispatchError>) -> PyResult<Py<PyAny>> {
+/// Runs `f`, catching a panic: it comes back as a `NativeError` of kind
+/// `panic` rather than PyO3's `PanicException`, a `BaseException` that
+/// `except Exception` lets through. A session a call panicked in is then
+/// refused until `closed` (`SessionHandle`).
+fn caught(f: impl FnOnce() -> Result<Value, DispatchError>) -> Result<Result<Value, DispatchError>, String> {
+    catch_unwind(AssertUnwindSafe(f)).map_err(|payload| panic_message(payload.as_ref()))
+}
+
+fn panic_message(payload: &(dyn Any + Send)) -> String {
+    let detail =
+        payload.downcast_ref::<&str>().copied().or_else(|| payload.downcast_ref::<String>().map(String::as_str));
+    match detail {
+        Some(d) => format!("kicksdk panicked: {d}"),
+        None => "kicksdk panicked".to_owned(),
+    }
+}
+
+fn result(py: Python<'_>, r: Result<Result<Value, DispatchError>, String>) -> PyResult<Py<PyAny>> {
+    let r = r.map_err(|message| NativeError::new_err(("panic", None::<u16>, message)))?;
     match r {
         Ok(v) => {
             Ok(pythonize(py, &v).map_err(|e| NativeError::new_err(("call", None::<u16>, e.to_string())))?.unbind())
@@ -35,7 +55,7 @@ fn result(py: Python<'_>, r: Result<Value, DispatchError>) -> PyResult<Py<PyAny>
 #[pyo3(signature = (name, args=None))]
 fn call(py: Python<'_>, name: &str, args: Option<&Bound<'_, PyDict>>) -> PyResult<Py<PyAny>> {
     let a = self::args(args)?;
-    result(py, py.detach(|| dispatch::call(name, &a)))
+    result(py, py.detach(|| caught(|| dispatch::call(name, &a))))
 }
 
 /// A realtime session; `call(method, args)` runs one of its methods.
@@ -52,7 +72,7 @@ impl NativeSession {
     #[pyo3(signature = (method, args=None))]
     fn call(&mut self, py: Python<'_>, method: &str, args: Option<&Bound<'_, PyDict>>) -> PyResult<Py<PyAny>> {
         let a = self::args(args)?;
-        result(py, self.0.call(method, &a))
+        result(py, caught(|| self.0.call(method, &a)))
     }
 }
 

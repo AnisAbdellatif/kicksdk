@@ -564,3 +564,49 @@ def test_without_the_aio_extra_the_import_says_what_to_install(monkeypatch: pyte
     with pytest.raises(ImportError, match=r'pip install "kicksdk-py\[aio\]"') as e:
         importlib.import_module("kicksdk.aio")
     assert e.value.name == "httpx"
+
+
+@run
+async def test_a_panic_in_the_core_stops_the_feed_with_the_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # What PyO3 raises for a panic it catches: a BaseException, which
+    # `except Exception` would let through.
+    class PanicException(BaseException):
+        pass
+
+    def receive(self: realtime.Session, text: str, now: int) -> list[dict[str, Any]]:
+        raise PanicException("kicksdk panicked")
+
+    monkeypatch.setattr(realtime.Session, "receive", receive)
+    async with Kick(stay) as kick, kick.feed() as chat:
+        with pytest.raises(PanicException):
+            await next_event(chat)
+        assert isinstance(chat.error, PanicException) and chat.done
+        with pytest.raises(StopAsyncIteration):
+            await next_event(chat)
+
+
+@run
+async def test_a_subscribe_refused_for_now_reconnects_and_subscribes_again() -> None:
+    async def refuse(ws: ServerConnection, kick: Kick) -> None:
+        connect = json.loads(await ws.recv())
+        await ws.send(json.dumps({"id": connect["id"], "connect": {"client": "c1", "ping": 25}}))
+        subscribes = [json.loads(line) for line in str(await ws.recv()).split("\n")]
+        error = {"code": 111, "message": "too many requests", "temporary": True}
+        await ws.send(json.dumps({"id": subscribes[0]["id"], "error": error}))
+
+    async with Kick(refuse, stay) as kick, kick.feed() as chat:
+        await until(lambda: kick.connections == 2 and CHAT_FEED in chat.subscribed)
+        assert chat.last_drop is not None and not chat.last_drop.terminal
+        assert chat.last_drop.code == 111
+
+
+@run
+async def test_channel_id_0_is_a_channel_and_no_feeds_is_no_feeds() -> None:
+    async with Kick(stay) as kick:
+        async with aio.connect_chat(
+            CHATROOM, 0, channels=[], endpoints=ENDPOINTS, http=kick.client, backoff=QuickBackoff()
+        ) as chat:
+            await until(lambda: kick.connections == 1)
+            assert chat.channels == []
+            # The chat's own connection request, for channel 0.
+            assert len(kick.connection_clients) == 1

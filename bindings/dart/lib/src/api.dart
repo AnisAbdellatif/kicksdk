@@ -3,6 +3,7 @@
 // [KickRequest]s ready for an HTTP client.
 
 import 'dart:convert';
+import 'dart:math';
 
 import 'native.dart' as native;
 
@@ -24,8 +25,10 @@ class KickRequest {
     ], m['body'] as String?);
   }
 
+  /// `METHOD url`, safe to log: a `token` in the query (as
+  /// [OAuth.revokeRequest] sends it) is shown as `[redacted]`.
   @override
-  String toString() => '$method $url';
+  String toString() => '$method ${'$url'.replaceAll(RegExp(r'(?<=[?&])token=[^&#]*'), 'token=[redacted]')}';
 }
 
 Map<String, Object?> _with(Map<String, String>? endpoints, Map<String, Object?> args) =>
@@ -100,7 +103,10 @@ abstract final class Realtime {
 /// `refresh_token` (fetch a token for the same client id and pass it to
 /// [refresh]; if that fails, carry on: Kick ends the connection when the old
 /// token runs out), `connected`, `subscribed`, `unsubscribed`,
-/// `subscribe_failed`, `event`. `subscribed` for the chat feed (the first of
+/// `subscribe_failed` (with `temporary`: a refusal for now, which a `close`
+/// that is not terminal follows, so the reconnect subscribes again),
+/// `event`. A call that panicked leaves the session refusing every call
+/// (a [KickException] of kind `panic`) until [closed]. `subscribed` for the chat feed (the first of
 /// [Realtime.chatChannels]) is when to call [Backoff.reset]. Times are
 /// milliseconds.
 class Session {
@@ -208,17 +214,40 @@ class Backoff {
   }
 }
 
-/// Kick's official API (`api.kick.com/public/v1`).
+/// Kick's official API (`api.kick.com/public/v1` and `/public/v2`).
 abstract final class PublicApi {
   static KickRequest tokenRequest(String clientId, String clientSecret, {Map<String, String>? endpoints}) =>
       _req('public_api.token_request', {'client_id': clientId, 'client_secret': clientSecret}, endpoints);
   static Json parseToken(int status, String body) => _parse('public_api.parse_token', status, body);
 
-  /// One request per 50 user ids.
+  /// `/public/v1/users/livestreams`: one request per 100 user ids.
   static List<KickRequest> livestreamsRequests(String token, List<int> userIds, {Map<String, String>? endpoints}) =>
       _reqs('public_api.livestreams_requests', {'token': token, 'user_ids': userIds}, endpoints);
   static List<Json> parseLivestreams(int status, String body) =>
       _parse<List>('public_api.parse_livestreams', status, body).cast<Json>();
+
+  /// One page of the streams live now (`/public/v2/livestreams`), in up to 25
+  /// categories and 25 languages (none: all). [limit] is 1 to 1000; [cursor]
+  /// is the previous page's `next_cursor`. Kick has no sort: streams come
+  /// oldest first.
+  static KickRequest livestreamsPageRequest(
+    String token, {
+    List<int>? categoryIds,
+    List<String>? languageCodes,
+    int? limit,
+    String? cursor,
+    Map<String, String>? endpoints,
+  }) => _req('public_api.livestreams_page_request', {
+    'token': token,
+    'category_ids': categoryIds,
+    'language_codes': languageCodes,
+    'limit': limit,
+    'cursor': cursor,
+  }, endpoints);
+
+  /// A [livestreamsPageRequest] answer: `{data: [...], next_cursor: ...}`.
+  static Json parseLivestreamsPage(int status, String body) =>
+      _parse('public_api.parse_livestreams_page', status, body);
 
   static KickRequest channelsByIdsRequest(String token, List<int> userIds, {Map<String, String>? endpoints}) =>
       _req('public_api.channels_by_ids_request', {'token': token, 'user_ids': userIds}, endpoints);
@@ -226,22 +255,6 @@ abstract final class PublicApi {
       _req('public_api.channels_by_slugs_request', {'token': token, 'slugs': slugs}, endpoints);
   static List<Json> parseChannels(int status, String body) =>
       _parse<List>('public_api.parse_channels', status, body).cast<Json>();
-
-  /// The top live streams, overall or in a category or language: up to 100.
-  static KickRequest topLivestreamsRequest(
-    String token, {
-    int? categoryId,
-    String? language,
-    String sort = 'viewer_count',
-    int limit = 100,
-    Map<String, String>? endpoints,
-  }) => _req('public_api.top_livestreams_request', {
-    'token': token,
-    'category_id': categoryId,
-    'language': language,
-    'sort': sort,
-    'limit': limit,
-  }, endpoints);
 
   /// Subscribes the app to webhook events (name, version) for one channel.
   static KickRequest subscribeRequest(
@@ -268,6 +281,388 @@ abstract final class PublicApi {
   static KickRequest publicKeyRequest({Map<String, String>? endpoints}) =>
       _req('public_api.public_key_request', const {}, endpoints);
   static String parsePublicKey(int status, String body) => _parse('public_api.parse_public_key', status, body);
+
+  /// Users by id, up to 50 (`/public/v1/users`), with an app or a user
+  /// token. No ids, with a user token: the token's own user.
+  static KickRequest usersRequest(String token, {List<int>? userIds, Map<String, String>? endpoints}) =>
+      _req('public_api.users_request', {'token': token, 'user_ids': userIds}, endpoints);
+
+  /// `[{user_id, name, profile_picture, email}]`; `email` only for a user
+  /// token with `user:read`, for its own user.
+  static List<Json> parseUsers(int status, String body) =>
+      _parse<List>('public_api.parse_users', status, body).cast<Json>();
+
+  /// One page of categories (`/public/v2/categories`): by [names] and
+  /// [tags], or by [ids]; none of them, all categories. [limit] is 1 to 1000
+  /// (Kick's default: 25); [cursor] is the previous page's `next_cursor`.
+  static KickRequest categoriesRequest(
+    String token, {
+    List<String>? names,
+    List<String>? tags,
+    List<int>? ids,
+    int? limit,
+    String? cursor,
+    Map<String, String>? endpoints,
+  }) => _req('public_api.categories_request', {
+    'token': token,
+    'names': names,
+    'tags': tags,
+    'ids': ids,
+    'limit': limit,
+    'cursor': cursor,
+  }, endpoints);
+
+  /// A [categoriesRequest] answer: `{data: [...], next_cursor: ...}`.
+  static Json parseCategories(int status, String body) => _parse('public_api.parse_categories', status, body);
+
+  /// How many streams are live on Kick, with an app or a user token.
+  static KickRequest livestreamStatsRequest(String token, {Map<String, String>? endpoints}) =>
+      _req('public_api.livestream_stats_request', {'token': token}, endpoints);
+
+  /// `{total_count}`.
+  static Json parseLivestreamStats(int status, String body) =>
+      _parse('public_api.parse_livestream_stats', status, body);
+
+  /// The top [top] Kicks gifters (1 to 100; Kick's default: 10) of the
+  /// token's own channel. A user token with `kicks:read`.
+  static KickRequest kicksLeaderboardRequest(String token, {int? top, Map<String, String>? endpoints}) =>
+      _req('public_api.kicks_leaderboard_request', {'token': token, 'top': top}, endpoints);
+
+  /// `{lifetime, month, week}`, each `[{user_id, username, rank, gifted_amount}]`.
+  static Json parseKicksLeaderboard(int status, String body) =>
+      _parse('public_api.parse_kicks_leaderboard', status, body);
+
+  /// Throws a [KickException] unless Kick says the action worked: for the
+  /// answers with nothing to read (a deleted message, a ban, a channel
+  /// update, a deleted reward, enrolling in ads, updated drops claims).
+  static void parseDone(int status, String body) => _parse<Object?>('public_api.parse_done', status, body);
+}
+
+/// Kick's user OAuth (`id.kick.com`): sign a user in with PKCE, refresh,
+/// revoke and introspect their token. See docs/KICK.md §2.
+abstract final class OAuth {
+  /// A new PKCE pair, `{verifier, challenge}`, from 32 bytes of
+  /// `Random.secure()`. Keep the verifier until the user comes back.
+  static Json newPkce() => pkce(_random32());
+
+  /// A new `state` for [authorizeUrl]: 32 bytes of `Random.secure()`, as
+  /// base64url without padding. Check that the redirect brings it back.
+  static String newState() => _random32();
+
+  static String _random32() {
+    final r = Random.secure();
+    return base64Url.encode([for (var i = 0; i < 32; i++) r.nextInt(256)]).replaceAll('=', '');
+  }
+
+  /// The PKCE pair for [random]: 32 to 96 bytes from a CSPRNG, as base64url
+  /// without padding. [newPkce] draws them.
+  static Json pkce(String random) => native.call('oauth.pkce', {'random': random}) as Json;
+
+  /// The PKCE pair for a verifier made elsewhere (or kept from before).
+  static Json pkceFromVerifier(String verifier) =>
+      native.call('oauth.pkce_from_verifier', {'verifier': verifier}) as Json;
+
+  /// Where to send the user's browser to approve the app. [redirectUri] is
+  /// exactly the one in the app's settings; [state] is [newState]'s; the
+  /// challenge is [verifier]'s.
+  static String authorizeUrl(
+    String clientId,
+    String redirectUri,
+    List<String> scopes,
+    String state,
+    String verifier, {
+    Map<String, String>? endpoints,
+  }) =>
+      native.call(
+            'oauth.authorize_url',
+            _with(endpoints, {
+              'client_id': clientId,
+              'redirect_uri': redirectUri,
+              'scopes': scopes,
+              'state': state,
+              'verifier': verifier,
+            }),
+          )
+          as String;
+
+  /// A user token for the `code` on the redirect, with the PKCE verifier
+  /// and the same [redirectUri].
+  static KickRequest codeRequest(
+    String clientId,
+    String clientSecret,
+    String redirectUri,
+    String code,
+    String codeVerifier, {
+    Map<String, String>? endpoints,
+  }) => _req('oauth.code_request', {
+    'client_id': clientId,
+    'client_secret': clientSecret,
+    'redirect_uri': redirectUri,
+    'code': code,
+    'code_verifier': codeVerifier,
+  }, endpoints);
+
+  /// A new user token (and refresh token) for a refresh token.
+  static KickRequest refreshRequest(
+    String clientId,
+    String clientSecret,
+    String refreshToken, {
+    Map<String, String>? endpoints,
+  }) => _req('oauth.refresh_request', {
+    'client_id': clientId,
+    'client_secret': clientSecret,
+    'refresh_token': refreshToken,
+  }, endpoints);
+
+  /// `{access_token, refresh_token, expires_in, refresh_expires_in,
+  /// token_type, scopes}`. Never log the tokens.
+  static Json parseUserToken(int status, String body) => _parse('oauth.parse_user_token', status, body);
+
+  /// Revokes an access or refresh token; [tokenTypeHint] is `access_token`
+  /// or `refresh_token`.
+  static KickRequest revokeRequest(String token, {String? tokenTypeHint, Map<String, String>? endpoints}) =>
+      _req('oauth.revoke_request', {'token': token, 'token_type_hint': tokenTypeHint}, endpoints);
+
+  /// Throws a [KickException] unless the token was revoked.
+  static void parseRevoke(int status, String body) => _parse<Object?>('oauth.parse_revoke', status, body);
+
+  /// Whether a token is active, and what it may do.
+  static KickRequest introspectRequest(String token, {Map<String, String>? endpoints}) =>
+      _req('oauth.introspect_request', {'token': token}, endpoints);
+
+  /// `{active, client_id, exp, scopes, token_type}`.
+  static Json parseIntrospect(int status, String body) => _parse('oauth.parse_introspect', status, body);
+
+  /// The scopes Kick documents, e.g. `chat:write`.
+  static List<String> scopes() => (native.call('oauth.scopes') as List).cast<String>();
+}
+
+/// Chat as a user or the app's bot (`/public/v1/chat`): a user token with
+/// `chat:write`; deleting needs `moderation:chat_message:manage`.
+abstract final class Chat {
+  /// Sends [content] as the token's user into [broadcasterUserId]'s chat,
+  /// or, with `null`, as the app's bot into the token's own channel; a
+  /// reply to [replyToMessageId] if given.
+  static KickRequest sendRequest(
+    String token,
+    int? broadcasterUserId,
+    String content, {
+    String? replyToMessageId,
+    Map<String, String>? endpoints,
+  }) => _req('chat.send_request', {
+    'token': token,
+    'sender': broadcasterUserId == null ? 'bot' : {'user': broadcasterUserId},
+    'content': content,
+    'reply_to_message_id': replyToMessageId,
+  }, endpoints);
+
+  /// `{is_sent, message_id}`.
+  static Json parseSend(int status, String body) => _parse('chat.parse_send', status, body);
+
+  /// Deletes a message by id; read the answer with [PublicApi.parseDone].
+  static KickRequest deleteRequest(String token, String messageId, {Map<String, String>? endpoints}) =>
+      _req('chat.delete_request', {'token': token, 'message_id': messageId}, endpoints);
+}
+
+/// Bans and timeouts (`/public/v1/moderation/bans`): a user token with
+/// `moderation:ban`. Read the answers with [PublicApi.parseDone].
+abstract final class Moderation {
+  /// Bans [userId] from [broadcasterUserId]'s chat for good.
+  static KickRequest banRequest(
+    String token,
+    int broadcasterUserId,
+    int userId, {
+    String? reason,
+    Map<String, String>? endpoints,
+  }) => _req('moderation.ban_request', {
+    'token': token,
+    'broadcaster_user_id': broadcasterUserId,
+    'user_id': userId,
+    'reason': reason,
+  }, endpoints);
+
+  /// Times [userId] out for [minutes], 1 to 10080 (a week).
+  static KickRequest timeoutRequest(
+    String token,
+    int broadcasterUserId,
+    int userId,
+    int minutes, {
+    String? reason,
+    Map<String, String>? endpoints,
+  }) => _req('moderation.timeout_request', {
+    'token': token,
+    'broadcaster_user_id': broadcasterUserId,
+    'user_id': userId,
+    'minutes': minutes,
+    'reason': reason,
+  }, endpoints);
+
+  /// Lifts a ban or a timeout.
+  static KickRequest unbanRequest(String token, int broadcasterUserId, int userId, {Map<String, String>? endpoints}) =>
+      _req('moderation.unban_request', {
+        'token': token,
+        'broadcaster_user_id': broadcasterUserId,
+        'user_id': userId,
+      }, endpoints);
+}
+
+/// The token's own channel (`PATCH /public/v1/channels`): a user token with
+/// `channel:write`.
+abstract final class Channels {
+  /// Sets the stream's category, custom tags (`[]` clears them; at most 10)
+  /// and title; what is `null` stays. Read the answer with
+  /// [PublicApi.parseDone].
+  static KickRequest updateRequest(
+    String token, {
+    int? categoryId,
+    List<String>? customTags,
+    String? streamTitle,
+    Map<String, String>? endpoints,
+  }) => _req('channels.update_request', {
+    'token': token,
+    'category_id': categoryId,
+    'custom_tags': customTags,
+    'stream_title': streamTitle,
+  }, endpoints);
+}
+
+/// Channel point rewards and their redemptions, on the token's own channel:
+/// a user token with `channel:rewards:read` (reading) or
+/// `channel:rewards:write`. Ids are ULIDs; only the app that made a reward
+/// may change it or settle its redemptions.
+abstract final class Rewards {
+  static KickRequest listRequest(String token, {Map<String, String>? endpoints}) =>
+      _req('rewards.list_request', {'token': token}, endpoints);
+
+  /// The channel's rewards, as [parseReward] reads one.
+  static List<Json> parseRewards(int status, String body) =>
+      _parse<List>('rewards.parse_rewards', status, body).cast<Json>();
+
+  /// A new reward. [fields]: `title` and `cost` (needed), `description`,
+  /// `background_color`, `is_enabled`, `is_user_input_required`,
+  /// `should_redemptions_skip_request_queue`.
+  static KickRequest createRequest(String token, Map<String, Object?> fields, {Map<String, String>? endpoints}) =>
+      _req('rewards.create_request', {'token': token, 'fields': fields}, endpoints);
+
+  /// Changes the [fields] given (as for [createRequest], and `is_paused`).
+  static KickRequest updateRequest(
+    String token,
+    String id,
+    Map<String, Object?> fields, {
+    Map<String, String>? endpoints,
+  }) => _req('rewards.update_request', {'token': token, 'id': id, 'fields': fields}, endpoints);
+
+  /// A reward, from [createRequest] or [updateRequest].
+  static Json parseReward(int status, String body) => _parse('rewards.parse_reward', status, body);
+
+  /// Read the answer with [PublicApi.parseDone].
+  static KickRequest deleteRequest(String token, String id, {Map<String, String>? endpoints}) =>
+      _req('rewards.delete_request', {'token': token, 'id': id}, endpoints);
+
+  /// Redemptions, grouped by reward: of one reward or all, with one
+  /// [status] (`pending`, Kick's default; `accepted`; `rejected`), from
+  /// [cursor] (a page's `next_cursor`).
+  static KickRequest redemptionsRequest(
+    String token, {
+    String? rewardId,
+    String? status,
+    String? cursor,
+    Map<String, String>? endpoints,
+  }) => _req('rewards.redemptions_request', {
+    'token': token,
+    'reward_id': rewardId,
+    'status': status,
+    'cursor': cursor,
+  }, endpoints);
+
+  /// Redemptions by id, whatever their status.
+  static KickRequest redemptionsByIdsRequest(
+    String token,
+    List<String> ids, {
+    String? cursor,
+    Map<String, String>? endpoints,
+  }) => _req('rewards.redemptions_by_ids_request', {'token': token, 'ids': ids, 'cursor': cursor}, endpoints);
+
+  /// `{rewards: [{reward, redemptions}], next_cursor}`.
+  static Json parseRedemptions(int status, String body) => _parse('rewards.parse_redemptions', status, body);
+
+  /// Accepts up to 25 redemptions; read the answer with [parseFailures].
+  static KickRequest acceptRequest(String token, List<String> ids, {Map<String, String>? endpoints}) =>
+      _req('rewards.accept_request', {'token': token, 'ids': ids}, endpoints);
+
+  /// Rejects up to 25 redemptions (refunding them); read the answer with
+  /// [parseFailures].
+  static KickRequest rejectRequest(String token, List<String> ids, {Map<String, String>? endpoints}) =>
+      _req('rewards.reject_request', {'token': token, 'ids': ids}, endpoints);
+
+  /// The redemptions that were not accepted or rejected: `[{id, reason}]`.
+  static List<Json> parseFailures(int status, String body) =>
+      _parse<List>('rewards.parse_failures', status, body).cast<Json>();
+}
+
+/// Ads on the token's own channel: a user token with `ads:write` (`ads:read`
+/// is enough for [statusRequest]).
+abstract final class Ads {
+  /// Starts an ad break of [seconds] (7 to 90). [id] is a UUID the app
+  /// makes up for it.
+  static KickRequest adBreakRequest(String token, String id, int seconds, {Map<String, String>? endpoints}) =>
+      _req('ads.ad_break_request', {'token': token, 'id': id, 'seconds': seconds}, endpoints);
+
+  /// `{ad_break_id, remaining_ad_breaks, ...}`.
+  static Json parseAdBreak(int status, String body) => _parse('ads.parse_ad_break', status, body);
+
+  static KickRequest statusRequest(String token, {Map<String, String>? endpoints}) =>
+      _req('ads.status_request', {'token': token}, endpoints);
+
+  /// `{opted_in, remaining_ad_breaks, limits, ad_breaks, ...}`.
+  static Json parseStatus(int status, String body) => _parse('ads.parse_status', status, body);
+
+  /// Opts the channel in to ads; read the answer with [PublicApi.parseDone].
+  static KickRequest enrollRequest(String token, {Map<String, String>? endpoints}) =>
+      _req('ads.enroll_request', {'token': token}, endpoints);
+}
+
+/// Drops reward claims (`/public/v1/drops/claims`): an **app** token of the
+/// organization running the campaigns.
+abstract final class Drops {
+  /// One page of claims, filtered by what is given. [limit] is 1 to 1000;
+  /// [cursor] is the previous page's `cursor`.
+  static KickRequest claimsRequest(
+    String token, {
+    String? campaignId,
+    String? claimId,
+    int? userId,
+    String? externalStatus,
+    int? limit,
+    String? cursor,
+    Map<String, String>? endpoints,
+  }) => _req('drops.claims_request', {
+    'token': token,
+    'filter': {
+      'campaign_id': campaignId,
+      'claim_id': claimId,
+      'user_id': userId,
+      'external_status': externalStatus,
+      'limit': limit,
+      'cursor': cursor,
+    },
+  }, endpoints);
+
+  /// `{claims: [...], cursor}`.
+  static Json parseClaims(int status, String body) => _parse('drops.parse_claims', status, body);
+
+  /// Sets claims' `external_status` (claim id, status), up to 100. Read the
+  /// answer with [PublicApi.parseDone].
+  static KickRequest updateClaimsRequest(
+    String token,
+    List<(String, String)> updates, {
+    Map<String, String>? endpoints,
+  }) => _req('drops.update_claims_request', {
+    'token': token,
+    'updates': [
+      for (final (claimId, status) in updates) {'claim_id': claimId, 'external_status': status},
+    ],
+  }, endpoints);
 }
 
 /// kick.com's own endpoints (`kick.com/api/v2`): undocumented, a grey area

@@ -1,0 +1,10 @@
+{
+    "data": {
+        "active": true,
+        "client_id": "",
+        "token_type": "user",
+        "scope": "user:read channel:read",
+        "exp": 1771046347
+    },
+    "message": "OK"
+}

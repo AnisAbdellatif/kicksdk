@@ -28,7 +28,10 @@ A builder returns a `Request` (method, URL, headers, body). A parser takes
 from "Kick changed the shape".
 
 Every builder takes an `Endpoints`, so any part of Kick can be pointed
-elsewhere: KickTracker's simulator, BetterChat's relay, a proxy.
+elsewhere: KickTracker's simulator, BetterChat's relay, a proxy. Its `api`
+is the official API's host alone (`https://api.kick.com`): each builder
+adds its path with the version (`/public/v1/channels`,
+`/public/v2/livestreams`), so v1 and v2 endpoints share one override.
 
 Builders refuse (`Error::Invalid`) what would make the request a different
 one: a path segment that is empty, `.` or `..` (a URL reads them, and
@@ -72,8 +75,11 @@ the token, connected, subscribed, an event). It keeps:
 
 - command ids, per connection (a new socket starts at 1 again);
 - which subscriptions are pending, confirmed or refused, subscribing again
-  when Kick asks (unsubscribe codes 2500-2999), and reporting every feed
-  that was subscribed or pending as unsubscribed when the socket closes;
+  when Kick asks (unsubscribe codes 2500-2999; a second ask with no event
+  on the feed in between closes the connection instead), closing the
+  connection on a subscribe refused for now (as for a refused connect), and
+  reporting every feed that was subscribed or pending as unsubscribed when
+  the socket closes;
 - the ping interval Kick announced (25 s), and when silence means the
   connection is dead (that plus a 20 s grace) - never, if the server
   announced no ping;
@@ -137,7 +143,9 @@ Two ways in:
   Dart and Python at once. The cost is a JSON round trip per call: a few
   microseconds, against chat that arrives at most a few hundred times a
   second. Numbers crossing it must be exact integers in range; it refuses
-  rather than rounds or clamps. Its JSON keeps each struct's field order,
+  rather than rounds or clamps. A session call that panics (the binding
+  catches it) leaves the `SessionHandle` refusing calls, kind `panic`,
+  until `closed` resets it, as the NIF's session does. Its JSON keeps each struct's field order,
   which needs serde_json's `preserve_order`: the `dispatch` feature turns
   that on (and the WebAssembly crate does for itself), so a plain Rust
   user of the core does not get it forced on them.

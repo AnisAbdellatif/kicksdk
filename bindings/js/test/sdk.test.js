@@ -37,11 +37,18 @@ test('requests are plain objects for fetch, and endpoints can be overridden', ()
   assert.equal(r.method, 'POST');
   assert.equal(r.url, 'http://localhost:9/rt/channels/668/chat/connection');
   assert.deepEqual(r.headers.find(([k]) => k === 'origin'), ['origin', 'https://kick.com']);
-  assert.equal(sdk.livestreamsRequests('t', Array.from({ length: 120 }, (_, i) => i + 1)).length, 3);
+  const ids = Array.from({ length: 250 }, (_, i) => i + 1);
+  const batches = sdk.livestreamsRequests('t', ids, { api: 'http://localhost:9' });
+  assert.equal(batches.length, 3, '100 ids a request');
+  assert.match(batches[0].url, /^http:\/\/localhost:9\/public\/v1\/users\/livestreams\?user_id=1&/);
 });
 
 test('parsers throw with the status', () => {
   assert.throws(() => sdk.parseChannel(404, '{}'), (e) => e.status === 404);
+  assert.throws(
+    () => sdk.adsParseAdBreak(400, '{"message":"CHANNEL_IS_NOT_LIVE"}'),
+    (e) => e.status === 400 && e.excerpt === '{"message":"CHANNEL_IS_NOT_LIVE"}' && e.message.endsWith('CHANNEL_IS_NOT_LIVE"}'),
+  );
 });
 
 test('a recorded session replays through Session', () => {

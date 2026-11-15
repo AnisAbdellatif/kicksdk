@@ -32,7 +32,12 @@ def test_requests_and_endpoints() -> None:
     r = realtime.chat_connection_request(668, "c1", {"realtime": "http://x/rt"})
     assert (r.method, r.url) == ("POST", "http://x/rt/channels/668/chat/connection")
     assert ("origin", "https://kick.com") in r.headers
-    assert len(public_api.livestreams_requests("t", list(range(1, 121)))) == 3
+    batches = public_api.livestreams_requests("t", list(range(1, 251)), {"api": "http://x"})
+    assert len(batches) == 3
+    assert batches[0].url.startswith("http://x/public/v1/users/livestreams?user_id=1&")
+    page = public_api.livestreams_page_request("t", [5], ["en"], 10, "c")
+    assert page.url == "https://api.kick.com/public/v2/livestreams?category_id=5&language_code=en&limit=10&cursor=c"
+    assert public_api.livestreams_page_request("t").url == "https://api.kick.com/public/v2/livestreams"
 
 
 def test_errors_carry_kicks_status() -> None:
@@ -50,6 +55,9 @@ def test_parsers_read_the_recordings() -> None:
     for p in files("public_api", "livestreams-poll"):
         for s in public_api.parse_livestreams(*response(p)):
             assert s["started_at"].endswith("Z")
+    docs = FIXTURES / "docs" / "public_api" / "v2-livestreams.json"
+    page = public_api.parse_livestreams_page(*response(docs))
+    assert page["data"][0]["slug"] == "streamer-123" and page["next_cursor"]
 
 
 def test_webhook_signatures() -> None:
@@ -122,7 +130,7 @@ def test_a_recorded_session_replays() -> None:
                     actions.append(a)
         assert ours == sent
         assert any(a["action"] == "event" and a["event"]["type"] == "chat_message" for a in actions)
-        assert any(a["action"] == "subscribe_failed" and a["code"] == 103 for a in actions)
+        assert any(a["action"] == "subscribe_failed" and a["code"] == 103 and a["temporary"] is False for a in actions)
         assert s.is_subscribed(channels[0])
 
 

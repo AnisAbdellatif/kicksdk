@@ -1,0 +1,23 @@
+{
+  "kind": "docs",
+  "request": {
+    "json": {
+      "background_color": "#00e701",
+      "cost": 100,
+      "description": "Updated description",
+      "is_enabled": true,
+      "is_paused": false,
+      "is_user_input_required": false,
+      "should_redemptions_skip_request_queue": false,
+      "title": "Updated Title"
+    },
+    "method": "PATCH",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/channels/rewards/01HZ8X9K2M4N6P8Q0R2S4T6V8W0Y2Z4"
+  },
+  "response": {
+    "body": "{\"data\":{\"background_color\":\"#00e701\",\"cost\":100,\"description\":\"Request a song by providing a URL\",\"id\":\"01HZ8X9K2M4N6P8Q0R2S4T6V8W0Y2Z4\",\"is_enabled\":true,\"is_paused\":false,\"is_user_input_required\":false,\"should_redemptions_skip_request_queue\":false,\"title\":\"Song Request\"},\"message\":\"OK\"}",
+    "status": 200
+  },
+  "source": "Kick's spec (api.kick.com/swagger/doc.json), its example values, transcribed 2026-11-15: not a recording"
+}

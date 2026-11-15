@@ -1,0 +1,10 @@
+{
+  "data": {
+    "active": true,
+    "client_id": "0144Y845NBDSST5H2G1DVY2T25",
+    "exp": 1719619200,
+    "scope": "user:read chat:write moderation:ban",
+    "token_type": "user"
+  },
+  "message": "OK"
+}

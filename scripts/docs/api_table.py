@@ -25,7 +25,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 LANGS = ["rust", "javascript", "python", "dart", "elixir"]
-MODULES = r"(events|content|realtime|public_api|website|webhooks)"
+MODULES = r"(events|content|realtime|public_api|website|webhooks|oauth|chat|moderation|channels|rewards|ads|drops)"
+# Modules under `kicksdk::public_api`, named on their own in dispatch.
+PUBLIC_API_SUBMODULES = {"chat", "moderation", "channels", "rewards", "ads", "drops"}
+# Dispatch names that are not a module function of the same name.
+METHODS = {
+    "oauth.pkce": "oauth::Pkce::from_random",
+    "oauth.pkce_from_verifier": "oauth::Pkce::from_verifier",
+    "oauth.scopes": "oauth::Scope::ALL",
+}
 
 
 def core_functions() -> list[str]:
@@ -36,19 +44,36 @@ def core_functions() -> list[str]:
 
 
 def rust(name: str) -> str:
+    if name in METHODS:
+        return f"kicksdk::{METHODS[name]}"
     module, fn = name.split(".")
+    if module in PUBLIC_API_SUBMODULES:
+        return f"kicksdk::public_api::{module}::{fn}"
     return f"kicksdk::{module}::{fn}"
+
+
+def core_call(body: str) -> str | None:
+    """The dispatch name of the core function a binding's body calls:
+    `chat::send_request(` and `public_api::chat::send_request(` alike, or one
+    of the `METHODS` (`Pkce::from_random(`, `Scope::ALL`)."""
+    m = re.search(MODULES + r"::(\w+)\(", body)
+    if m:
+        return f"{m.group(1)}.{m.group(2)}"
+    for name, path in METHODS.items():
+        if re.search(r"\b" + re.escape(path.split("::", 1)[1]) + r"\b", body):
+            return name
+    return None
 
 
 def javascript() -> dict[str, str]:
     src = (ROOT / "crates/kicksdk-wasm/src/lib.rs").read_text()
     out: dict[str, str] = {}
     for chunk in src.split("#[wasm_bindgen(js_name = ")[1:]:
-        js = chunk[: chunk.index(")")]
+        # `js_name = chatSendRequest, unchecked_return_type = "…"`: the name alone.
+        js = re.match(r'\s*"?(\w+)', chunk).group(1)
         body = chunk[: chunk.find("#[wasm_bindgen") if "#[wasm_bindgen" in chunk else len(chunk)]
-        m = re.search(MODULES + r"::(\w+)\(", body)
-        if m:
-            name = f"{m.group(1)}.{m.group(2)}"
+        name = core_call(body)
+        if name:
             # Two JS names can reach one core function (the app token and the
             # realtime token both parse with their module's parse_token); the
             # first one, in file order, is the one for this module.
@@ -94,9 +119,9 @@ def elixir() -> dict[str, str]:
     # `#[rustler::nif]` and `#[rustler::nif(schedule = "DirtyCpu")]` alike.
     for chunk in re.split(r"#\[rustler::nif(?:\([^)]*\))?\]", nif_src)[1:]:
         f = re.search(r"fn (\w+)", chunk)
-        m = re.search(MODULES + r"::(\w+)\(", chunk)
-        if f and m:
-            nif_to_core[f.group(1)] = f"{m.group(1)}.{m.group(2)}"
+        core = core_call(chunk)
+        if f and core:
+            nif_to_core[f.group(1)] = core
     out: dict[str, str] = {}
     for path in sorted((ROOT / "bindings/elixir/lib/kicksdk").rglob("*.ex")):
         # `call_request(\n  "website.x", …)` as formatted: one line again.

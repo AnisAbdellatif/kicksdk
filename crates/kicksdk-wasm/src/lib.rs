@@ -4,21 +4,25 @@
 //! as plain JS objects (`snake_case` keys, as Kick writes them). Requests come
 //! back as `{method, url, headers: [[name, value]], body}` for the caller's
 //! `fetch`; parsers take `(status, bodyText)` and throw an `Error` with a
-//! `status` property when Kick answered with an error status.
+//! `status` property when Kick answered with an error status (and an `excerpt`
+//! property, the start of Kick's answer, also in the message).
 //!
 //! Numbers are checked, never cast: every numeric argument must be a JS
 //! number (a numeric string, a boolean or a BigInt is a `TypeError`), and an
 //! id, a time, a status or a count must be a whole number in its range (ids at
 //! most `Number.MAX_SAFE_INTEGER`, the largest a JS number holds exactly), or
-//! the call throws a `RangeError`.
+//! the call throws a `RangeError`. Results are held to the same limit: one
+//! with an integer above `Number.MAX_SAFE_INTEGER` in it throws an `Error`
+//! rather than come back rounded.
 //!
 //! The hand-written driver in `bindings/js` puts these together with `fetch`,
 //! `WebSocket` and timers; most callers want that rather than these.
 
 use kicksdk::http::Endpoints;
 use kicksdk::ids::{ChannelId, ChatroomId, UserId};
+use kicksdk::public_api::{ads, channels, chat, drops, moderation, rewards};
 use kicksdk::realtime;
-use kicksdk::{content, events, public_api, webhooks, website};
+use kicksdk::{content, events, oauth, public_api, webhooks, website};
 use serde::Serialize;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -27,7 +31,7 @@ use wasm_bindgen::prelude::*;
 const TYPES: &str = r#"
 /** Base URLs to use instead of Kick's. Any left out, or undefined, stay Kick's. */
 export interface Endpoints {
-  /** The official API: `https://api.kick.com/public/v1`. */
+  /** The official API's host, without a version: `https://api.kick.com`. */
   api?: string | undefined;
   /** OAuth: `https://id.kick.com`. */
   id?: string | undefined;
@@ -70,6 +74,227 @@ export interface VerifiedWebhook {
   };
   event: { type: string; [key: string]: unknown };
 }
+
+/** A request for `fetch`: what every `…Request` function returns. */
+export interface HttpRequest {
+  method: string;
+  url: string;
+  headers: [string, string][];
+  body: string | null;
+}
+
+/** A user token's scope, as Kick spells it: the 13 Kick documents, or one added since. */
+export type Scope =
+  | 'ads:read'
+  | 'ads:write'
+  | 'channel:read'
+  | 'channel:write'
+  | 'channel:rewards:read'
+  | 'channel:rewards:write'
+  | 'chat:write'
+  | 'events:subscribe'
+  | 'kicks:read'
+  | 'moderation:ban'
+  | 'moderation:chat_message:manage'
+  | 'streamkey:read'
+  | 'user:read'
+  | (string & {});
+
+/**
+ * A PKCE pair: `challenge` goes in `oauthAuthorizeUrl`, `verifier` is a
+ * secret kept until the user comes back, for `oauthCodeRequest`. Never log it.
+ */
+export interface Pkce {
+  verifier: string;
+  challenge: string;
+}
+
+/** A user token. Both tokens are secrets: never log them. */
+export interface UserToken {
+  access_token: string;
+  /** For `oauthRefreshRequest`; each refresh gives a new one. */
+  refresh_token: string | null;
+  /** Seconds until the access token expires. */
+  expires_in: number | null;
+  /** Seconds until the refresh token expires, from every refresh. */
+  refresh_expires_in: number | null;
+  token_type: string | null;
+  scopes: Scope[];
+}
+
+/** Which kind of token `oauthRevokeRequest` revokes. */
+export type TokenTypeHint = 'access_token' | 'refresh_token';
+
+/** What Kick says about a token. When it is not `active`, nothing else. */
+export interface Introspection {
+  active: boolean;
+  client_id: string | null;
+  /** Unix seconds. */
+  exp: number | null;
+  scopes: Scope[];
+  /** `user` or `app`. */
+  token_type: string | null;
+}
+
+/** One page of a paginated answer: pass `next_cursor` back for the next. */
+export interface Page<T> {
+  data: T[];
+  next_cursor: string | null;
+}
+
+export interface User {
+  user_id: number;
+  name: string | null;
+  profile_picture: string | null;
+  /** Only for a user token with `user:read`, for its own user. */
+  email: string | null;
+}
+
+export interface Category {
+  id: number | null;
+  name: string | null;
+  thumbnail: string | null;
+  /** Only `categoriesRequest` gives them; empty elsewhere. */
+  tags: string[];
+}
+
+export interface LivestreamStats {
+  total_count: number | null;
+}
+
+export interface KicksEntry {
+  user_id: number;
+  username: string | null;
+  rank: number | null;
+  gifted_amount: number | null;
+}
+
+export interface KicksLeaderboard {
+  lifetime: KicksEntry[];
+  month: KicksEntry[];
+  week: KicksEntry[];
+}
+
+/** Who `chatSendRequest` sends as: the token's user, into a channel by its broadcaster's user id, or the app's bot. */
+export type ChatSender = { user: number } | 'bot';
+
+/** What Kick says about a message sent. */
+export interface Sent {
+  is_sent: boolean;
+  /** The new message's id, for `chatDeleteRequest`. */
+  message_id: string | null;
+}
+
+export interface Reward {
+  id: string;
+  title: string | null;
+  description: string | null;
+  cost: number | null;
+  background_color: string | null;
+  is_enabled: boolean | null;
+  is_paused: boolean | null;
+  is_user_input_required: boolean | null;
+  should_redemptions_skip_request_queue: boolean | null;
+}
+
+/** A reward's settings: what is left out is not sent. Creating needs `title` and `cost`. */
+export interface RewardFields {
+  title?: string | undefined;
+  cost?: number | undefined;
+  description?: string | undefined;
+  background_color?: string | undefined;
+  is_enabled?: boolean | undefined;
+  is_paused?: boolean | undefined;
+  is_user_input_required?: boolean | undefined;
+  should_redemptions_skip_request_queue?: boolean | undefined;
+}
+
+export type RedemptionStatus = 'pending' | 'accepted' | 'rejected';
+
+export interface Redemption {
+  id: string;
+  status: string | null;
+  redeemed_at: string | null;
+  /** The redeemer's user id. */
+  redeemer: number | null;
+  user_input: string | null;
+}
+
+export interface RedeemedReward {
+  id: string;
+  title: string | null;
+  description: string | null;
+  cost: number | null;
+  can_manage: boolean | null;
+  is_deleted: boolean;
+}
+
+export interface RedemptionPage {
+  rewards: { reward: RedeemedReward; redemptions: Redemption[] }[];
+  next_cursor: string | null;
+}
+
+/** A redemption Kick did not accept or reject: `NOT_PENDING`, `NOT_FOUND`, `NOT_OWNED`, `UNKNOWN`. */
+export interface FailedRedemption {
+  id: string;
+  reason: string | null;
+}
+
+export interface AdBreak {
+  id: string | null;
+  ad_break_id: string | null;
+  remaining_ad_breaks: number | null;
+}
+
+export interface AdStatus {
+  opted_in: boolean | null;
+  ads_blocked: boolean | null;
+  auto_ads_active: boolean | null;
+  remaining_ad_breaks: number | null;
+  limits: { max: number | null; period_seconds: number | null } | null;
+  ad_breaks: {
+    id: string | null;
+    ad_break_id: string | null;
+    status: string | null;
+    source: string | null;
+    break_duration_seconds: number | null;
+    created_at: string | null;
+  }[];
+}
+
+/** What `dropsClaimsRequest` lists by: what is left out is not filtered. */
+export interface ClaimFilter {
+  campaign_id?: string | undefined;
+  claim_id?: string | undefined;
+  user_id?: number | undefined;
+  external_status?: string | undefined;
+  /** 1 to 1000. */
+  limit?: number | undefined;
+  cursor?: string | undefined;
+}
+
+export interface Claim {
+  claim_id: string;
+  user_id: number | null;
+  campaign_id: string | null;
+  reward_id: string | null;
+  external_id: string | null;
+  external_status: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface Claims {
+  claims: Claim[];
+  /** The next page's, for `ClaimFilter.cursor`. */
+  cursor: string | null;
+}
+
+/** One claim's new status, for `dropsUpdateClaimsRequest`. */
+export interface ClaimUpdate {
+  claim_id: string;
+  external_status: string;
+}
 "#;
 
 #[wasm_bindgen]
@@ -104,19 +329,46 @@ extern "C" {
     /// A webhook body: text or bytes.
     #[wasm_bindgen(typescript_type = "string | Uint8Array | ArrayBuffer")]
     pub type Body;
-    /// `topLivestreamsRequest`'s order.
-    #[wasm_bindgen(typescript_type = "'viewer_count' | 'started_at'")]
-    pub type SortArg;
+    /// Strings: an array of JS strings, checked by [`string_list`].
+    #[wasm_bindgen(typescript_type = "readonly string[]")]
+    pub type StringList;
     /// `sendRequest`'s reply target.
     #[wasm_bindgen(typescript_type = "ReplyTo")]
     pub type ReplyToArg;
     /// `subscribeRequest`'s events.
     #[wasm_bindgen(typescript_type = "ReadonlyArray<{ name: string; version?: number }>")]
     pub type WebhookEventList;
+    /// Bytes from a CSPRNG, for `oauthPkce`.
+    #[wasm_bindgen(typescript_type = "Uint8Array")]
+    pub type Bytes;
+    /// Scopes: an array of strings.
+    #[wasm_bindgen(typescript_type = "readonly Scope[]")]
+    pub type ScopeList;
+    /// `oauthRevokeRequest`'s hint.
+    #[wasm_bindgen(typescript_type = "TokenTypeHint")]
+    pub type TokenTypeHintArg;
+    /// `chatSendRequest`'s sender.
+    #[wasm_bindgen(typescript_type = "ChatSender")]
+    pub type ChatSenderArg;
+    /// A reward's settings.
+    #[wasm_bindgen(typescript_type = "RewardFields")]
+    pub type RewardFieldsArg;
+    /// A redemption status.
+    #[wasm_bindgen(typescript_type = "RedemptionStatus")]
+    pub type RedemptionStatusArg;
+    /// `dropsClaimsRequest`'s filter.
+    #[wasm_bindgen(typescript_type = "ClaimFilter")]
+    pub type ClaimFilterArg;
+    /// `dropsUpdateClaimsRequest`'s updates.
+    #[wasm_bindgen(typescript_type = "readonly ClaimUpdate[]")]
+    pub type ClaimUpdateList;
 }
 
 // ---- Conversions -------------------------------------------------------------
 
+/// A result as plain JS. An integer above `Number.MAX_SAFE_INTEGER` in it
+/// is an error (serde-wasm-bindgen's JSON-compatible mode), not a rounded
+/// number.
 fn out<T: Serialize + ?Sized>(value: &T) -> Result<JsValue, JsValue> {
     value
         .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
@@ -124,9 +376,22 @@ fn out<T: Serialize + ?Sized>(value: &T) -> Result<JsValue, JsValue> {
 }
 
 fn fail(e: kicksdk::Error) -> JsValue {
-    let err = js_sys::Error::new(&e.to_string());
+    // A status error also carries the start of Kick's answer, which often
+    // says why (`CHANNEL_IS_NOT_LIVE`): in the message, and as `excerpt`.
+    let excerpt = match &e {
+        kicksdk::Error::Status { excerpt, .. } if !excerpt.is_empty() => Some(excerpt.clone()),
+        _ => None,
+    };
+    let message = match &excerpt {
+        Some(x) => format!("{e}: {x}"),
+        None => e.to_string(),
+    };
+    let err = js_sys::Error::new(&message);
     if let Some(status) = e.status() {
         let _ = js_sys::Reflect::set(&err, &"status".into(), &JsValue::from(status));
+    }
+    if let Some(x) = excerpt {
+        let _ = js_sys::Reflect::set(&err, &"excerpt".into(), &JsValue::from(x));
     }
     err.into()
 }
@@ -212,6 +477,21 @@ fn u32_arg(what: &str, value: &JsValue) -> Result<u32, JsValue> {
     Ok(uint(what, value, u32::MAX.into())? as u32)
 }
 
+/// A list of strings, or none for undefined or null.
+fn string_list(what: &str, value: &JsValue) -> Result<Vec<String>, JsValue> {
+    if nothing(value) {
+        return Ok(vec![]);
+    }
+    if !js_sys::Array::is_array(value) {
+        return Err(type_error(&format!("{what} must be an array of strings")));
+    }
+    let list: &js_sys::Array = value.unchecked_ref();
+    list.iter()
+        .enumerate()
+        .map(|(i, v)| v.as_string().ok_or_else(|| type_error(&format!("{what}[{i}] must be a string"))))
+        .collect()
+}
+
 /// A list of ids: an array of numbers.
 fn id_list<T: From<u64>>(what: &str, value: &JsValue) -> Result<Vec<T>, JsValue> {
     if !js_sys::Array::is_array(value) {
@@ -239,12 +519,14 @@ fn to_endpoints(value: Option<EndpointsArg>) -> Result<Endpoints, JsValue> {
     let given: serde_json::Map<String, serde_json::Value> =
         serde_wasm_bindgen::from_value(value).map_err(|err| type_error(&format!("endpoints: {err}")))?;
     for (k, v) in given {
-        if v.is_null() {
-            continue;
-        }
+        // Whatever its value: a misspelt key would otherwise leave that URL
+        // at Kick's.
         if !base.contains_key(&k) {
             let known: Vec<&str> = base.keys().map(String::as_str).collect();
             return Err(type_error(&format!("endpoints: unknown key `{k}` (known: {})", known.join(", "))));
+        }
+        if v.is_null() {
+            continue;
         }
         if !v.is_string() {
             return Err(type_error(&format!("endpoints.{k} must be a string")));
@@ -482,7 +764,8 @@ pub fn parse_app_token(status: Num, body: &str) -> Result<JsValue, JsValue> {
     result(public_api::parse_token(http_status(&status)?, body))
 }
 
-/// `/livestreams` for any number of user ids: one request per 50.
+/// `/public/v1/users/livestreams` for any number of user ids: one request
+/// per 100.
 #[wasm_bindgen(js_name = livestreamsRequests)]
 pub fn livestreams_requests(
     token: &str,
@@ -493,7 +776,7 @@ pub fn livestreams_requests(
     result(public_api::livestreams_requests(&to_endpoints(endpoints)?, token, &users))
 }
 
-/// Reads a `/livestreams` answer.
+/// Reads a `livestreamsRequests` answer (or a page's streams alone).
 #[wasm_bindgen(js_name = parseLivestreams)]
 pub fn parse_livestreams(status: Num, body: &str) -> Result<JsValue, JsValue> {
     result(public_api::parse_livestreams(http_status(&status)?, body))
@@ -707,37 +990,39 @@ pub fn parse_action(status: Num, body: &str) -> Result<(), JsValue> {
     website::parse_action(http_status(&status)?, body).map_err(fail)
 }
 
-/// The top live streams, overall or in a category or language: 1 to 100
-/// (100 by default). `sort` is `"viewer_count"` (the default) or
-/// `"started_at"`.
-#[wasm_bindgen(js_name = topLivestreamsRequest)]
-pub fn top_livestreams_request(
+/// One page of the streams live now (`/public/v2/livestreams`), in up to 25
+/// categories and 25 languages (none: all). `limit` is 1 to 1000 (Kick's
+/// default 100); `cursor` is the previous page's `next_cursor`. Kick has no
+/// sort: streams come oldest first.
+#[wasm_bindgen(js_name = livestreamsPageRequest)]
+pub fn livestreams_page_request(
     token: &str,
-    category_id: Option<Id>,
-    language: Option<String>,
-    sort: Option<SortArg>,
+    category_ids: Option<IdList>,
+    language_codes: Option<StringList>,
     limit: Option<Num>,
+    cursor: Option<String>,
     endpoints: Option<EndpointsArg>,
 ) -> Result<JsValue, JsValue> {
-    let category = opt_id("categoryId", &or_undefined(category_id))?;
-    let sort = sort.map(|s| s.as_string().ok_or_else(|| type_error("sort must be a string"))).transpose()?;
-    let sort = match sort.as_deref() {
-        None | Some("viewer_count") => public_api::Sort::ViewerCount,
-        Some("started_at") => public_api::Sort::StartedAt,
-        Some(other) => {
-            return Err(range_error(&format!("sort must be \"viewer_count\" or \"started_at\", not {other:?}")));
-        }
-    };
+    let categories = or_undefined(category_ids);
+    let categories: Vec<u64> = if nothing(&categories) { vec![] } else { id_list("categoryIds", &categories)? };
+    let languages = string_list("languageCodes", &or_undefined(language_codes))?;
+    let languages: Vec<&str> = languages.iter().map(String::as_str).collect();
     // In range: `opt_uint` checked it.
-    let limit = opt_uint("limit", limit, u32::MAX.into())?.map_or(100, |n| n as u32);
-    result(public_api::top_livestreams_request(
+    let limit = opt_uint("limit", limit, u32::MAX.into())?.map(|n| n as u32);
+    result(public_api::livestreams_page_request(
         &to_endpoints(endpoints)?,
         token,
-        category,
-        language.as_deref(),
-        sort,
+        &categories,
+        &languages,
         limit,
+        cursor.as_deref(),
     ))
+}
+
+/// Reads a `livestreamsPageRequest` answer: `{data, next_cursor}`.
+#[wasm_bindgen(js_name = parseLivestreamsPage)]
+pub fn parse_livestreams_page(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(public_api::parse_livestreams_page(http_status(&status)?, body))
 }
 
 /// Subscribes the app to webhook `events` (`[{name, version?}]`, version 1
@@ -798,6 +1083,532 @@ pub fn unsubscribe_requests(
     result(public_api::unsubscribe_requests(&to_endpoints(endpoints)?, token, &refs))
 }
 
+/// Users by id, up to 50; none, with a user token: the token's own user.
+#[wasm_bindgen(js_name = usersRequest, unchecked_return_type = "HttpRequest")]
+pub fn users_request(
+    token: &str,
+    user_ids: Option<IdList>,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    let users = or_undefined(user_ids);
+    let users: Vec<UserId> = if nothing(&users) { vec![] } else { id_list("userIds", &users)? };
+    result(public_api::users_request(&to_endpoints(endpoints)?, token, &users))
+}
+
+/// Reads a `usersRequest` answer.
+#[wasm_bindgen(js_name = parseUsers, unchecked_return_type = "User[]")]
+pub fn parse_users(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(public_api::parse_users(http_status(&status)?, body))
+}
+
+/// One page of categories (`/public/v2/categories`): by `names` and `tags`
+/// (no commas in them), or by `ids`; none of them, all. `limit` is 1 to 1000
+/// (Kick's default 25); `cursor` is the previous page's `next_cursor`.
+#[wasm_bindgen(js_name = categoriesRequest, unchecked_return_type = "HttpRequest")]
+pub fn categories_request(
+    token: &str,
+    names: Option<StringList>,
+    tags: Option<StringList>,
+    ids: Option<IdList>,
+    limit: Option<Num>,
+    cursor: Option<String>,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    let names = string_list("names", &or_undefined(names))?;
+    let tags = string_list("tags", &or_undefined(tags))?;
+    let ids = or_undefined(ids);
+    let ids: Vec<u64> = if nothing(&ids) { vec![] } else { id_list("ids", &ids)? };
+    // In range: `opt_uint` checked it.
+    let limit = opt_uint("limit", limit, u32::MAX.into())?.map(|n| n as u32);
+    result(public_api::categories_request(
+        &to_endpoints(endpoints)?,
+        token,
+        &refs(&names),
+        &refs(&tags),
+        &ids,
+        limit,
+        cursor.as_deref(),
+    ))
+}
+
+/// Reads a `categoriesRequest` answer: `{data, next_cursor}`.
+#[wasm_bindgen(js_name = parseCategories, unchecked_return_type = "Page<Category>")]
+pub fn parse_categories(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(public_api::parse_categories(http_status(&status)?, body))
+}
+
+/// How many streams are live on Kick.
+#[wasm_bindgen(js_name = livestreamStatsRequest, unchecked_return_type = "HttpRequest")]
+pub fn livestream_stats_request(token: &str, endpoints: Option<EndpointsArg>) -> Result<JsValue, JsValue> {
+    result(public_api::livestream_stats_request(&to_endpoints(endpoints)?, token))
+}
+
+/// Reads a `livestreamStatsRequest` answer.
+#[wasm_bindgen(js_name = parseLivestreamStats, unchecked_return_type = "LivestreamStats")]
+pub fn parse_livestream_stats(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(public_api::parse_livestream_stats(http_status(&status)?, body))
+}
+
+/// The top `top` Kicks gifters (1 to 100; Kick's default 10) of the token's
+/// own channel. A user token with `kicks:read`.
+#[wasm_bindgen(js_name = kicksLeaderboardRequest, unchecked_return_type = "HttpRequest")]
+pub fn kicks_leaderboard_request(
+    token: &str,
+    top: Option<Num>,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    // In range: `opt_uint` checked it.
+    let top = opt_uint("top", top, u32::MAX.into())?.map(|n| n as u32);
+    result(public_api::kicks_leaderboard_request(&to_endpoints(endpoints)?, token, top))
+}
+
+/// Reads a `kicksLeaderboardRequest` answer.
+#[wasm_bindgen(js_name = parseKicksLeaderboard, unchecked_return_type = "KicksLeaderboard")]
+pub fn parse_kicks_leaderboard(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(public_api::parse_kicks_leaderboard(http_status(&status)?, body))
+}
+
+/// Whether a user-token call whose answer carries nothing worked (any 2xx);
+/// throws with `status` if not.
+#[wasm_bindgen(js_name = parseDone)]
+pub fn parse_done(status: Num, body: &str) -> Result<(), JsValue> {
+    public_api::parse_done(http_status(&status)?, body).map_err(fail)
+}
+
+fn refs(list: &[String]) -> Vec<&str> {
+    list.iter().map(String::as_str).collect()
+}
+
+/// A plain object read into one of the core's types: its keys as the core
+/// names them, an unknown one refused.
+fn plain<T: serde::de::DeserializeOwned>(what: &str, value: &JsValue) -> Result<T, JsValue> {
+    if !value.is_object() || js_sys::Array::is_array(value) {
+        return Err(type_error(&format!("{what} must be an object")));
+    }
+    // Through JSON: serde-wasm-bindgen reads a struct's own keys alone, and
+    // would let a misspelt one through.
+    let json = json_arg(value.clone())?;
+    serde_json::from_value(json).map_err(|e| type_error(&format!("{what}: {e}")))
+}
+
+// ---- User tokens (OAuth) ---------------------------------------------------
+
+/// A PKCE pair from 32 to 96 bytes drawn from a CSPRNG (`newPkce()` draws
+/// them). The verifier is a secret: keep it, never log it.
+#[wasm_bindgen(js_name = oauthPkce, unchecked_return_type = "Pkce")]
+pub fn oauth_pkce(random: Bytes) -> Result<JsValue, JsValue> {
+    let random: JsValue = random.into();
+    let bytes = random.dyn_ref::<js_sys::Uint8Array>().ok_or_else(|| type_error("random must be a Uint8Array"))?;
+    result(oauth::Pkce::from_random(&bytes.to_vec()))
+}
+
+/// The PKCE pair for a verifier kept from before (43 to 128 characters of
+/// `A-Z a-z 0-9 - . _ ~`).
+#[wasm_bindgen(js_name = oauthPkceFromVerifier, unchecked_return_type = "Pkce")]
+pub fn oauth_pkce_from_verifier(verifier: &str) -> Result<JsValue, JsValue> {
+    result(oauth::Pkce::from_verifier(verifier))
+}
+
+/// Where to send the user's browser to approve the app. `state` (from
+/// `newState()`) must come back unchanged on the redirect; `verifier` is the
+/// `Pkce`'s.
+#[wasm_bindgen(js_name = oauthAuthorizeUrl)]
+pub fn oauth_authorize_url(
+    client_id: &str,
+    redirect_uri: &str,
+    scopes: ScopeList,
+    state: &str,
+    verifier: &str,
+    endpoints: Option<EndpointsArg>,
+) -> Result<String, JsValue> {
+    let scopes = string_list("scopes", &scopes)?;
+    let scopes: Vec<oauth::Scope> = scopes.iter().map(|s| oauth::Scope::from(s.as_str())).collect();
+    let pkce = oauth::Pkce::from_verifier(verifier).map_err(fail)?;
+    oauth::authorize_url(&to_endpoints(endpoints)?, client_id, redirect_uri, &scopes, state, &pkce).map_err(fail)
+}
+
+/// A user token for the `code` on the redirect, with the PKCE verifier.
+#[wasm_bindgen(js_name = oauthCodeRequest, unchecked_return_type = "HttpRequest")]
+pub fn oauth_code_request(
+    client_id: &str,
+    client_secret: &str,
+    redirect_uri: &str,
+    code: &str,
+    code_verifier: &str,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    out(&oauth::code_request(&to_endpoints(endpoints)?, client_id, client_secret, redirect_uri, code, code_verifier))
+}
+
+/// A new user token (and refresh token) for a refresh token.
+#[wasm_bindgen(js_name = oauthRefreshRequest, unchecked_return_type = "HttpRequest")]
+pub fn oauth_refresh_request(
+    client_id: &str,
+    client_secret: &str,
+    refresh_token: &str,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    out(&oauth::refresh_request(&to_endpoints(endpoints)?, client_id, client_secret, refresh_token))
+}
+
+/// Reads an `oauthCodeRequest` or `oauthRefreshRequest` answer.
+#[wasm_bindgen(js_name = oauthParseUserToken, unchecked_return_type = "UserToken")]
+pub fn oauth_parse_user_token(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(oauth::parse_user_token(http_status(&status)?, body))
+}
+
+/// Revokes a token. It goes in the URL: keep the URL out of logs.
+#[wasm_bindgen(js_name = oauthRevokeRequest, unchecked_return_type = "HttpRequest")]
+pub fn oauth_revoke_request(
+    token: &str,
+    token_type_hint: Option<TokenTypeHintArg>,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    let hint = or_undefined(token_type_hint);
+    let hint = match hint.as_string().as_deref() {
+        _ if nothing(&hint) => None,
+        Some("access_token") => Some(oauth::TokenTypeHint::AccessToken),
+        Some("refresh_token") => Some(oauth::TokenTypeHint::RefreshToken),
+        _ => return Err(type_error("tokenTypeHint must be 'access_token' or 'refresh_token'")),
+    };
+    result(oauth::revoke_request(&to_endpoints(endpoints)?, token, hint))
+}
+
+/// Whether a revoke worked; throws with `status` if not.
+#[wasm_bindgen(js_name = oauthParseRevoke)]
+pub fn oauth_parse_revoke(status: Num, body: &str) -> Result<(), JsValue> {
+    oauth::parse_revoke(http_status(&status)?, body).map_err(fail)
+}
+
+/// Asks Kick about the token it is sent with (a user or an app token).
+#[wasm_bindgen(js_name = oauthIntrospectRequest, unchecked_return_type = "HttpRequest")]
+pub fn oauth_introspect_request(token: &str, endpoints: Option<EndpointsArg>) -> Result<JsValue, JsValue> {
+    result(oauth::introspect_request(&to_endpoints(endpoints)?, token))
+}
+
+/// Reads an `oauthIntrospectRequest` answer.
+#[wasm_bindgen(js_name = oauthParseIntrospect, unchecked_return_type = "Introspection")]
+pub fn oauth_parse_introspect(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(oauth::parse_introspect(http_status(&status)?, body))
+}
+
+/// Every scope Kick documents.
+#[wasm_bindgen(js_name = oauthScopes, unchecked_return_type = "Scope[]")]
+pub fn oauth_scopes() -> Vec<String> {
+    oauth::Scope::ALL.iter().map(|s| s.as_str().to_owned()).collect()
+}
+
+// ---- Official API, user tokens ---------------------------------------------
+
+/// Sends `content` as the token's user into a channel (`{user:
+/// broadcasterUserId}`) or as the app's bot (`'bot'`), as a reply if
+/// `replyToMessageId` is given. Scope `chat:write`.
+#[wasm_bindgen(js_name = chatSendRequest, unchecked_return_type = "HttpRequest")]
+pub fn chat_send_request(
+    token: &str,
+    sender: ChatSenderArg,
+    content: &str,
+    reply_to_message_id: Option<String>,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    let sender: JsValue = sender.into();
+    let wrong = || type_error("sender must be {user: broadcasterUserId} or 'bot'");
+    let sender = if sender.as_string().as_deref() == Some("bot") {
+        chat::Sender::Bot
+    } else if sender.is_object() && !js_sys::Array::is_array(&sender) {
+        let keys = js_sys::Object::keys(sender.unchecked_ref::<js_sys::Object>());
+        if keys.length() != 1 || keys.get(0).as_string().as_deref() != Some("user") {
+            return Err(wrong());
+        }
+        chat::Sender::User { broadcaster: UserId(id("sender.user", &js_sys::Reflect::get(&sender, &"user".into())?)?) }
+    } else {
+        return Err(wrong());
+    };
+    result(chat::send_request(&to_endpoints(endpoints)?, token, sender, content, reply_to_message_id.as_deref()))
+}
+
+/// Reads a `chatSendRequest` answer.
+#[wasm_bindgen(js_name = chatParseSend, unchecked_return_type = "Sent")]
+pub fn chat_parse_send(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(chat::parse_send(http_status(&status)?, body))
+}
+
+/// Deletes a message by id. Scope `moderation:chat_message:manage`;
+/// `parseDone` reads the answer.
+#[wasm_bindgen(js_name = chatDeleteRequest, unchecked_return_type = "HttpRequest")]
+pub fn chat_delete_request(token: &str, message_id: &str, endpoints: Option<EndpointsArg>) -> Result<JsValue, JsValue> {
+    result(chat::delete_request(&to_endpoints(endpoints)?, token, message_id))
+}
+
+/// Bans a user for good. Scope `moderation:ban`; `parseDone` reads the answer.
+#[wasm_bindgen(js_name = moderationBanRequest, unchecked_return_type = "HttpRequest")]
+pub fn moderation_ban_request(
+    token: &str,
+    broadcaster_user_id: Id,
+    user_id: Id,
+    reason: Option<String>,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    let broadcaster = UserId(id("broadcasterUserId", &broadcaster_user_id)?);
+    let user = UserId(id("userId", &user_id)?);
+    result(moderation::ban_request(&to_endpoints(endpoints)?, token, broadcaster, user, reason.as_deref()))
+}
+
+/// Times a user out for 1 to 10080 minutes. Scope `moderation:ban`.
+#[wasm_bindgen(js_name = moderationTimeoutRequest, unchecked_return_type = "HttpRequest")]
+pub fn moderation_timeout_request(
+    token: &str,
+    broadcaster_user_id: Id,
+    user_id: Id,
+    minutes: Num,
+    reason: Option<String>,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    let broadcaster = UserId(id("broadcasterUserId", &broadcaster_user_id)?);
+    let user = UserId(id("userId", &user_id)?);
+    let minutes = u32_arg("minutes", &minutes)?;
+    result(moderation::timeout_request(&to_endpoints(endpoints)?, token, broadcaster, user, minutes, reason.as_deref()))
+}
+
+/// Lifts a ban or a timeout. Scope `moderation:ban`.
+#[wasm_bindgen(js_name = moderationUnbanRequest, unchecked_return_type = "HttpRequest")]
+pub fn moderation_unban_request(
+    token: &str,
+    broadcaster_user_id: Id,
+    user_id: Id,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    let broadcaster = UserId(id("broadcasterUserId", &broadcaster_user_id)?);
+    let user = UserId(id("userId", &user_id)?);
+    result(moderation::unban_request(&to_endpoints(endpoints)?, token, broadcaster, user))
+}
+
+/// Sets what is given of the token's channel's category, custom tags (`[]`
+/// clears them, up to 10) and stream title. Scope `channel:write`;
+/// `parseDone` reads the answer.
+#[wasm_bindgen(js_name = channelsUpdateRequest, unchecked_return_type = "HttpRequest")]
+pub fn channels_update_request(
+    token: &str,
+    category_id: Option<Id>,
+    custom_tags: Option<StringList>,
+    stream_title: Option<String>,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    let category = opt_id("categoryId", &or_undefined(category_id))?;
+    let tags = or_undefined(custom_tags);
+    let tags = if nothing(&tags) { None } else { Some(string_list("customTags", &tags)?) };
+    let tags = tags.as_deref().map(refs);
+    result(channels::update_request(
+        &to_endpoints(endpoints)?,
+        token,
+        category,
+        tags.as_deref(),
+        stream_title.as_deref(),
+    ))
+}
+
+/// Every channel-points reward of the token's channel.
+#[wasm_bindgen(js_name = rewardsListRequest, unchecked_return_type = "HttpRequest")]
+pub fn rewards_list_request(token: &str, endpoints: Option<EndpointsArg>) -> Result<JsValue, JsValue> {
+    result(rewards::list_request(&to_endpoints(endpoints)?, token))
+}
+
+/// Reads a `rewardsListRequest` answer.
+#[wasm_bindgen(js_name = rewardsParseRewards, unchecked_return_type = "Reward[]")]
+pub fn rewards_parse_rewards(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(rewards::parse_rewards(http_status(&status)?, body))
+}
+
+/// Creates a reward: `fields` needs `title` and `cost`.
+#[wasm_bindgen(js_name = rewardsCreateRequest, unchecked_return_type = "HttpRequest")]
+pub fn rewards_create_request(
+    token: &str,
+    fields: RewardFieldsArg,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    let fields: rewards::RewardFields = plain("fields", &fields)?;
+    result(rewards::create_request(&to_endpoints(endpoints)?, token, &fields))
+}
+
+/// Changes what `fields` sets of reward `id`.
+#[wasm_bindgen(js_name = rewardsUpdateRequest, unchecked_return_type = "HttpRequest")]
+pub fn rewards_update_request(
+    token: &str,
+    id: &str,
+    fields: RewardFieldsArg,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    let fields: rewards::RewardFields = plain("fields", &fields)?;
+    result(rewards::update_request(&to_endpoints(endpoints)?, token, id, &fields))
+}
+
+/// Reads a `rewardsCreateRequest` or `rewardsUpdateRequest` answer.
+#[wasm_bindgen(js_name = rewardsParseReward, unchecked_return_type = "Reward")]
+pub fn rewards_parse_reward(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(rewards::parse_reward(http_status(&status)?, body))
+}
+
+/// Deletes reward `id`; `parseDone` reads the answer.
+#[wasm_bindgen(js_name = rewardsDeleteRequest, unchecked_return_type = "HttpRequest")]
+pub fn rewards_delete_request(token: &str, id: &str, endpoints: Option<EndpointsArg>) -> Result<JsValue, JsValue> {
+    result(rewards::delete_request(&to_endpoints(endpoints)?, token, id))
+}
+
+/// Redemptions, grouped by reward: of one reward or all, with one `status`
+/// (Kick's default `'pending'`), from `cursor`.
+#[wasm_bindgen(js_name = rewardsRedemptionsRequest, unchecked_return_type = "HttpRequest")]
+pub fn rewards_redemptions_request(
+    token: &str,
+    reward_id: Option<String>,
+    status: Option<RedemptionStatusArg>,
+    cursor: Option<String>,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    let status = or_undefined(status);
+    let status = match status.as_string().as_deref() {
+        _ if nothing(&status) => None,
+        Some("pending") => Some(rewards::RedemptionStatus::Pending),
+        Some("accepted") => Some(rewards::RedemptionStatus::Accepted),
+        Some("rejected") => Some(rewards::RedemptionStatus::Rejected),
+        _ => return Err(type_error("status must be 'pending', 'accepted' or 'rejected'")),
+    };
+    result(rewards::redemptions_request(
+        &to_endpoints(endpoints)?,
+        token,
+        reward_id.as_deref(),
+        status,
+        cursor.as_deref(),
+    ))
+}
+
+/// Redemptions by id, whatever their status.
+#[wasm_bindgen(js_name = rewardsRedemptionsByIdsRequest, unchecked_return_type = "HttpRequest")]
+pub fn rewards_redemptions_by_ids_request(
+    token: &str,
+    ids: StringList,
+    cursor: Option<String>,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    let ids = string_list("ids", &ids)?;
+    result(rewards::redemptions_by_ids_request(&to_endpoints(endpoints)?, token, &refs(&ids), cursor.as_deref()))
+}
+
+/// Reads a `rewardsRedemptionsRequest` or `rewardsRedemptionsByIdsRequest`
+/// answer.
+#[wasm_bindgen(js_name = rewardsParseRedemptions, unchecked_return_type = "RedemptionPage")]
+pub fn rewards_parse_redemptions(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(rewards::parse_redemptions(http_status(&status)?, body))
+}
+
+/// Accepts 1 to 25 pending redemptions; `rewardsParseFailures` reads the
+/// answer.
+#[wasm_bindgen(js_name = rewardsAcceptRequest, unchecked_return_type = "HttpRequest")]
+pub fn rewards_accept_request(
+    token: &str,
+    ids: StringList,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    let ids = string_list("ids", &ids)?;
+    result(rewards::accept_request(&to_endpoints(endpoints)?, token, &refs(&ids)))
+}
+
+/// Rejects 1 to 25 pending redemptions; `rewardsParseFailures` reads the
+/// answer.
+#[wasm_bindgen(js_name = rewardsRejectRequest, unchecked_return_type = "HttpRequest")]
+pub fn rewards_reject_request(
+    token: &str,
+    ids: StringList,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    let ids = string_list("ids", &ids)?;
+    result(rewards::reject_request(&to_endpoints(endpoints)?, token, &refs(&ids)))
+}
+
+/// The redemptions an accept or reject failed for; empty is all done.
+#[wasm_bindgen(js_name = rewardsParseFailures, unchecked_return_type = "FailedRedemption[]")]
+pub fn rewards_parse_failures(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(rewards::parse_failures(http_status(&status)?, body))
+}
+
+/// Starts an ad break of 7 to 90 `seconds`; `id` is a UUID you make up
+/// (`crypto.randomUUID()`).
+#[wasm_bindgen(js_name = adsAdBreakRequest, unchecked_return_type = "HttpRequest")]
+pub fn ads_ad_break_request(
+    token: &str,
+    id: &str,
+    seconds: Num,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    let seconds = u32_arg("seconds", &seconds)?;
+    result(ads::ad_break_request(&to_endpoints(endpoints)?, token, id, seconds))
+}
+
+/// Reads an `adsAdBreakRequest` answer.
+#[wasm_bindgen(js_name = adsParseAdBreak, unchecked_return_type = "AdBreak")]
+pub fn ads_parse_ad_break(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(ads::parse_ad_break(http_status(&status)?, body))
+}
+
+/// The channel's ads: enrolled or not, limits, recent ad breaks.
+#[wasm_bindgen(js_name = adsStatusRequest, unchecked_return_type = "HttpRequest")]
+pub fn ads_status_request(token: &str, endpoints: Option<EndpointsArg>) -> Result<JsValue, JsValue> {
+    result(ads::status_request(&to_endpoints(endpoints)?, token))
+}
+
+/// Reads an `adsStatusRequest` answer.
+#[wasm_bindgen(js_name = adsParseStatus, unchecked_return_type = "AdStatus")]
+pub fn ads_parse_status(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(ads::parse_status(http_status(&status)?, body))
+}
+
+/// Enrolls the channel in ads; `parseDone` reads the answer.
+#[wasm_bindgen(js_name = adsEnrollRequest, unchecked_return_type = "HttpRequest")]
+pub fn ads_enroll_request(token: &str, endpoints: Option<EndpointsArg>) -> Result<JsValue, JsValue> {
+    result(ads::enroll_request(&to_endpoints(endpoints)?, token))
+}
+
+/// Drops reward claims, with an **app** token. `filter`: what is left out
+/// is not filtered.
+#[wasm_bindgen(js_name = dropsClaimsRequest, unchecked_return_type = "HttpRequest")]
+pub fn drops_claims_request(
+    token: &str,
+    filter: Option<ClaimFilterArg>,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    let filter = or_undefined(filter);
+    let filter: drops::ClaimFilter = if nothing(&filter) { Default::default() } else { plain("filter", &filter)? };
+    result(drops::claims_request(&to_endpoints(endpoints)?, token, &filter))
+}
+
+/// Reads a `dropsClaimsRequest` answer.
+#[wasm_bindgen(js_name = dropsParseClaims, unchecked_return_type = "Claims")]
+pub fn drops_parse_claims(status: Num, body: &str) -> Result<JsValue, JsValue> {
+    result(drops::parse_claims(http_status(&status)?, body))
+}
+
+/// Sets 1 to 100 claims' `external_status`; `parseDone` reads the answer.
+#[wasm_bindgen(js_name = dropsUpdateClaimsRequest, unchecked_return_type = "HttpRequest")]
+pub fn drops_update_claims_request(
+    token: &str,
+    updates: ClaimUpdateList,
+    endpoints: Option<EndpointsArg>,
+) -> Result<JsValue, JsValue> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Update {
+        claim_id: String,
+        external_status: String,
+    }
+    if !js_sys::Array::is_array(&updates) {
+        return Err(type_error("updates must be an array of {claim_id, external_status}"));
+    }
+    let list: &js_sys::Array = updates.unchecked_ref();
+    let updates: Vec<Update> =
+        list.iter().enumerate().map(|(i, u)| plain(&format!("updates[{i}]"), &u)).collect::<Result<_, _>>()?;
+    let pairs: Vec<(&str, &str)> = updates.iter().map(|u| (u.claim_id.as_str(), u.external_status.as_str())).collect();
+    result(drops::update_claims_request(&to_endpoints(endpoints)?, token, &pairs))
+}
+
 // ---- Webhooks ----------------------------------------------------------------
 
 /// A body as Kick sent it: text, or the raw bytes.
@@ -813,14 +1624,22 @@ fn body_bytes(value: &JsValue) -> Result<Vec<u8>, JsValue> {
     }
 }
 
-fn header_pair(pair: JsValue) -> Result<(String, String), JsValue> {
+/// A header, or `None` for one that is not Kick's and whose value is not a
+/// string (Node's `set-cookie` is an array): such a header is not read,
+/// whatever it holds. Kick's own must be strings.
+fn header_pair(pair: JsValue) -> Result<Option<(String, String)>, JsValue> {
     if !js_sys::Array::is_array(&pair) {
         return Err(type_error("headers: each must be a [name, value] pair"));
     }
     let pair: js_sys::Array = pair.unchecked_into();
     let name = pair.get(0).as_string().ok_or_else(|| type_error("headers: a name must be a string"))?;
-    let value = pair.get(1).as_string().ok_or_else(|| type_error(&format!("headers: {name} must be a string")))?;
-    Ok((name, value))
+    match pair.get(1).as_string() {
+        Some(value) => Ok(Some((name, value))),
+        None if name.get(..11).is_some_and(|p| p.eq_ignore_ascii_case("kick-event-")) => {
+            Err(type_error(&format!("headers: {name} must be a string")))
+        }
+        None => Ok(None),
+    }
 }
 
 /// `[[name, value]…]`, any iterable of pairs (a fetch `Headers`, a `Map`),
@@ -830,10 +1649,11 @@ fn webhook_headers(value: HeadersArg) -> Result<webhooks::Headers, JsValue> {
     if !value.is_object() {
         return Err(type_error("headers must be [name, value] pairs, a Headers or an object"));
     }
-    let pairs: Vec<(String, String)> = match js_sys::try_iter(&value)? {
+    let pairs: Vec<Option<(String, String)>> = match js_sys::try_iter(&value)? {
         Some(iter) => iter.map(|pair| header_pair(pair?)).collect::<Result<_, _>>()?,
         None => js_sys::Object::entries(value.unchecked_ref()).iter().map(header_pair).collect::<Result<_, _>>()?,
     };
+    let pairs: Vec<(String, String)> = pairs.into_iter().flatten().collect();
     webhooks::Headers::from_pairs(pairs.iter().map(|(a, b)| (a.as_str(), b.as_str()))).map_err(webhook_error)
 }
 

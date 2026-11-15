@@ -1,4 +1,7 @@
-//! Kick's official API, `api.kick.com/public/v1`.
+//! Kick's official API, `api.kick.com/public/v1` and `/public/v2`.
+//!
+//! [`Endpoints::api`] is the host alone (`https://api.kick.com`); every
+//! builder adds its path, version included.
 //!
 //! An app token ([`token_request`]) reads any channel's public data and
 //! subscribes to any channel's webhooks; no permission from the channel is
@@ -6,16 +9,21 @@
 //!
 //! What Kick does that callers should know (`docs/KICK.md` §3):
 //!
-//! - Batches are **50 ids per request**; the builders refuse more, and the
-//!   `*_requests` helpers split a longer list.
+//! - Batches are **50 ids per request** ([`BATCH`]) for `/channels`, **100**
+//!   ([`LIVESTREAMS_BATCH`]) for live streams by user id; the builders refuse
+//!   more, and the `*_requests` helpers split a longer list.
 //! - **An unknown slug fails the whole request** (400): look slugs up one at
 //!   a time, batch by id.
 //! - `viewer_count` refreshes **about once a minute**; polling faster sees the
 //!   same value.
 //! - The API **lags** Kick's own state by seconds: a stream can still be
 //!   listed after it ended, or not yet after its start webhook.
-//! - There is **no livestream id**: a stream is `(channel, started_at)`, and
-//!   `started_at` is string-identical to the status webhook's.
+//! - A stream is identified by `(channel, started_at)`: `started_at` is
+//!   string-identical to the status webhook's. The current livestreams
+//!   endpoints also give a livestream `id` (Kick's spec; not yet recorded).
+//! - `GET /public/v1/livestreams` is deprecated: [`livestreams_request`]
+//!   uses `/public/v1/users/livestreams`, [`livestreams_page_request`]
+//!   `/public/v2/livestreams`, which has no sort.
 //! - No rate-limit headers; back off on 429.
 //!
 //! Every builder that takes a `token` refuses one with a control character
@@ -23,12 +31,30 @@
 
 use crate::http::{self, Endpoints, Error, Method, Request, encode};
 use crate::ids::{ChannelId, UserId};
-use crate::lenient::{array, boolean, get, int, string, uint};
+use crate::lenient::{array, boolean, get, id_string, int, string, uint};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-/// The most ids Kick takes in one request.
+pub mod ads;
+pub mod channels;
+pub mod chat;
+mod common;
+pub mod drops;
+pub mod moderation;
+pub mod rewards;
+
+pub use common::parse_done;
+
+/// The most ids Kick takes in one request where it says nothing else
+/// (`/channels`, [`users_request`], removing subscriptions).
 pub const BATCH: usize = 50;
+
+/// The most user ids [`livestreams_request`] takes (Kick's spec).
+pub const LIVESTREAMS_BATCH: usize = 100;
+
+/// The most categories, and the most languages, [`livestreams_page_request`]
+/// filters by (Kick's spec).
+pub const LIVESTREAMS_FILTERS: usize = 25;
 
 /// An app access token.
 ///
@@ -77,15 +103,76 @@ pub fn parse_token(status: u16, body: &str) -> Result<AppToken, Error> {
 }
 
 fn batch<T>(ids: &[T]) -> Result<(), Error> {
+    batch_of(ids, BATCH)
+}
+
+/// One to `max` ids.
+fn batch_of<T>(ids: &[T], max: usize) -> Result<(), Error> {
     match ids.len() {
         0 => Err(Error::Invalid("no ids".into())),
-        n if n > BATCH => Err(Error::Invalid(format!("{n} ids; Kick takes at most {BATCH}"))),
+        n if n > max => Err(Error::Invalid(format!("{n} ids; Kick takes at most {max}"))),
         _ => Ok(()),
     }
 }
 
+/// `key=a&key=b`: a list as Kick's "multi" parameters take it.
 fn query(key: &str, values: impl IntoIterator<Item = String>) -> String {
     values.into_iter().map(|v| format!("{key}={}", encode(&v))).collect::<Vec<_>>().join("&")
+}
+
+/// `key=a,b`: a list as Kick's "csv" parameters take it, or nothing for an
+/// empty one. A value with a comma is refused: Kick would split it in two.
+fn csv(key: &str, values: impl IntoIterator<Item = String>) -> Result<Option<String>, Error> {
+    let values: Vec<String> = values.into_iter().collect();
+    if let Some(v) = values.iter().find(|v| v.contains(',')) {
+        return Err(Error::Invalid(format!("{key} {v:?} has a comma; Kick splits the list on commas")));
+    }
+    Ok((!values.is_empty())
+        .then(|| format!("{key}={}", values.iter().map(|v| encode(v)).collect::<Vec<_>>().join(","))))
+}
+
+/// `limit` within `1..=max`, as `key=n`; nothing for Kick's default.
+fn bounded(key: &str, n: Option<u32>, max: u32) -> Result<Option<String>, Error> {
+    match n {
+        None => Ok(None),
+        Some(n) if (1..=max).contains(&n) => Ok(Some(format!("{key}={n}"))),
+        Some(n) => Err(Error::Invalid(format!("{key} {n}; Kick takes 1 to {max}"))),
+    }
+}
+
+/// `{api}{path}`, with the query parts that are there.
+fn url(endpoints: &Endpoints, path: &str, parts: impl IntoIterator<Item = Option<String>>) -> String {
+    let q: Vec<String> = parts.into_iter().flatten().filter(|p| !p.is_empty()).collect();
+    match q.is_empty() {
+        true => format!("{}{path}", endpoints.api),
+        false => format!("{}{path}?{}", endpoints.api, q.join("&")),
+    }
+}
+
+/// A list of strings, missing or not as empty.
+fn texts(v: &Value, key: &str) -> Vec<String> {
+    array(v, key).iter().filter_map(|t| t.as_str().map(str::to_owned)).collect()
+}
+
+/// One page of a paginated (`/public/v2`) answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct Page<T> {
+    /// This page.
+    pub data: Vec<T>,
+    /// What to pass as `cursor` for the next page; `None` when Kick gives
+    /// none (missing or empty).
+    pub next_cursor: Option<String>,
+}
+
+/// Kick's paginated envelope, `{"data": [...], "pagination": {"next_cursor"}}`.
+fn page<T>(status: u16, body: &str, item: impl Fn(&Value) -> Option<T>) -> Result<Page<T>, Error> {
+    let v = http::json(status, body)?;
+    let list = get(&v, "data").and_then(Value::as_array).ok_or_else(|| Error::shape("`data` is not a list"))?;
+    Ok(Page {
+        data: list.iter().filter_map(item).collect(),
+        next_cursor: get(&v, "pagination").and_then(|p| string(p, "next_cursor")).filter(|c| !c.is_empty()),
+    })
 }
 
 /// A category, as the API gives it.
@@ -98,121 +185,298 @@ pub struct Category {
     pub name: Option<String>,
     /// Its picture.
     pub thumbnail: Option<String>,
+    /// Its tags: only [`categories_request`] gives them; empty elsewhere.
+    pub tags: Vec<String>,
 }
 
 impl Category {
     fn from(v: Option<&Value>) -> Option<Self> {
         let v = v?;
-        Some(Category { id: uint(v, "id"), name: string(v, "name"), thumbnail: string(v, "thumbnail") })
+        Some(Category {
+            id: uint(v, "id"),
+            name: string(v, "name"),
+            thumbnail: string(v, "thumbnail"),
+            tags: texts(v, "tags"),
+        })
     }
 }
 
-/// A live stream, from `/livestreams`.
+/// A live stream, from [`livestreams_request`] or [`livestreams_page_request`].
+///
+/// One type reads both of Kick's shapes: the deprecated
+/// `/public/v1/livestreams` (flat, recorded) and the current one
+/// (`endpoints.LivestreamV2` in Kick's spec, not yet recorded), which nests
+/// the broadcaster and the slug. Fields keep their old names; the comment on
+/// each says where the current shape has it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct Livestream {
-    /// The broadcaster's user id.
+    /// The broadcaster's user id (`broadcaster_user.id`).
     pub broadcaster_user_id: UserId,
-    /// The channel id (the one the `channel.<id>` feeds use).
+    /// The livestream's id, a UUID. Only the current shape has it.
+    pub id: Option<String>,
+    /// The channel id (the one the `channel.<id>` feeds use). Only the old
+    /// shape had it.
     pub channel_id: Option<ChannelId>,
-    /// The slug.
+    /// The slug (`channel.slug`).
     pub slug: Option<String>,
+    /// The broadcaster's username (`broadcaster_user.username`). Only the
+    /// current shape has it.
+    pub username: Option<String>,
     /// Viewers now (refreshed about once a minute).
     pub viewer_count: Option<i64>,
     /// When it started, `YYYY-MM-DDTHH:MM:SSZ`: with the channel, the stream's
     /// identity.
     pub started_at: Option<String>,
-    /// The title.
+    /// The title (`title`).
     pub stream_title: Option<String>,
     /// The category.
     pub category: Option<Category>,
-    /// The language.
+    /// The language (`language_code`).
     pub language: Option<String>,
+    /// The stream's tags (the old shape's `custom_tags`, never seen filled).
+    pub tags: Vec<String>,
     /// Marked mature.
     pub has_mature_content: Option<bool>,
     /// The stream's thumbnail.
     pub thumbnail: Option<String>,
-    /// The channel's picture.
+    /// The broadcaster's picture (`broadcaster_user.profile_picture`).
     pub profile_picture: Option<String>,
 }
 
-/// Live streams of up to [`BATCH`] broadcasters. Offline ones are simply
-/// missing from the answer.
+impl Livestream {
+    fn from(s: &Value) -> Option<Self> {
+        let user = get(s, "broadcaster_user");
+        let of_user = |key: &str| user.and_then(|u| string(u, key));
+        let tags = match texts(s, "tags") {
+            t if t.is_empty() => texts(s, "custom_tags"),
+            t => t,
+        };
+        Some(Livestream {
+            broadcaster_user_id: UserId(uint(s, "broadcaster_user_id").or_else(|| user.and_then(|u| uint(u, "id")))?),
+            id: id_string(s, "id"),
+            channel_id: uint(s, "channel_id").map(ChannelId),
+            slug: string(s, "slug").or_else(|| get(s, "channel").and_then(|c| string(c, "slug"))),
+            username: of_user("username"),
+            viewer_count: int(s, "viewer_count"),
+            started_at: string(s, "started_at"),
+            stream_title: string(s, "stream_title").or_else(|| string(s, "title")),
+            category: Category::from(get(s, "category")),
+            language: string(s, "language").or_else(|| string(s, "language_code")),
+            tags,
+            has_mature_content: boolean(s, "has_mature_content"),
+            thumbnail: string(s, "thumbnail"),
+            profile_picture: string(s, "profile_picture").or_else(|| of_user("profile_picture")),
+        })
+    }
+}
+
+/// Live streams of up to [`LIVESTREAMS_BATCH`] broadcasters, by user id
+/// (`GET /public/v1/users/livestreams`). Offline ones are simply missing
+/// from the answer.
 pub fn livestreams_request(endpoints: &Endpoints, token: &str, ids: &[UserId]) -> Result<Request, Error> {
-    batch(ids)?;
-    let q = query("broadcaster_user_id", ids.iter().map(|i| i.to_string()));
-    Request::new(Method::Get, format!("{}/livestreams?{q}", endpoints.api)).bearer(token)
+    batch_of(ids, LIVESTREAMS_BATCH)?;
+    let q = query("user_id", ids.iter().map(|i| i.to_string()));
+    Request::new(Method::Get, url(endpoints, "/public/v1/users/livestreams", [Some(q)])).bearer(token)
 }
 
-/// [`livestreams_request`] for any number of ids, [`BATCH`] at a time. No
-/// ids, no requests.
+/// [`livestreams_request`] for any number of ids, [`LIVESTREAMS_BATCH`] at a
+/// time. No ids, no requests.
 pub fn livestreams_requests(endpoints: &Endpoints, token: &str, ids: &[UserId]) -> Result<Vec<Request>, Error> {
-    ids.chunks(BATCH).map(|c| livestreams_request(endpoints, token, c)).collect()
+    ids.chunks(LIVESTREAMS_BATCH).map(|c| livestreams_request(endpoints, token, c)).collect()
 }
 
-/// How to sort a top-streams query.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Sort {
-    /// Most viewers first.
-    ViewerCount,
-    /// Newest first.
-    StartedAt,
-}
-
-/// The top live streams overall, or in a category or language: up to 100.
-pub fn top_livestreams_request(
+/// One page of the streams live now (`GET /public/v2/livestreams`), in up to
+/// [`LIVESTREAMS_FILTERS`] categories and languages (none: all of them).
+/// `limit` is 1 to 1000 (Kick's default: 100); `cursor` is a previous page's
+/// [`Page::next_cursor`] (`None` or empty: the first page).
+///
+/// There is no sort: Kick lists streams oldest first. For the most watched,
+/// read every page and sort by `viewer_count`.
+pub fn livestreams_page_request(
     endpoints: &Endpoints,
     token: &str,
-    category_id: Option<u64>,
-    language: Option<&str>,
-    sort: Sort,
-    limit: u32,
+    category_ids: &[u64],
+    language_codes: &[&str],
+    limit: Option<u32>,
+    cursor: Option<&str>,
 ) -> Result<Request, Error> {
-    if !(1..=100).contains(&limit) {
-        return Err(Error::Invalid(format!("limit {limit}; Kick takes 1 to 100")));
+    for (what, n) in [("categories", category_ids.len()), ("languages", language_codes.len())] {
+        if n > LIVESTREAMS_FILTERS {
+            return Err(Error::Invalid(format!("{n} {what}; Kick takes at most {LIVESTREAMS_FILTERS}")));
+        }
     }
-    let mut q = vec![
-        format!("limit={limit}"),
-        format!(
-            "sort={}",
-            match sort {
-                Sort::ViewerCount => "viewer_count",
-                Sort::StartedAt => "started_at",
-            }
-        ),
+    let parts = [
+        Some(query("category_id", category_ids.iter().map(u64::to_string))),
+        Some(query("language_code", language_codes.iter().map(|l| l.to_string()))),
+        bounded("limit", limit, 1000)?,
+        cursor.filter(|c| !c.is_empty()).map(|c| format!("cursor={}", encode(c))),
     ];
-    if let Some(c) = category_id {
-        q.push(format!("category_id={c}"));
-    }
-    if let Some(l) = language {
-        q.push(format!("language={}", encode(l)));
-    }
-    Request::new(Method::Get, format!("{}/livestreams?{}", endpoints.api, q.join("&"))).bearer(token)
+    Request::new(Method::Get, url(endpoints, "/public/v2/livestreams", parts)).bearer(token)
 }
 
-/// Reads a `/livestreams` answer. Offline is `[]`, not an error.
+/// Reads a [`livestreams_request`] answer, or the streams in a
+/// [`livestreams_page_request`] answer (without its cursor: see
+/// [`parse_livestreams_page`]). Also reads the deprecated
+/// `/public/v1/livestreams`' answers. Offline is `[]`, not an error.
 pub fn parse_livestreams(status: u16, body: &str) -> Result<Vec<Livestream>, Error> {
+    let data = http::data(status, body)?;
+    let list = data.as_array().ok_or_else(|| Error::shape("`data` is not a list"))?;
+    Ok(list.iter().filter_map(Livestream::from).collect())
+}
+
+/// Reads a [`livestreams_page_request`] answer: the streams and the next
+/// page's cursor.
+pub fn parse_livestreams_page(status: u16, body: &str) -> Result<Page<Livestream>, Error> {
+    page(status, body, Livestream::from)
+}
+
+/// How many streams are live now, from [`livestream_stats_request`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct LivestreamStats {
+    /// Streams live on Kick.
+    pub total_count: Option<i64>,
+}
+
+/// How many streams are live on Kick (`GET /public/v1/livestreams/stats`).
+/// An app or a user token.
+pub fn livestream_stats_request(endpoints: &Endpoints, token: &str) -> Result<Request, Error> {
+    Request::new(Method::Get, url(endpoints, "/public/v1/livestreams/stats", [])).bearer(token)
+}
+
+/// Reads a [`livestream_stats_request`] answer.
+pub fn parse_livestream_stats(status: u16, body: &str) -> Result<LivestreamStats, Error> {
+    let data = http::data(status, body)?;
+    if !data.is_object() {
+        return Err(Error::shape("`data` is not an object"));
+    }
+    Ok(LivestreamStats { total_count: int(&data, "total_count") })
+}
+
+/// A user, from [`users_request`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct User {
+    /// Their id.
+    pub user_id: UserId,
+    /// Their username.
+    pub name: Option<String>,
+    /// Their picture.
+    pub profile_picture: Option<String>,
+    /// Their email: only for a user token with `user:read`, for its own user.
+    pub email: Option<String>,
+}
+
+/// Users by id, up to [`BATCH`] (`GET /public/v1/users`), with an app or a
+/// user token. No ids, with a user token: the token's own user.
+pub fn users_request(endpoints: &Endpoints, token: &str, ids: &[UserId]) -> Result<Request, Error> {
+    if ids.len() > BATCH {
+        return Err(Error::Invalid(format!("{} ids; at most {BATCH}", ids.len())));
+    }
+    let q = query("id", ids.iter().map(|i| i.to_string()));
+    Request::new(Method::Get, url(endpoints, "/public/v1/users", [Some(q)])).bearer(token)
+}
+
+/// Reads a [`users_request`] answer.
+pub fn parse_users(status: u16, body: &str) -> Result<Vec<User>, Error> {
     let data = http::data(status, body)?;
     let list = data.as_array().ok_or_else(|| Error::shape("`data` is not a list"))?;
     Ok(list
         .iter()
-        .filter_map(|s| {
-            Some(Livestream {
-                broadcaster_user_id: UserId(uint(s, "broadcaster_user_id")?),
-                channel_id: uint(s, "channel_id").map(ChannelId),
-                slug: string(s, "slug"),
-                viewer_count: int(s, "viewer_count"),
-                started_at: string(s, "started_at"),
-                stream_title: string(s, "stream_title"),
-                category: Category::from(get(s, "category")),
-                language: string(s, "language"),
-                has_mature_content: boolean(s, "has_mature_content"),
-                thumbnail: string(s, "thumbnail"),
-                profile_picture: string(s, "profile_picture"),
+        .filter_map(|u| {
+            Some(User {
+                user_id: UserId(uint(u, "user_id")?),
+                name: string(u, "name"),
+                profile_picture: string(u, "profile_picture"),
+                email: string(u, "email"),
             })
         })
         .collect())
+}
+
+/// One page of categories (`GET /public/v2/categories`): by `names` and
+/// `tags`, or by `ids`; none of them, all categories. `limit` is 1 to 1000
+/// (Kick's default: 25); `cursor` is a previous page's
+/// [`Page::next_cursor`]. Kick takes each list comma-separated, so a name or
+/// tag with a comma is refused.
+pub fn categories_request(
+    endpoints: &Endpoints,
+    token: &str,
+    names: &[&str],
+    tags: &[&str],
+    ids: &[u64],
+    limit: Option<u32>,
+    cursor: Option<&str>,
+) -> Result<Request, Error> {
+    let parts = [
+        csv("name", names.iter().map(|n| n.to_string()))?,
+        csv("tag", tags.iter().map(|t| t.to_string()))?,
+        csv("id", ids.iter().map(u64::to_string))?,
+        bounded("limit", limit, 1000)?,
+        cursor.filter(|c| !c.is_empty()).map(|c| format!("cursor={}", encode(c))),
+    ];
+    Request::new(Method::Get, url(endpoints, "/public/v2/categories", parts)).bearer(token)
+}
+
+/// Reads a [`categories_request`] answer.
+pub fn parse_categories(status: u16, body: &str) -> Result<Page<Category>, Error> {
+    page(status, body, |c| Category::from(Some(c)))
+}
+
+/// One place on a Kicks leaderboard.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct KicksEntry {
+    /// The gifter.
+    pub user_id: UserId,
+    /// Their username.
+    pub username: Option<String>,
+    /// Their place, from 1.
+    pub rank: Option<i64>,
+    /// Kicks they gave.
+    pub gifted_amount: Option<i64>,
+}
+
+/// A channel's Kicks leaderboards, from [`kicks_leaderboard_request`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct KicksLeaderboard {
+    /// Of all time.
+    pub lifetime: Vec<KicksEntry>,
+    /// This month.
+    pub month: Vec<KicksEntry>,
+    /// This week.
+    pub week: Vec<KicksEntry>,
+}
+
+/// The top `top` Kicks gifters (1 to 100; Kick's default: 10) of the
+/// token's own channel (`GET /public/v1/kicks/leaderboard`). Needs a user
+/// token with `kicks:read`; an app token has no channel of its own.
+pub fn kicks_leaderboard_request(endpoints: &Endpoints, token: &str, top: Option<u32>) -> Result<Request, Error> {
+    Request::new(Method::Get, url(endpoints, "/public/v1/kicks/leaderboard", [bounded("top", top, 100)?])).bearer(token)
+}
+
+/// Reads a [`kicks_leaderboard_request`] answer.
+pub fn parse_kicks_leaderboard(status: u16, body: &str) -> Result<KicksLeaderboard, Error> {
+    let data = http::data(status, body)?;
+    if !data.is_object() {
+        return Err(Error::shape("`data` is not an object"));
+    }
+    let board = |key: &str| -> Vec<KicksEntry> {
+        array(&data, key)
+            .iter()
+            .filter_map(|e| {
+                Some(KicksEntry {
+                    user_id: UserId(uint(e, "user_id")?),
+                    username: string(e, "username"),
+                    rank: int(e, "rank"),
+                    gifted_amount: int(e, "gifted_amount"),
+                })
+            })
+            .collect()
+    };
+    Ok(KicksLeaderboard { lifetime: board("lifetime"), month: board("month"), week: board("week") })
 }
 
 /// A channel's live state, inside [`Channel`].
@@ -231,7 +495,7 @@ pub struct StreamState {
     pub tags: Vec<String>,
 }
 
-/// A channel, from `/channels`.
+/// A channel, from `/public/v1/channels`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct Channel {
@@ -262,7 +526,7 @@ pub struct Channel {
 pub fn channels_by_ids_request(endpoints: &Endpoints, token: &str, ids: &[UserId]) -> Result<Request, Error> {
     batch(ids)?;
     let q = query("broadcaster_user_id", ids.iter().map(|i| i.to_string()));
-    Request::new(Method::Get, format!("{}/channels?{q}", endpoints.api)).bearer(token)
+    Request::new(Method::Get, format!("{}/public/v1/channels?{q}", endpoints.api)).bearer(token)
 }
 
 /// Channels by slug, up to [`BATCH`]. One unknown slug fails the whole
@@ -271,10 +535,10 @@ pub fn channels_by_ids_request(endpoints: &Endpoints, token: &str, ids: &[UserId
 pub fn channels_by_slugs_request(endpoints: &Endpoints, token: &str, slugs: &[&str]) -> Result<Request, Error> {
     batch(slugs)?;
     let q = query("slug", slugs.iter().map(|s| s.to_string()));
-    Request::new(Method::Get, format!("{}/channels?{q}", endpoints.api)).bearer(token)
+    Request::new(Method::Get, format!("{}/public/v1/channels?{q}", endpoints.api)).bearer(token)
 }
 
-/// Reads a `/channels` answer.
+/// Reads a `/public/v1/channels` answer.
 pub fn parse_channels(status: u16, body: &str) -> Result<Vec<Channel>, Error> {
     let data = http::data(status, body)?;
     let list = data.as_array().ok_or_else(|| Error::shape("`data` is not a list"))?;
@@ -293,7 +557,7 @@ pub fn parse_channels(status: u16, body: &str) -> Result<Vec<Channel>, Error> {
                     viewer_count: int(s, "viewer_count"),
                     start_time: string(s, "start_time"),
                     language: string(s, "language"),
-                    tags: array(s, "tags").iter().filter_map(|t| t.as_str().map(str::to_owned)).collect(),
+                    tags: texts(s, "tags"),
                 }),
                 active_subscribers_count: int(c, "active_subscribers_count"),
                 active_gifted_subscribers_count: int(c, "active_gifted_subscribers_count"),
@@ -305,7 +569,7 @@ pub fn parse_channels(status: u16, body: &str) -> Result<Vec<Channel>, Error> {
 
 /// The PEM key webhooks are signed with. Needs no token.
 pub fn public_key_request(endpoints: &Endpoints) -> Request {
-    Request::new(Method::Get, format!("{}/public-key", endpoints.api))
+    Request::new(Method::Get, format!("{}/public/v1/public-key", endpoints.api))
 }
 
 /// The PEM from a [`public_key_request`] answer.
@@ -340,14 +604,14 @@ pub fn subscribe_request(
         return Err(Error::Invalid("no events".into()));
     }
     let events: Vec<Value> = events.iter().map(|(name, version)| json!({ "name": name, "version": version })).collect();
-    Ok(Request::new(Method::Post, format!("{}/events/subscriptions", endpoints.api))
+    Ok(Request::new(Method::Post, format!("{}/public/v1/events/subscriptions", endpoints.api))
         .bearer(token)?
         .json(&json!({ "broadcaster_user_id": broadcaster.0, "events": events, "method": "webhook" })))
 }
 
 /// Every subscription the app has.
 pub fn subscriptions_request(endpoints: &Endpoints, token: &str) -> Result<Request, Error> {
-    Request::new(Method::Get, format!("{}/events/subscriptions", endpoints.api)).bearer(token)
+    Request::new(Method::Get, format!("{}/public/v1/events/subscriptions", endpoints.api)).bearer(token)
 }
 
 /// Reads [`subscriptions_request`] and [`subscribe_request`] answers.
@@ -373,7 +637,7 @@ pub fn unsubscribe_requests(endpoints: &Endpoints, token: &str, ids: &[&str]) ->
     ids.chunks(BATCH)
         .map(|c| {
             let q = query("id", c.iter().map(|s| s.to_string()));
-            Request::new(Method::Delete, format!("{}/events/subscriptions?{q}", endpoints.api)).bearer(token)
+            Request::new(Method::Delete, format!("{}/public/v1/events/subscriptions?{q}", endpoints.api)).bearer(token)
         })
         .collect()
 }
@@ -383,19 +647,85 @@ mod tests {
     use super::*;
 
     #[test]
-    fn batches_are_capped_at_fifty() {
+    fn batches_are_capped() {
         let e = Endpoints::default();
-        let ids: Vec<UserId> = (1..=120).map(UserId).collect();
-        assert!(livestreams_request(&e, "t", &ids).is_err());
+        let ids: Vec<UserId> = (1..=250).map(UserId).collect();
+        assert!(livestreams_request(&e, "t", &ids[..101]).is_err());
+        assert!(livestreams_request(&e, "t", &ids[..100]).is_ok());
         assert!(livestreams_request(&e, "t", &[]).is_err());
         let reqs = livestreams_requests(&e, "t", &ids).unwrap();
         assert_eq!(reqs.len(), 3);
-        assert!(reqs[0].url.ends_with("broadcaster_user_id=50"));
+        assert!(reqs[0].url.starts_with("https://api.kick.com/public/v1/users/livestreams?user_id=1&user_id=2&"));
+        assert!(reqs[0].url.ends_with("user_id=100"));
         assert!(reqs[0].headers.contains(&("authorization".into(), "Bearer t".into())));
+        assert_eq!(livestreams_requests(&e, "t", &[]).unwrap(), vec![]);
+        assert!(channels_by_ids_request(&e, "t", &ids[..51]).is_err());
+        assert!(users_request(&e, "t", &ids[..51]).is_err());
         let ids: Vec<String> = (0..120).map(|i| format!("s{i}")).collect();
         let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
         assert_eq!(unsubscribe_requests(&e, "t", &refs).unwrap().len(), 3);
-        assert_eq!(livestreams_requests(&e, "t", &[]).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn paths_carry_their_version() {
+        let e = Endpoints::default().with_api("http://localhost:9");
+        let at = |r: Result<Request, Error>| r.unwrap().url;
+        assert_eq!(at(Ok(public_key_request(&e))), "http://localhost:9/public/v1/public-key");
+        assert_eq!(
+            at(channels_by_ids_request(&e, "t", &[UserId(1)])),
+            "http://localhost:9/public/v1/channels?broadcaster_user_id=1"
+        );
+        assert_eq!(at(subscriptions_request(&e, "t")), "http://localhost:9/public/v1/events/subscriptions");
+        assert_eq!(at(livestream_stats_request(&e, "t")), "http://localhost:9/public/v1/livestreams/stats");
+        assert_eq!(
+            at(livestreams_page_request(&e, "t", &[], &[], None, None)),
+            "http://localhost:9/public/v2/livestreams"
+        );
+        assert_eq!(
+            at(categories_request(&e, "t", &[], &[], &[], None, None)),
+            "http://localhost:9/public/v2/categories"
+        );
+        assert_eq!(at(users_request(&e, "t", &[])), "http://localhost:9/public/v1/users", "the token's own user");
+        assert_eq!(at(users_request(&e, "t", &[UserId(1), UserId(2)])), "http://localhost:9/public/v1/users?id=1&id=2");
+        assert_eq!(at(kicks_leaderboard_request(&e, "t", None)), "http://localhost:9/public/v1/kicks/leaderboard");
+        assert_eq!(
+            at(kicks_leaderboard_request(&e, "t", Some(3))),
+            "http://localhost:9/public/v1/kicks/leaderboard?top=3"
+        );
+    }
+
+    #[test]
+    fn livestream_pages_filter_without_sorting() {
+        let e = Endpoints::default();
+        let r = livestreams_page_request(&e, "t", &[1, 2], &["en", "pt-BR"], Some(1000), Some("a b")).unwrap();
+        assert_eq!(
+            r.url,
+            "https://api.kick.com/public/v2/livestreams?category_id=1&category_id=2&language_code=en&language_code=pt-BR&limit=1000&cursor=a%20b"
+        );
+        assert!(!livestreams_page_request(&e, "t", &[], &[], None, Some("")).unwrap().url.contains("cursor"));
+        assert!(livestreams_page_request(&e, "t", &[], &[], Some(0), None).is_err());
+        assert!(livestreams_page_request(&e, "t", &[], &[], Some(1001), None).is_err());
+        let many: Vec<u64> = (1..=26).collect();
+        assert!(livestreams_page_request(&e, "t", &many, &[], None, None).is_err());
+        assert!(livestreams_page_request(&e, "t", &many[..25], &[], None, None).is_ok());
+        assert!(livestreams_page_request(&e, "t", &[], &["en"; 26], None, None).is_err());
+    }
+
+    #[test]
+    fn category_lists_are_comma_separated() {
+        let e = Endpoints::default();
+        let r =
+            categories_request(&e, "t", &["Just Chatting", "Slots & Casino"], &["FPS"], &[7, 8], Some(5), Some("c"))
+                .unwrap();
+        assert_eq!(
+            r.url,
+            "https://api.kick.com/public/v2/categories?name=Just%20Chatting,Slots%20%26%20Casino&tag=FPS&id=7,8&limit=5&cursor=c"
+        );
+        assert!(categories_request(&e, "t", &["a,b"], &[], &[], None, None).is_err());
+        assert!(categories_request(&e, "t", &[], &["x,y"], &[], None, None).is_err());
+        assert!(categories_request(&e, "t", &[], &[], &[], Some(1001), None).is_err());
+        assert!(kicks_leaderboard_request(&e, "t", Some(101)).is_err());
+        assert!(kicks_leaderboard_request(&e, "t", Some(0)).is_err());
     }
 
     #[test]
@@ -406,8 +736,12 @@ mod tests {
         assert!(subscriptions_request(&e, bad).is_err());
         assert!(unsubscribe_requests(&e, bad, &["a"]).is_err());
         assert!(channels_by_slugs_request(&e, bad, &["somechannel"]).is_err());
-        assert!(top_livestreams_request(&e, bad, None, None, Sort::ViewerCount, 10).is_err());
+        assert!(livestreams_page_request(&e, bad, &[], &[], None, None).is_err());
         assert!(subscribe_request(&e, bad, UserId(1), &[("channel.followed", 1)]).is_err());
+        assert!(users_request(&e, bad, &[]).is_err());
+        assert!(categories_request(&e, bad, &[], &[], &[], None, None).is_err());
+        assert!(livestream_stats_request(&e, bad).is_err());
+        assert!(kicks_leaderboard_request(&e, bad, None).is_err());
     }
 
     #[test]
@@ -430,5 +764,17 @@ mod tests {
     fn offline_is_an_empty_list() {
         assert_eq!(parse_livestreams(200, r#"{"data":[],"message":"OK"}"#).unwrap(), vec![]);
         assert_eq!(parse_livestreams(400, r#"{"message":"Invalid request"}"#).unwrap_err().status(), Some(400));
+        let last =
+            parse_livestreams_page(200, r#"{"data":[],"message":"OK","pagination":{"next_cursor":""}}"#).unwrap();
+        assert_eq!((last.data, last.next_cursor), (vec![], None));
+        assert!(parse_livestreams_page(200, r#"{"message":"OK"}"#).is_err());
+    }
+
+    #[test]
+    fn objects_are_required_where_kick_sends_one() {
+        assert!(parse_livestream_stats(200, r#"{"data":[]}"#).is_err());
+        assert!(parse_kicks_leaderboard(200, r#"{"data":null}"#).is_err());
+        let board = parse_kicks_leaderboard(200, r#"{"data":{"week":[{"user_id":"5","rank":1},{"rank":2}]}}"#).unwrap();
+        assert_eq!((board.week.len(), board.week[0].user_id, board.lifetime.len()), (1, UserId(5), 0));
     }
 }

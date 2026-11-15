@@ -1,0 +1,19 @@
+{
+  "kind": "docs",
+  "request": {
+    "json": {
+      "broadcaster_user_id": 123,
+      "duration": 10,
+      "reason": "Not vibing",
+      "user_id": 333
+    },
+    "method": "POST",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/moderation/bans"
+  },
+  "response": {
+    "body": "{\"data\":{},\"message\":\"OK\"}",
+    "status": 200
+  },
+  "source": "Kick's spec (api.kick.com/swagger/doc.json), its example values, transcribed 2026-11-15: not a recording"
+}

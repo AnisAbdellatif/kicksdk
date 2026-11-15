@@ -32,10 +32,16 @@ test('counts and times are checked too', () => {
   assert.throws(() => sdk.timeoutRequest('s', 'somechannel', 'someone', 1.5), RangeError);
   assert.throws(() => sdk.timeoutRequest('s', 'somechannel', 'someone', 2 ** 32 + 5), RangeError);
   assert.equal(sdk.timeoutRequest('s', 'somechannel', 'someone', 10).method, 'POST');
-  assert.throws(() => sdk.topLivestreamsRequest('t', null, null, null, -1), RangeError);
-  assert.throws(() => sdk.topLivestreamsRequest('t', null, null, 'loudest'), RangeError);
-  assert.throws(() => sdk.topLivestreamsRequest('t', '5'), TypeError);
-  assert.match(sdk.topLivestreamsRequest('t', 5, null, 'started_at', 10).url, /limit=10/);
+  assert.throws(() => sdk.livestreamsPageRequest('t', null, null, -1), RangeError);
+  assert.throws(() => sdk.livestreamsPageRequest('t', null, null, 1001), /limit 1001/);
+  assert.throws(() => sdk.livestreamsPageRequest('t', '5'), TypeError);
+  assert.throws(() => sdk.livestreamsPageRequest('t', ['5']), /categoryIds\[0\]/);
+  assert.throws(() => sdk.livestreamsPageRequest('t', null, 'en'), TypeError);
+  assert.throws(() => sdk.livestreamsPageRequest('t', null, [7]), /languageCodes\[0\]/);
+  assert.equal(
+    sdk.livestreamsPageRequest('t', [5], ['en'], 10, 'c').url,
+    'https://api.kick.com/public/v2/livestreams?category_id=5&language_code=en&limit=10&cursor=c'
+  );
   assert.throws(() => sdk.subscribeRequest('t', 1, [{ name: 'channel.followed', version: 1.5 }]), RangeError);
   assert.throws(() => sdk.subscribeRequest('t', 1, [{ version: 1 }]), TypeError);
   assert.throws(() => sdk.subscribeRequest('t', -1, [{ name: 'channel.followed' }]), RangeError);
@@ -62,7 +68,7 @@ test('every number must be a number: no string, boolean or BigInt is coerced', (
   const calls = {
     minutes: (v) => sdk.timeoutRequest('s', 'somechannel', 'someone', v),
     'pin minutes': (v) => sdk.pinRequest('s', 'somechannel', {}, v),
-    limit: (v) => sdk.topLivestreamsRequest('t', null, null, null, v),
+    limit: (v) => sdk.livestreamsPageRequest('t', null, null, v),
     code: (v) => sdk.retryAfterMs(v),
     status: (v) => sdk.parseChannel(v, '{}'),
     'token status': (v) => sdk.parseToken(v, '{}'),
@@ -76,8 +82,8 @@ test('every number must be a number: no string, boolean or BigInt is coerced', (
   for (const [what, call] of Object.entries(calls)) {
     for (const bad of notNumbers) assert.throws(() => call(bad), TypeError, `${what}: ${String(bad)}`);
   }
-  // Left out, an optional number keeps its default.
-  assert.match(sdk.topLivestreamsRequest('t', null, null, null, undefined).url, /limit=100/);
+  // Left out, an optional number keeps its default (Kick's, for a limit).
+  assert.doesNotMatch(sdk.livestreamsPageRequest('t', null, null, undefined).url, /limit=/);
   assert.equal(new sdk.Backoff(undefined, null).nextDelay(), 1000);
   // A status is 0 to 65535, not cut down to 16 bits (65736 would be 200).
   assert.throws(() => sdk.parseChannel(65_736, '{}'), RangeError);
@@ -97,6 +103,18 @@ test('endpoints: undefined or left out keeps Kick, a typo throws', () => {
   const local = sdk.tokenRequest('c', { realtime: 'http://localhost:9/rt' });
   assert.equal(local.url, 'http://localhost:9/rt/auth/connection');
   assert.throws(() => sdk.tokenRequest('c', { realtme: 'http://x' }), /unknown key `realtme`/);
+  // A typo is one whatever its value, as in every other binding.
+  assert.throws(() => sdk.tokenRequest('c', { realtme: undefined }), /unknown key `realtme`/);
+  assert.throws(() => sdk.tokenRequest('c', { realtme: null }), /unknown key `realtme`/);
   assert.throws(() => sdk.tokenRequest('c', { realtime: 5 }), TypeError);
   assert.throws(() => sdk.tokenRequest('c', 'http://x'), TypeError);
+});
+
+test('a result with an integer above Number.MAX_SAFE_INTEGER throws rather than rounds', () => {
+  const message = (chatroomId) =>
+    `{"id":"m","chatroom_id":${chatroomId},"content":"a","type":"message","created_at":"2026-10-13T04:03:25+00:00",` +
+    '"sender":{"id":1,"username":"u","slug":"u","identity":{"color":"#fff","badges":[]}}}';
+  const name = 'App\\Events\\ChatMessageEvent';
+  assert.equal(sdk.parseEvent(name, message('9007199254740991')).chatroom_id, Number.MAX_SAFE_INTEGER);
+  assert.throws(() => sdk.parseEvent(name, message('18014398509481985')), /can't be represented as a JavaScript number/);
 });

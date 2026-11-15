@@ -2,6 +2,134 @@
 
 ## Unreleased
 
+Kick's public API, brought up to date with its docs and spec (2026-11-15).
+The new endpoints and event types follow Kick's documented examples
+(`fixtures/docs/`), not recordings: expect corrections once they are
+recorded.
+
+### Public API
+- **Breaking:** `Endpoints.api` is `https://api.kick.com`, with no
+  version; each path carries its own (`/public/v1/…`, `/public/v2/…`).
+  Drop `/public/v1` from an `api` override.
+- **Breaking:** Kick deprecated `GET /public/v1/livestreams`.
+  `livestreams_request(s)` now use `GET /public/v1/users/livestreams`,
+  100 ids per request (`LIVESTREAMS_BATCH`). `top_livestreams_request` and
+  `Sort` are removed; `livestreams_page_request` and
+  `parse_livestreams_page` (`GET /public/v2/livestreams`: categories and
+  language codes as lists, cursor pages, no sort) replace them in every
+  binding.
+- `Livestream` reads both the v1 and v2 shapes and gains `id` (the
+  livestream's own id, new in v2), `username` and `tags`; `channel_id`
+  comes from v1 answers only. `Category` gains `tags`. New `Page<T>`.
+- New reads: users (`/users`), categories v2, livestream stats, the Kicks
+  leaderboard; `parse_done` for answers that carry nothing.
+- New user-token actions, the official versions of what `website` does
+  with a browser session: `public_api::chat` (send as user or bot, reply,
+  delete), `moderation` (ban, timeout, unban), `channels` (edit title,
+  category, tags), `rewards` (channel point rewards and redemptions:
+  list, create, update, delete, accept, reject), `ads` (ad breaks,
+  status, enroll), and `drops` (claims, with the organization's app
+  token). `http::Method::Patch`.
+
+### Bindings
+- Every binding exposes all of the above (`api_table.py`: 90 functions,
+  none missing): JavaScript prefixes the new modules' functions with the
+  module (`oauthAuthorizeUrl`, `chatSendRequest`, `rewardsParseRedemptions`;
+  the new reads stay plain: `usersRequest`); Python has `kicksdk.oauth`,
+  `chat`, `moderation`, `channels`, `rewards`, `ads`, `drops`; Dart the
+  classes `OAuth`, `Chat`, `Moderation`, `Channels`, `Rewards`, `Ads`,
+  `Drops`; Elixir `Kicksdk.OAuth`, `Kicksdk.Chat` and so on. Each has
+  `newPkce`/`newState` (`new_pkce`/`new_state`) drawing from the platform's
+  CSPRNG (`crypto.getRandomValues`, `secrets`, `Random.secure`,
+  `:crypto.strong_rand_bytes`).
+- A status error now carries the start of Kick's answer, which often says
+  why (`CHANNEL_IS_NOT_LIVE`): in the message through `dispatch` (C, Dart,
+  Python), and in JavaScript as `excerpt` and in the message. The Elixir
+  NIF already passed it on.
+- `Request`'s `Debug` hides a `token` in the URL's query, as
+  `oauth::revoke_request` sends it. Python's `Request` `repr` now hides
+  what the core's `Debug` hides (it showed every token and secret), and
+  Dart's `KickRequest.toString()` the query's `token`. The fields keep the
+  real values, for sending.
+- Dart: a source build rebuilds when a file under `crates/` changes, not
+  only when files are added or removed.
+
+### OAuth
+- User tokens, in the new `oauth` module (default feature `oauth`): PKCE
+  S256 from caller-supplied random bytes or a verifier, the
+  `id.kick.com/oauth/authorize` URL, `Scope` (Kick's 13 scopes, and
+  `Other`), code exchange and refresh (`UserToken`), revoke, and
+  introspection on `/oauth/token/introspect` (the `/public/v1` one is
+  deprecated). The core draws no random numbers: each binding adds a
+  helper that takes them from the platform's CSPRNG.
+- The app token (`public_api::token_request`) is unchanged.
+
+### Webhooks
+- `chat.message.sent`, `moderation.banned` and
+  `channel.reward.redemption.updated` are typed
+  (`WebhookEvent::ChatMessage`, `Banned`, `RewardRedemption`) rather
+  than `Other` (**breaking** for JSON users: `type` is now
+  `chat_message`, `banned` or `reward_redemption`, with typed fields). A
+  body sent as one of them without its own field (`message_id`,
+  `banned_user`, `reward`) is refused as a shape error.
+
+### Realtime
+- A subscribe Kick refuses for now (109, an error marked `temporary` such
+  as 111 "too many requests", a transport error: the classification a
+  refused connect already had) now closes the connection (not terminal),
+  so the host reconnects after its backoff and subscribes again; before,
+  the connection stayed up, pinged, without that feed for good. Other
+  refusals (103) keep the feed out and the rest up, as before.
+  `Action::SubscribeFailed` (`subscribe_failed`) gains `temporary: bool`
+  (**breaking** for Rust code that builds or matches it exhaustively).
+- Kick asking to subscribe again (unsub 2500-2999) is honoured once per
+  feed: asked again with no event on that feed in between, the session
+  closes the connection (not terminal) instead of subscribing again, so
+  a server that keeps asking cannot hold it in a tight loop.
+
+### Dispatch, and the C ABI and Python sessions
+- A session call that panicked leaves the `SessionHandle` refusing every
+  call but `closed` (kind `panic`) until `closed` resets it, as the
+  Elixir NIF's session already did: the C ABI (Dart) and Python no longer
+  go on with a half-changed session.
+- `SessionHandle::call` refuses arguments that are not an object (or
+  null), as `call` does.
+- `webhooks.verify` with a `now` that is not a non-negative integer (a
+  float from Python's `time.time()`, a negative or a string) says so,
+  rather than calling `now` missing.
+
+### JavaScript (kicksdk-js)
+- `connectChat`: after `close()`, an error a callback throws goes to
+  `console.error`, never to `onError`.
+- `connectChat` survives a panic in the WebAssembly: the session left
+  unusable is replaced, the connection ends and the reconnect starts on
+  the new one; `close()` no longer throws freeing it.
+- `endpoints` with an unknown key is refused whatever its value
+  (`undefined` and `null` included), as in the other bindings.
+- `verifyWebhook` skips headers that are not Kick's and whose value is
+  not a string (Node's array-valued `set-cookie`) instead of throwing.
+- README: a result holding an integer above `Number.MAX_SAFE_INTEGER`
+  throws rather than come back rounded, as an argument does.
+
+### Python (kicksdk-py)
+- A panic in the core is a `KickError` of kind `panic`, no longer PyO3's
+  `PanicException` (a `BaseException`); `ChatFeed` also stops with any
+  `BaseException` in `ChatFeed.error` (not `KeyboardInterrupt`,
+  `SystemExit` or cancellation) rather than ending as if cleanly.
+- `connect_chat(..., channels=[])` subscribes to no feed (it was the
+  default feeds), and `channel_id=0` is a channel id, as in the other
+  bindings.
+
+### Dart (kicksdk)
+- `connectChat`: a session call that fails (a panic) ends that connection
+  and the reconnect starts on a new session.
+
+### Docs
+- Webhooks: the reason the signed `<id>.<timestamp>.<body>` text splits
+  one way only is restated (the timestamp may hold a `.`, in fractional
+  seconds); `WebhookError::MalformedSignature` is bad base64 only, a
+  wrong-length signature is `Mismatch`.
+
 ### Build
 - The `kicksdk` and `kicksdk-ffi` crates ship the MIT and Apache-2.0
   licence texts.

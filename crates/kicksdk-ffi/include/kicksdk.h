@@ -25,7 +25,9 @@ uint32_t kicksdk_abi_version(void);
 char *kicksdk_call(const char *name, const char *args_json);
 /* NULL when channels_json is not a JSON list of strings: check it. */
 KicksdkSession *kicksdk_session_new(const char *channels_json);
-/* A session is not thread-safe: one call at a time per session. */
+/* A session is not thread-safe: one call at a time per session. After a
+ * call that panicked, every call but "closed" fails with kind "panic" until
+ * "closed" resets the session. */
 char *kicksdk_session_call(KicksdkSession *session, const char *method, const char *args_json);
 void kicksdk_session_free(KicksdkSession *session);
 void kicksdk_free_string(char *s);

@@ -26,14 +26,16 @@ Last updated 2026-10-13.
 
 | Source | Status | Auth | What only it gives | Our use |
 |---|---|---|---|---|
-| Public API `api.kick.com/public/v1` | Official, documented | App token | Viewer counts, channel state, subscriber totals | Polled: `/livestreams` every 60s, `/channels` every 5 min |
+| Public API `api.kick.com/public/v1` and `/public/v2` | Official, documented | App token (a user token for its own channel's data) | Viewer counts, channel state, subscriber totals, live totals | Polled: live streams every 60s (v1 `/livestreams` until its deprecation, §3), `/channels` every 5 min |
 | Webhooks | Official, documented | App token subscribes; Kick signs deliveries | Follows, subs, gifts, Kicks as they happen; stream start/end, metadata | 7 event types per channel, through our ingress |
 | v2 website API `kick.com/api/v2` | Undocumented, Kick's own frontend | None | **Follower total**, **chatroom id** | One channel per request: every 15 min live, daily offline |
 | Other website endpoints | Undocumented | None (mostly) | Past streams, gift leaderboards, clips | Probed only; nothing uses them |
 | Realtime feed (Centrifugo, `*.platform.kick.com`) | Unofficial (what kick.com's chat uses) | A guest token, no account | **Chat**, **hosts (raids)**, moderation events, Kicks, live/offline | One socket per chat; Origin must be kick.com (§6) |
 
-Nothing gives: viewer history before we started tracking, a livestream id in
-the official API, unfollows, audience demographics, or personal facts.
+Nothing gives: viewer history before we started tracking, unfollows,
+audience demographics, or personal facts. A livestream id is only in the
+current livestreams endpoints' answer, which nobody has recorded yet (§3).
+*(docs)*
 
 ## 2. Authorization
 
@@ -46,26 +48,99 @@ the official API, unfollows, audience demographics, or personal facts.
   the channel owner. The docs say app tokens "have full permission"; a user
   token needs the `events:subscribe` scope and only covers its own channel.
   *(docs; confirmed in production for every event type we use)*
-- A **user token** (authorization code + PKCE) is only for acting as someone
-  (chat, moderation, editing a channel) or private data. Not used.
+- A **user token** is only for acting as someone (chat, moderation, editing
+  a channel) or private data. KickTracker does not use one; `kicksdk`
+  builds the flow from the docs and spec (2026-11-15), and nothing below has
+  been recorded yet. *(docs)*
+  - **Flow:** OAuth 2.1 authorization code with PKCE, `S256` only, on
+    `https://id.kick.com`. The app sends the user's browser to
+    `GET /oauth/authorize?response_type=code&client_id=…&redirect_uri=…&scope=…&code_challenge=…&code_challenge_method=S256&state=…`;
+    Kick redirects to `redirect_uri?code=…&state=…`. `state` is "required (at
+    the moment)"; `redirect_uri` must equal the app's setting exactly. A
+    `127.0.0.1` redirect is rewritten to `localhost` by Kick's frontend
+    (a NextJS bug); the docs' workaround is a throwaway parameter holding
+    `127.0.0.1` before `redirect_uri`, or use `localhost`. Errors are
+    `400 {"error": "Invalid request"}`. *(docs)*
+  - **GET or POST:** the docs say `GET /oauth/authorize` with query
+    parameters (a browser redirect); the spec lists it as `POST` with form
+    fields answering 302. `kicksdk` builds the documented GET URL. *(docs)*
+  - **Token:** `POST /oauth/token`, form-encoded:
+    `grant_type=authorization_code`, `code`, `client_id`, `client_secret`,
+    `redirect_uri`, `code_verifier`. **Refresh:** the same with
+    `grant_type=refresh_token`, `refresh_token`, `client_id`,
+    `client_secret` (the spec's prose example adds `redirect_uri`; the docs
+    do not). Both answer `access_token`, `token_type`, `refresh_token`,
+    `expires_in`, `scope` (space-separated). The docs show every value as a
+    string, `expires_in` included; the spec's example has numbers, adds
+    `refresh_expires_in` and has no `scope`. Parse both. *(docs)*
+  - **Lifetimes:** the docs give none. The spec's example: access token
+    `expires_in` 7 200 (2 hours), refresh token `refresh_expires_in`
+    2 592 000 (30 days), a sliding window that restarts at every refresh;
+    a refresh also returns a new refresh token. *(docs: spec)*
+  - **Scopes** (13): `user:read`, `channel:read`, `channel:write`,
+    `channel:rewards:read`, `channel:rewards:write`, `chat:write`,
+    `streamkey:read`, `events:subscribe`, `moderation:ban`,
+    `moderation:chat_message:manage`, `kicks:read`, `ads:read`, `ads:write`.
+    The docs page and the spec's `securityDefinitions` list the same 13;
+    the spec's authorize example still says `chat:read`, which neither
+    list has. *(docs)*
+  - **Revoke:** `POST /oauth/revoke?token=…&token_type_hint=…`, hint
+    `access_token` or `refresh_token`, answering `200 OK`. Docs and spec
+    both put the parameters in the query, but disagree on the rest: the
+    docs send `Content-Type: application/x-www-form-urlencoded` (with no
+    body) and spell the hint `token_hint_type`; the spec says it consumes
+    JSON and spells it `token_type_hint`, as RFC 7009 does. `kicksdk` sends
+    the query, the docs' content type, and `token_type_hint`. *(docs)*
+  - **Introspect:** `POST /oauth/token/introspect` with
+    `Authorization: Bearer <token>` (user or app token) answers
+    `{"data": {"active", "client_id", "exp", "scope", "token_type"}, "message": "OK"}`,
+    `token_type` `user` or `app`, `exp` in Unix seconds; with
+    `active: false` nothing else. A bad token may get 401 instead.
+    `POST https://api.kick.com/public/v1/token/introspect` is the same,
+    **deprecated** since 2026-01-15 (changelog); `kicksdk` does not build
+    it. *(docs)*
 - Webhook subscriptions **belong to the Kick app**: two deployments sharing
   one app remove each other's subscriptions (our sync deletes what it
   doesn't track). The sandbox therefore has its own app.
 
-## 3. Public API (`https://api.kick.com/public/v1`)
+## 3. Public API (`https://api.kick.com`, `/public/v1` and `/public/v2`)
 
-### Endpoints we use
+Every path carries its version; `kicksdk`'s `Endpoints.api` is the host
+alone, `https://api.kick.com`.
+
+### Endpoints
 
 | Endpoint | Gives | Batching |
 |---|---|---|
-| `GET /livestreams?broadcaster_user_id=…` | `broadcaster_user_id`, `channel_id`, `slug`, `viewer_count`, `started_at`, `stream_title`, `category` {id, name, thumbnail}, `language`, `has_mature_content`, `thumbnail`, `profile_picture` (the docs also list tags; none in the recorded answers) | **50 ids per request** (the parameter repeated) |
-| `GET /channels?broadcaster_user_id=…` or `?slug=…` | slug, broadcaster id, title, category, `stream` (is_live, viewer_count, start, language, tags), description, banner, **`active_subscribers_count`**, **`active_gifted_subscribers_count`**, **`canceled_subscribers_count`** | **50 per request**, by id or by slug, not mixed |
-| `GET /public-key` | The PEM key webhooks are signed with | – |
-| `GET/POST/DELETE /events/subscriptions` | Webhook subscriptions (§4.2) | – |
+| `GET /public/v1/users/livestreams?user_id=…` | The live streams of those users (an offline one is missing). Each is `endpoints.LivestreamV2`: `id` (a UUID), `broadcaster_user` {`id`, `username`, `profile_picture`}, `channel` {`slug`}, `category` {`id`, `name`, `thumbnail`}, `title`, `language_code`, `has_mature_content`, `started_at`, `tags`, `thumbnail`, `viewer_count`. No `channel_id`. App or user token. *(docs)* | **100 ids per request** (the parameter repeated) *(docs)* |
+| `GET /public/v2/livestreams` | Every live stream, a page at a time: the same shape, and `pagination.next_cursor`. Filters: `category_id` (repeated, at most 25), `language_code` (repeated, BCP 47, at most 25), `limit` 1 to 1000 (default 100), `cursor`. **No sort**: Kick lists them "from oldest to newest". *(docs)* | A cursor |
+| `GET /public/v1/channels?broadcaster_user_id=…` or `?slug=…` | slug, broadcaster id, title, category, `stream` (is_live, viewer_count, start, language, tags), description, banner, **`active_subscribers_count`**, **`active_gifted_subscribers_count`**, **`canceled_subscribers_count`** | **50 per request**, by id or by slug, not mixed |
+| `GET /public/v1/users?id=…` | `user_id`, `name`, `profile_picture`, `email`. App token, or a user token with `user:read`; with a user token and no `id`, the token's own user. *(docs)* | `id` repeated; no limit documented (`kicksdk` sends at most 50) |
+| `GET /public/v2/categories` | `id`, `name`, `thumbnail`, `tags`, a page at a time, and `pagination.next_cursor`. Filters: `name` and `tag` (each a **comma-separated** list, `collectionFormat: csv`, 3 to 100 characters), or `id` (comma-separated); `limit` 1 to 1000 (default 25); `cursor` (4 to 28 characters). The v1 category endpoints are deprecated since 2026-01-15 (changelog). *(docs)* | A cursor |
+| `GET /public/v1/livestreams/stats` | `total_count`: how many streams are live on Kick. App or user token. *(docs)* | – |
+| `GET /public/v1/kicks/leaderboard?top=…` | The token's own channel's Kicks gifters: `lifetime`, `month`, `week`, each a list of {`user_id`, `username`, `rank`, `gifted_amount`}. User token with `kicks:read` only; `top` 1 to 100 (default 10). *(docs)* | – |
+| `GET /public/v1/public-key` | The PEM key webhooks are signed with | – |
+| `GET/POST/DELETE /public/v1/events/subscriptions` | Webhook subscriptions (§4.2) | – |
 
-`/livestreams` also filters by `category_id` and `language`, sorts by
-`viewer_count` and takes `limit` up to 100: usable for category rankings.
-*(docs)*
+**`GET /public/v1/livestreams` is deprecated.** The changelog of
+2026-06-23 added `/public/v2/livestreams` and deprecated it; that of
+2026-07-03 added `/public/v1/users/livestreams` and says "Livestreams V1
+should now be completely migrated off". It took `broadcaster_user_id`
+(repeated, at most 50), `category_id`, `language`, `sort` (`viewer_count`,
+the default, or `started_at`) and `limit` (up to 100), and answered a flat
+shape: `broadcaster_user_id`, `channel_id`, `slug`, `viewer_count`,
+`started_at`, `stream_title`, `category` {id, name, thumbnail}, `language`,
+`has_mature_content`, `thumbnail`, `profile_picture` (the spec also lists
+`custom_tags`; none in the recorded answers). *(docs)* Every answer in
+`fixtures/public_api/` is from it (2026-09-24). *(recording)* What the
+replacements lose: `channel_id`, and the sort by viewers, which category
+rankings used (now: read every page, then sort). `kicksdk` no longer
+requests it, and still reads its answers.
+
+The replacements are **not recorded yet**: their answers in
+`fixtures/docs/public_api/` are transcribed from the spec, with its example
+values. What §3 says was seen on v1 (the refresh rate, the lag, the offline
+answer, `started_at`'s format) has not been checked on them.
 
 ### Behaviour observed
 
@@ -78,7 +153,8 @@ the official API, unfollows, audience demographics, or personal facts.
 - **An unknown slug fails the whole request**: 400 `Invalid request`, not an
   empty result. Slugs are checked one at a time; batches use ids.
   *(recording)*
-- **Offline** `/livestreams` answers 200 `{"data": [], "message": "OK"}`.
+- **Offline**, v1 `/livestreams` answered 200 `{"data": [], "message": "OK"}`.
+  *(recording)*
 - **No rate-limit headers**, so the limits are unknown. We stay batched,
   back off on 429 and never probe for them. *(recording)*
 - **The API lags Kick's own state**: a stream was still listed 3s after
@@ -86,16 +162,93 @@ the official API, unfollows, audience demographics, or personal facts.
   `/livestreams` lists the stream. Hence the 90s grace before a poll counts
   a channel offline. *(recording)*
 - `stream.key` and `stream.url` are empty strings for an app token.
-- **No livestream id** in `/livestreams` (nor in the status webhook). A
+- **No livestream id** in v1 `/livestreams` (nor in the status webhook). A
   stream is identified by `(channel, started_at)`; `started_at` is
   **string-identical** between `/livestreams` and both status webhooks
   (`YYYY-MM-DDTHH:MM:SSZ`, second precision). A short disconnect Kick
   treats as the same stream keeps its `started_at`. *(recording)*
+- **The current shape has a livestream `id`** (a UUID, required in
+  `endpoints.LivestreamV2`). *(docs: spec; not recorded)* Whether it stays
+  the same across a short disconnect, and whether anything else (a webhook,
+  the website API) carries it, is unknown: `(channel, started_at)` stays
+  the identity until a recording shows more.
 - The 5-minute `/channels` answer is our source of truth for **renames**:
   it reports each broadcaster id's current slug. A renamed or banned
   channel can vanish from the answer. *(production)*
 - In 24 hours of production, three `/channels` requests failed for the
   whole batch at once, each an isolated moment; cause not investigated.
+
+### Acting with a user token
+
+Every endpoint below takes a **user token** (§2) with the scope shown and
+acts on the token's own channel, except where a channel is named in the
+body. All are *(docs)*: Kick's spec (`api.kick.com/swagger/doc.json`) and,
+for drops, its drops guide, read 2026-11-15; none is recorded yet. The
+documented examples are in `fixtures/docs/public_api/actions-*.json`; in
+kicksdk they are `public_api::{chat, moderation, channels, rewards, ads,
+drops}`. An answer with nothing to read (204, or `{"data": {}, "message":
+"OK"}`) is just success. *(docs)*
+
+| Endpoint | Scope | Body / query | Answer | Supersedes (§5.3) |
+|---|---|---|---|---|
+| `POST /public/v1/chat` | `chat:write` | `{type: "user"\|"bot", content, broadcaster_user_id?, reply_to_message_id?}` | `{is_sent, message_id}` | `website::send_request` |
+| `DELETE /public/v1/chat/{message_id}` | `moderation:chat_message:manage` | – | 204 | `website::delete_message_request` |
+| `POST /public/v1/moderation/bans` | `moderation:ban` | `{broadcaster_user_id, user_id, duration?, reason?}` | `{}` | `website::ban_request`, `website::timeout_request` |
+| `DELETE /public/v1/moderation/bans` | `moderation:ban` | `{broadcaster_user_id, user_id}`, a JSON body on a DELETE | `{}` | `website::unban_request` |
+| `PATCH /public/v1/channels` | `channel:write` | `{category_id?, custom_tags?, stream_title?}`, at least one | 204 | – |
+| `GET /public/v1/channels/rewards` | `channel:rewards:read` or `:write` | – | list of rewards | – |
+| `POST /public/v1/channels/rewards` | `channel:rewards:write` | `{title, cost, description?, background_color?, is_enabled?, is_user_input_required?, should_redemptions_skip_request_queue?}` | the reward | – |
+| `PATCH /public/v1/channels/rewards/{id}` | `channel:rewards:write` | the same fields and `is_paused`, all optional, at least one | the reward | – |
+| `DELETE /public/v1/channels/rewards/{id}` | `channel:rewards:write` | – | 204 | – |
+| `GET /public/v1/channels/rewards/redemptions` | `channel:rewards:read` or `:write` | `reward_id`, `status` (`pending` by default, `accepted`, `rejected`), `cursor`; or `id` repeated, alone | `data`: `[{reward, redemptions}]`, `pagination.next_cursor` | – |
+| `POST /public/v1/channels/rewards/redemptions/accept`, `…/reject` | `channel:rewards:write` | `{ids: [...]}` | the ids that failed, with a `reason` | – |
+| `POST /public/v1/ads/ad-break` | `ads:write` | `{id: <a UUID the caller picks>, break_duration_seconds}` | 202 `{id, ad_break_id, remaining_ad_breaks}` | – |
+| `GET /public/v1/ads/ad-break-status` | `ads:read` or `ads:write` | – | `opted_in`, `ads_blocked`, `auto_ads_active`, `remaining_ad_breaks`, `limits {max, period_seconds}`, `ad_breaks` | – |
+| `POST /public/v1/ads/enroll` | `ads:write` | – | success | – |
+| `GET /public/v1/drops/claims` | an **app** token of the organization's app | `campaign_id`, `claim_id`, `user_id`, `external_status`, `limit`, `cursor` | `{claims, cursor}` | – |
+| `PATCH /public/v1/drops/claims` | the same | `{claims: [{claim_id, external_status}]}` | 204 | – |
+
+Limits and rules, *(docs)*; the builders refuse what breaks them, except
+where said:
+
+- **Chat**: as `"user"`, `broadcaster_user_id` names the channel and is
+  required; as `"bot"` it is ignored and the message goes to the token's
+  own channel. `content` is at most **500 user-perceived characters**
+  (grapheme clusters, so combining marks do not count) and **2048 bytes**
+  of UTF-8. kicksdk checks the bytes, not the 500: counting grapheme
+  clusters needs Unicode tables the core does not carry, so Kick refuses
+  the rest (400). `reply_to_message_id` and `message_id` are UUIDs: the
+  ids the chat feed and the webhooks give messages.
+- **Bans**: no `duration` is a ban; `duration` is a timeout in **minutes,
+  1 to 10080** (a week), the website's range. `reason` is at most **100**
+  characters. Users are named by **user id**, where the website takes a
+  slug and a username; deleting a message needs no chatroom id.
+- **Channel**: `category_id` at least 1, `stream_title` not empty, at most
+  **10** `custom_tags` (Kick fixed updating them on 2025-12-19, per its
+  changelog).
+- **Rewards**: at most **50** per channel, enabled or not. `title` at most
+  **50** characters, `description` at most **200**, `cost` at least 1,
+  `background_color` a hex colour (default `#00e701`). Reward and
+  redemption ids are **ULIDs** (strings). Only the app that created a
+  reward may change or delete it, or decide its redemptions (a redemption's
+  reward carries `can_manage`; a decision on another app's fails
+  `NOT_OWNED`).
+- **Redemptions**: accept or reject **1 to 25 distinct ids** per request.
+  The answer lists only the ids that failed, with `NOT_PENDING`,
+  `NOT_FOUND`, `NOT_OWNED` or `UNKNOWN`. Filtering by `id` takes no other
+  filter.
+- **Ad breaks**: **7 to 90 seconds**. A refusal (400, 409, 429) names its
+  reason in `data`: `CHANNEL_IS_NOT_LIVE`, `CHANNEL_NOT_OPTED_IN`,
+  `ADS_BLOCKED`, `ADS_RESTRICTED`, `AD_BREAK_ACTIVE`,
+  `MAX_AD_BREAKS_REACHED`, `AUTO_ADS_ACTIVE`. Enrolling is refused with
+  `CHANNEL_NOT_FOUND`, `CHANNEL_IS_LIVE` or `CHANNEL_NEVER_STREAMED`.
+- **Drops**: documented in the drops guide (`drops/public-api.md`) and
+  **absent from the spec**. Only an OAuth app that belongs to the
+  organization may call them, with an app token. `limit` defaults to 10,
+  at most **1000**; an update takes at most **100** claims and only
+  `claim_id` and `external_status` each. A claim's `external_status` is
+  `initiated` when it is made. The guide's claim example is a type sketch
+  (`"user_id": "integer"`), so the real types are unconfirmed.
 
 ## 4. Webhooks
 
@@ -113,21 +266,27 @@ The ten types Kick documents, with what production has received
 | `channel.subscription.renewal` | 1 | 14 | same as new | Resubs |
 | `channel.subscription.gifts` | 1 | 222 | `broadcaster`, `gifter`, `giftees[]`, `created_at`, `expires_at` | Gifted subs |
 | `kicks.gifted` | 1 | 367 | `broadcaster`, `sender`, `gift` {amount, name, type, tier, message, pinned_time_seconds}, `created_at` | Kicks |
-| `moderation.banned` | – | not subscribed | bans and timeouts | Chat feed has richer moderation (§6.4) |
-| `channel.reward.redemption.updated` | – | not subscribed | channel-point redemptions | – |
-| `chat.message.sent` | – | not subscribed | every chat message | Chat comes from Pusher |
+| `moderation.banned` | 1 *(docs)* | not subscribed | *(docs)* `broadcaster`, `moderator`, `banned_user`, `metadata` {reason, created_at, expires_at} | Typed from docs, not yet received. Chat feed has richer moderation (§6.4) |
+| `channel.reward.redemption.updated` | 1 *(docs)* | not subscribed | *(docs)* `id`, `user_input`, `status`, `redeemed_at`, `reward` {id, title, cost, description}, `redeemer`, `broadcaster` | Typed from docs, not yet received |
+| `chat.message.sent` | 1 *(docs)* | not subscribed | *(docs)* `message_id`, `replies_to` {message_id, content, sender}, `broadcaster`, `sender`, `content`, `emotes[]` {emote_id, positions[] {s, e}}, `created_at` | Typed from docs, not yet received. Chat comes from the realtime feed (Centrifugo, §6.1) |
 
 Every type we subscribe to has now been delivered with the app token for
 channels that never authorized us. Only status, metadata and follows are
 recorded in `fixtures/`; the sub, gift and Kicks shapes above come from
 production's stored bodies (key names only) and should be recorded and
-anonymized into fixtures before a parser change relies on a new field.
+anonymized into fixtures before a parser change relies on a new field. The
+last three rows are only Kick's documentation: their example bodies are in
+`fixtures/docs/webhook/` (transcribed 2026-11-15, not recordings), and
+kicksdk types them from those until one is received.
 
 **A person** in any body (`broadcaster`, `follower`, `subscriber`,
-`gifter`, `giftees[]`, `sender`) is `{user_id, username, channel_slug,
+`gifter`, `giftees[]`, `sender`; *(docs)* `moderator`, `banned_user`,
+`redeemer`, `replies_to.sender`) is `{user_id, username, channel_slug,
 is_verified, is_anonymous, profile_picture, identity}` (`identity` null so
 far; `kicks.gifted`'s broadcaster has neither `is_anonymous` nor
-`identity`).
+`identity`, nor, *(docs)*, the redemption's people). *(docs)* A chat
+sender's `identity` is `{username_color, badges[] {text, type, count}}`;
+kicksdk does not read it yet.
 
 Details worth knowing:
 
@@ -155,6 +314,19 @@ Details worth knowing:
   display name, `pinned_time_seconds` 0 for basic, 600 and 2 400 for the
   larger ones. `gift.message` is free text from the sender: we never read
   it. *(production)*
+- **Chat messages** carry their emotes inline in `content`, as
+  `[emote:<id>:<name>]`, the realtime feed's format (§6.2), and again in
+  `emotes[]` with each token's `positions` `{s, e}`: in the documented
+  example 0-based, both ends inclusive (bytes or characters, an ASCII
+  example cannot tell). `replies_to` is the parent message, or null.
+  *(docs)*
+- **`moderation.banned`** is a ban or a timeout: `metadata.expires_at` is
+  when a timeout ends, **null for a permanent ban**. *(docs)*
+- **Redemptions**: `status` is `pending`, `accepted` or `rejected`; the
+  ids (`id`, `reward.id`) are ULIDs, `reward.cost` is channel points. The
+  type's name says "updated", but Kick describes it as fired "when a channel
+  reward is redeemed"; whether a later accept or reject sends another is not
+  documented. *(docs)*
 
 ### 4.2 Subscriptions
 
@@ -198,12 +370,15 @@ Details worth knowing:
   - read the body by its own shape, not only the type header (kicksdk
     refuses a body that lacks the claimed type's own field - `is_live`,
     `metadata` with a title/language/category, `follower`, `subscriber`,
-    `giftees`, `gift` - which no other type's body has; fields it does not
+    `giftees`, `gift`, `message_id`, `banned_user`, `reward` - which no
+    other type's body has (the last three per Kick's docs); fields it does not
     know are ignored, so a field Kick adds does not break deliveries;
     `.new` and `.renewal` subscriptions share one shape and cannot be told
     apart);
-  - expect the message id to be a ULID and the timestamp RFC 3339: neither
-    can then contain the `.` that separates the signed parts.
+  - expect the message id to be a ULID and the timestamp RFC 3339. Then
+    the signed parts split one way only: the id is 26 characters with no
+    `.`, and a timestamp's only `.` (fractional seconds) comes before the
+    `Z` or offset it ends with, so the separator is the first `.` after it.
 - **Fast**: 0.6 to 0.9s on average from Kick's timestamp to our receipt, for
   every type; an end event arrived 5s after its `ended_at`. *(production,
   recording)*
@@ -366,7 +541,16 @@ key 32cbd69e4b950bf97679 not in this cluster…"}}` and closes. Noticed
   refresh is worth retrying at once only for 109 (token expired), an error
   marked `temporary`, or a transport error. An `unsub` push with a code
   from **2500 to 2999 asks the client to subscribe again**; kicksdk's
-  session does so itself. None of these has been seen from Kick yet.
+  session does so itself, once: asked again for the same feed with no
+  event on it in between, it closes the connection (not terminal) and the
+  host reconnects after its backoff, rather than trading subscribes and
+  unsubscribes with the server for as long as it keeps asking. A refused
+  **subscribe** is classified as a refused connect is: 109, an error
+  marked `temporary` (Centrifugo's 111 "too many requests" is) or a
+  transport error closes the connection (not terminal), so the reconnect
+  subscribes again - the connection would otherwise stay up, pinged,
+  without that feed for good; any other refusal (103 above) leaves that
+  feed out and the rest up. None of these has been seen from Kick yet.
 - **Terminal is not for good** *(kicksdk's choice)*: for a guest reading
   chat, what makes a close terminal - a refused guest token, a connection
   or rate limit, an IP briefly blocked - usually passes, and a reader that
@@ -498,15 +682,17 @@ name only the message id: the text has to come from the chat log.
 
 - **Ids differ per object**: a channel has a **user id**
   (`broadcaster_user_id`, what the public API and webhooks use), a
-  **channel id** (`/livestreams`' `channel_id`, the `channel.<id>` feed,
+  **channel id** (v1 `/livestreams`' `channel_id`, the `channel.<id>` feed,
   `hosted.id`), and a **chatroom id** (v2 only, the chat feed). The website
   API's private/v1 uses opaque strings instead.
 - **Slug vs username**: a slug is the lowercase form of the username in the
   cases seen; usernames keep their case. Kick allows renames: the slug of
   a broadcaster id can change, and endpoints taking a slug then 404.
-- **No livestream id** in the official API or webhooks; v2 and the website
-  have one, never relied on.
+- **No livestream id** in the official API's recorded answers or in
+  webhooks; the current livestreams shape has one by the spec, unrecorded
+  (§3), and v2 and the website have one, never relied on.
 - **Pictures**: a channel's picture is `profile_picture` in `/livestreams`
+  (`broadcaster_user.profile_picture` in the current shape)
   and in webhook people (`broadcaster.profile_picture`), a URL on
   `files.kick.com`. We copy it (PNG/JPEG/GIF/WebP only, ≤ 1 MB) so
   visitors' browsers never contact Kick. Emotes come from
@@ -545,12 +731,15 @@ name only the message id: the text has to come from the chat log.
 | What | Where |
 |---|---|
 | Ids kept apart (user, channel, chatroom) | `crates/kicksdk/src/ids.rs` |
-| Public API, app token, public key, subscriptions | `crates/kicksdk/src/public_api.rs` |
+| Public API reads (§3): app token, live streams, channels, users, categories, live stats, Kicks leaderboard, public key, subscriptions; `parse_done` | `crates/kicksdk/src/public_api.rs` |
+| Acting with a user token (§3): chat, bans and timeouts, the channel's stream info, channel-points rewards, ads, drops claims | `crates/kicksdk/src/public_api/` (`chat.rs`, `moderation.rs`, `channels.rs`, `rewards.rs`, `ads.rs`, `drops.rs`) |
+| User tokens: PKCE, authorize URL, scopes, refresh, revoke, introspect (§2) | `crates/kicksdk/src/oauth.rs` |
 | Website API (§5) | `crates/kicksdk/src/website.rs` |
 | Realtime endpoints and the Centrifugo session (§6.1) | `crates/kicksdk/src/realtime/` |
 | Chat-feed events (§6.2–6.4) | `crates/kicksdk/src/events.rs` |
 | Emotes in message text | `crates/kicksdk/src/content.rs` |
 | Webhook headers, signature, bodies (§4) | `crates/kicksdk/src/webhooks.rs` |
+| Every function by name, JSON in and out, for the C ABI, Dart and Python | `crates/kicksdk/src/dispatch.rs` |
 | Recorded, anonymized payloads | `fixtures/` (realtime ones by `tools/record-realtime.mjs`) |
 
 KickTracker's own copy of this file, its recorder and its simulator are in

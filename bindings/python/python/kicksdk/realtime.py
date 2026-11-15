@@ -81,7 +81,15 @@ class Session:
       the old token runs out, and the reconnect gets a new one;
     - ``connected`` (``client``), ``subscribed`` (``channel``),
       ``unsubscribed`` (``channel``, ``code``, ``reason``),
-      ``subscribe_failed`` (``channel``, ``code``, ``message``);
+      ``subscribe_failed`` (``channel``, ``code``, ``message``,
+      ``temporary``). A ``temporary`` refusal (109, an error Kick marks
+      temporary such as 111 "too many requests", a transport error) is
+      followed by a ``close`` that is not terminal: reconnect as for any
+      other, and the feed is subscribed again. Otherwise (103 "permission
+      denied") the feed stays out and the rest stay up. An ``unsubscribed``
+      with a code from 2500 to 2999 has already been subscribed again; asked
+      a second time with no event on the feed in between, the session
+      closes instead;
     - ``event`` (``channel``, ``name``, ``data``, ``event``).
 
     Times are milliseconds; call :meth:`tick` when :attr:`deadline` comes.

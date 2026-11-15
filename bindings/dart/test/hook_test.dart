@@ -277,6 +277,22 @@ void main() {
     expect(vendored, contains('source.vendored-sources.directory="vendor"'));
   });
 
+  test('a source build depends on each file under crates/, not on the directory alone', () {
+    final root = tmp.uri;
+    File.fromUri(root.resolve('Cargo.toml')).writeAsStringSync('');
+    File.fromUri(root.resolve('crates/a/src/lib.rs'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('');
+    final deps = hook.sourceDependencies(root).map((u) => u.toFilePath()).toSet();
+    expect(deps, {
+      root.resolve('Cargo.toml').toFilePath(),
+      root.resolve('crates/').toFilePath(),
+      root.resolve('crates/a/').toFilePath(),
+      root.resolve('crates/a/src/').toFilePath(),
+      root.resolve('crates/a/src/lib.rs').toFilePath(),
+    });
+  });
+
   group('the hook, end to end', () {
     final triple = hook.targetTriple(OS.current, Architecture.current, musl: Platform.isLinux && hook.hostIsMusl())!;
     final fileName = OS.current.dylibFileName('kicksdk_ffi');

@@ -1,0 +1,25 @@
+{
+  "kind": "docs",
+  "request": {
+    "json": {
+      "claims": [
+        {
+          "claim_id": "01KAAFHJ2PNXS48NG8XXPGWKCZ",
+          "external_status": "processed"
+        },
+        {
+          "claim_id": "01KAAFHJ2PNXS48NG8XXPGWKCA",
+          "external_status": "initiated"
+        }
+      ]
+    },
+    "method": "PATCH",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/drops/claims"
+  },
+  "response": {
+    "body": "",
+    "status": 204
+  },
+  "source": "Kick's drops guide (drops/public-api.md in github.com/KickEngineering/KickDevDocs), its examples, transcribed 2026-11-15: not a recording"
+}

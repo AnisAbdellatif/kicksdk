@@ -9,7 +9,7 @@
 //!
 //! ```json
 //! {"ok": <the value>}
-//! {"error": {"kind": "status", "status": 404, "message": "Kick answered 404"}}
+//! {"error": {"kind": "status", "status": 404, "message": "Kick answered 404: <the start of its answer>"}}
 //! ```
 //!
 //! Strings returned here belong to the library: hand each back to
@@ -139,6 +139,10 @@ pub unsafe extern "C" fn kicksdk_session_new(channels_json: *const c_char) -> *m
 /// Calls a session method by name (`open`, `receive`, `refresh`, `tick`,
 /// `closed`, `deadline`, `is_subscribed`, `is_connected`); returns a JSON
 /// envelope.
+///
+/// After a call that panicked, the session's state may be half-changed:
+/// every call but `closed` fails with kind `panic` until `closed` resets it
+/// (`dispatch::SessionHandle`).
 ///
 /// # Safety
 /// `session` came from [`kicksdk_session_new`] and has not been freed, and is

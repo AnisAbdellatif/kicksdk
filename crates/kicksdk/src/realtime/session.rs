@@ -20,7 +20,15 @@
 //!   grace, ends the connection. A connect reply without a ping interval
 //!   means the server will not ping, and then silence is not a failure.
 //! - A push with `unsub` and a code from 2500 to 2999 means "subscribe
-//!   again": the session does so itself.
+//!   again": the session does so itself, once. Asked again for the same
+//!   feed before an event has come on it, it closes the connection
+//!   instead, so the host reconnects after its backoff rather than the
+//!   two sides trading subscribes and unsubscribes.
+//! - A subscribe refused for now (a transport error, below 100; an error
+//!   Kick marks `temporary`, like 111 "too many requests"; 109, token
+//!   expired) closes the connection, as a refused connect would: the host
+//!   reconnects after its backoff, and subscribes again. Any other refusal
+//!   (103 "permission denied") leaves that feed out and the rest up.
 //!
 //! The numbers Kick sends are bounded before use: a ping interval to 1 s -
 //! 10 min, a token lifetime to 1 s - 1 day. Time arithmetic saturates, so no
@@ -154,7 +162,10 @@ pub enum Action {
     },
     /// A feed is not, or no longer, subscribed. Kick's codes 2500-2999 mean
     /// "subscribe again": the session has already sent the subscribe, and a
-    /// [`Action::Subscribed`] or [`Action::SubscribeFailed`] follows.
+    /// [`Action::Subscribed`] or [`Action::SubscribeFailed`] follows; or, if
+    /// Kick asked for this feed before and no event has come on it since,
+    /// an [`Action::Close`] (not terminal) does, to reconnect after the
+    /// backoff.
     Unsubscribed {
         /// Which.
         channel: String,
@@ -165,6 +176,9 @@ pub enum Action {
     },
     /// Kick refused a subscription (103 "permission denied" for a feed a
     /// guest may not read).
+    ///
+    /// Serialized: `{"action":"subscribe_failed","channel":"…","code":103,
+    /// "message":"…","temporary":false}`.
     SubscribeFailed {
         /// Which.
         channel: String,
@@ -172,6 +186,13 @@ pub enum Action {
         code: i64,
         /// Kick's message.
         message: String,
+        /// A refusal for now, as for a refused connect: a transport error
+        /// (below 100), an error Kick marks `temporary` (111 "too many
+        /// requests"), or 109 (token expired). An [`Action::Close`] (not
+        /// terminal) follows then, so the host reconnects after its backoff
+        /// and subscribes again. When false the refusal stands for this
+        /// connection, and the other feeds stay up.
+        temporary: bool,
     },
     /// An event on a feed.
     Event {
@@ -207,11 +228,12 @@ impl fmt::Debug for Action {
                 .field("code", code)
                 .field("reason", reason)
                 .finish(),
-            Action::SubscribeFailed { channel, code, message } => f
+            Action::SubscribeFailed { channel, code, message, temporary } => f
                 .debug_struct("SubscribeFailed")
                 .field("channel", channel)
                 .field("code", code)
                 .field("message", message)
+                .field("temporary", temporary)
                 .finish(),
             Action::Event { channel, name, data, event } => f
                 .debug_struct("Event")
@@ -287,8 +309,8 @@ fn quoted(s: &str) -> String {
     Value::String(s.to_owned()).to_string()
 }
 
-/// Whether, after a refused connect or refresh, a new connection could fare
-/// better at once: as Centrifugo's own client decides, for a transport
+/// Whether, after a refused connect, refresh or subscribe, a new connection
+/// could fare better at once: as Centrifugo's own client decides, for a transport
 /// error (below 100), an error Kick marks `temporary`, and 109 (token
 /// expired). Any other refusal is terminal: the long wait, then a new
 /// client id.
@@ -324,6 +346,9 @@ pub struct Session {
     next_id: u64,
     pending: HashMap<u64, Pending>,
     subscribed: BTreeSet<String>,
+    /// Feeds subscribed again at Kick's request (2500-2999) with no event on
+    /// them since: a second request for one closes the connection.
+    resubscribed: BTreeSet<String>,
     /// The server's ping interval; `None` once it said it does not ping.
     ping_ms: Option<u64>,
     last_traffic: u64,
@@ -342,6 +367,7 @@ impl Session {
             next_id: 0,
             pending: HashMap::new(),
             subscribed: BTreeSet::new(),
+            resubscribed: BTreeSet::new(),
             ping_ms: Some(DEFAULT_PING_MS),
             last_traffic: 0,
             refresh_at: None,
@@ -464,8 +490,15 @@ impl Session {
                     out.push(Action::Send { text: frames.join("\n") });
                 }
             }
-            (Pending::Subscribe { channel, .. }, Some((code, message, _))) => {
-                out.push(Action::SubscribeFailed { channel, code, message });
+            (Pending::Subscribe { channel, .. }, Some((code, message, temporary))) => {
+                let temporary = retryable(code, temporary);
+                let reason = format!("Kick refused feed {channel} for now: {code} {message}");
+                out.push(Action::SubscribeFailed { channel, code, message, temporary });
+                if temporary {
+                    // Kept up, the connection would go on without the feed
+                    // for good: pings keep it alive, and nothing asks again.
+                    self.close(code, reason, false, out);
+                }
             }
             (Pending::Subscribe { channel, .. }, None) => {
                 self.subscribed.insert(channel.clone());
@@ -497,10 +530,17 @@ impl Session {
             if self.subscribed.remove(&channel) {
                 let code = u.get("code").and_then(Value::as_i64).unwrap_or(0);
                 let reason = u.get("reason").and_then(Value::as_str).unwrap_or("").to_owned();
-                out.push(Action::Unsubscribed { channel: channel.clone(), code, reason });
+                out.push(Action::Unsubscribed { channel: channel.clone(), code, reason: reason.clone() });
                 if (2500..3000).contains(&code) && self.phase == Phase::Connected {
-                    let text = self.subscribe(channel, true);
-                    out.push(Action::Send { text });
+                    if self.resubscribed.insert(channel.clone()) {
+                        let text = self.subscribe(channel, true);
+                        out.push(Action::Send { text });
+                    } else {
+                        // Asked again with nothing on the feed in between:
+                        // subscribing again at once could go on forever.
+                        let why = format!("Kick unsubscribed {channel} again: {code} {reason}");
+                        self.close(code, why, false, out);
+                    }
                 }
             }
         } else if let Some(envelope) = push.get("pub").and_then(|p| p.get("data")) {
@@ -508,6 +548,7 @@ impl Session {
             if let Some(name) = envelope.get("event").and_then(Value::as_str) {
                 let data = without_playback_urls(envelope.get("data").cloned().unwrap_or(Value::Null));
                 let event = events::parse(name, &data);
+                self.resubscribed.remove(&channel);
                 out.push(Action::Event { channel, name: name.to_owned(), data, event });
             }
         }
@@ -596,6 +637,7 @@ impl Session {
         self.next_id = 0;
         self.pending.clear();
         self.subscribed.clear();
+        self.resubscribed.clear();
         self.ping_ms = Some(DEFAULT_PING_MS);
         self.refresh_at = None;
         self.refresh_asked = false;

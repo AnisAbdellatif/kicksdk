@@ -1,0 +1,19 @@
+{
+  "kind": "docs",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "campaign_id": "01JAXK8N4QWRTY5PM7ZEBVJDS8S",
+      "limit": 10,
+      "cursor": "01K0TDDR08Q5ZNWXK92VRXD7GW",
+      "user_id": 1234
+    },
+    "url": "https://api.kick.com/public/v1/drops/claims"
+  },
+  "response": {
+    "body": "{\"data\":{\"claims\":[{\"claim_id\":\"string\",\"user_id\":\"integer\",\"campaign_id\":\"string\",\"reward_id\":\"string\",\"external_id\":\"string\",\"external_status\":\"string\",\"created_at\":\"datetime\",\"updated_at\":\"datetime\"}],\"cursor\":\"01K0TDDR08Q5ZNWXK92SDH7SDH\"},\"message\":\"OK\"}",
+    "status": 200
+  },
+  "source": "Kick's drops guide (drops/public-api.md in github.com/KickEngineering/KickDevDocs), its examples, transcribed 2026-11-15: not a recording"
+}

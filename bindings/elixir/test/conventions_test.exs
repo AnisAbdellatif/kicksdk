@@ -77,7 +77,8 @@ defmodule Kicksdk.ConventionsTest do
       assert {:ok, %{"method" => "GET"}} = Website.me_request("s", "somechannel")
       assert {:error, {:invalid, _}} = Website.me_request("s", "..")
       assert {:error, {:invalid, _}} = Website.timeout_request("s", "somechannel", "u", 20_000)
-      assert {:ok, _} = PublicApi.top_livestreams_request("t")
+      assert {:ok, _} = PublicApi.livestreams_page_request("t")
+      assert {:error, {:invalid, _}} = PublicApi.livestreams_page_request("t", limit: 1001)
       assert {:ok, [_]} = PublicApi.unsubscribe_requests("t", ["01J0000000000000000000000"])
       assert {:error, {:invalid, _}} = PublicApi.subscriptions_request("t\r\nx: y")
       assert {:ok, "https://" <> _} = Events.emote_url("37226")
@@ -113,7 +114,7 @@ defmodule Kicksdk.ConventionsTest do
             fn e -> Realtime.token_request("c", e) end,
             fn e -> Website.channel_request("somechannel", e) end,
             fn e -> Website.me_request("s", "somechannel", e) end,
-            fn e -> PublicApi.top_livestreams_request("t", endpoints: e) end
+            fn e -> PublicApi.livestreams_page_request("t", endpoints: e) end
           ] do
         assert_raise ArgumentError, ~r/unknown key :realtme/, fn ->
           builder.(%{realtme: "http://localhost:9"})

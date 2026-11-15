@@ -227,6 +227,7 @@ ChatConnection connectChat({
   }
 
   late final void Function() refreshToken;
+  late final void Function(List<Map<String, dynamic>> Function(Session s) call) run;
   late final void Function(List<Map<String, dynamic>>) apply;
   late final Future<void> Function() connect;
 
@@ -237,10 +238,7 @@ ChatConnection connectChat({
     if (closed || s == null || ws == null) return;
     final at = s.deadline;
     if (at == null) return;
-    deadline = Timer(Duration(milliseconds: max(0, at - now())), () {
-      final s = session;
-      if (!closed && s != null) apply(s.tick(now()));
-    });
+    deadline = Timer(Duration(milliseconds: max(0, at - now())), () => run((s) => s.tick(now())));
   }
 
   // The connection in `ws` is lost, or none could be made: report it, and
@@ -251,7 +249,17 @@ ChatConnection connectChat({
     final hadSocket = detach() != null;
     if (closed) return;
     // The feeds it had come back unsubscribed, which reports the state.
-    final lostFeeds = hadSocket ? session?.closed() ?? const [] : const <Map<String, dynamic>>[];
+    var lostFeeds = const <Map<String, dynamic>>[];
+    if (hadSocket) {
+      try {
+        lostFeeds = session?.closed() ?? const [];
+      } catch (e, s) {
+        // Should closed() itself fail, start over with a new session.
+        report(e, s);
+        session?.dispose();
+        session = Session(feeds);
+      }
+    }
     final wait = delays.nextDelayFor(retryAfterMs, random.nextDouble());
     final info = ChatDrop(reason, code: code, terminal: terminal, retryIn: wait);
     final handler = onDrop;
@@ -292,6 +300,24 @@ ChatConnection connectChat({
       retryAfterMs: retryAfterMs,
     );
   }
+
+  // Runs a session call on the open socket and carries out its actions. A
+  // call that fails (a panic in the core, after which the session refuses
+  // every call until closed()) is reported and ends the connection; lost()
+  // resets the session for the reconnect.
+  run = (call) {
+    final s = session;
+    if (closed || s == null) return;
+    final List<Map<String, dynamic>> actions;
+    try {
+      actions = call(s);
+    } catch (e, st) {
+      report(e, st);
+      lost('kicksdk: $e');
+      return;
+    }
+    apply(actions);
+  };
 
   apply = (actions) {
     if (closed) return;
@@ -351,8 +377,7 @@ ChatConnection connectChat({
       try {
         final r = await _send(http, Realtime.tokenRequest(id, endpoints: endpoints), timeout);
         final token = Realtime.parseToken(r.$1, r.$2);
-        final s = session;
-        if (!closed && ws == socket && s != null) apply(s.refresh(token, now()));
+        if (!closed && ws == socket) run((s) => s.refresh(token, now()));
       } catch (e, st) {
         if (closed || ws != socket) return;
         report(e, st);
@@ -400,14 +425,13 @@ ChatConnection connectChat({
     ws = socket;
     frames = socket.listen(
       (frame) {
-        final s = session;
-        if (ws == socket && s != null && frame is String) apply(s.receive(frame, now()));
+        if (ws == socket && frame is String) run((s) => s.receive(frame, now()));
       },
       onError: (Object e) => ended(socket, e),
       onDone: () => ended(socket),
       cancelOnError: true,
     );
-    apply(s.open(token, now()));
+    run((s) => s.open(token, now()));
   };
 
   connect().catchError(report);

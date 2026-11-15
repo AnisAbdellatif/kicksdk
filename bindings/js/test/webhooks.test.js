@@ -31,6 +31,12 @@ test('a fresh delivery verifies, as text or bytes, with any headers shape', () =
   assert.equal(sdk.verifyWebhook(pem, Object.entries(headers), body, { now: sent }).event.type, 'followed');
   assert.equal(sdk.verifyWebhook(pem, new Headers(headers), body, { now: sent }).event.type, 'followed');
   assert.equal(sdk.verifyWebhook(pem, new Map(Object.entries(headers)), body, { now: sent }).event.type, 'followed');
+  // Node's array-valued set-cookie is not read; Kick's own must be text.
+  const withCookies = { ...headers, 'set-cookie': ['a=1', 'b=2'], 'x-n': 5 };
+  assert.equal(sdk.verifyWebhook(pem, withCookies, body, { now: sent }).event.type, 'followed');
+  assert.equal(sdk.verifyWebhook(pem, Object.entries(withCookies), body, { now: sent }).event.type, 'followed');
+  const odd = { ...headers, 'Kick-Event-Version': ['1'] };
+  assert.throws(() => sdk.verifyWebhook(pem, odd, body, { now: sent }), /Kick-Event-Version must be a string/);
   // One byte off fails.
   const changed = Uint8Array.from(bytes);
   changed[changed.length - 2] ^= 1;

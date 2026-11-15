@@ -1,0 +1,16 @@
+{
+  "kind": "docs",
+  "request": {
+    "json": null,
+    "method": "GET",
+    "params": {
+      "status": "pending"
+    },
+    "url": "https://api.kick.com/public/v1/channels/rewards/redemptions"
+  },
+  "response": {
+    "body": "{\"data\":[{\"redemptions\":[{\"id\":\"01KCTMJ2X3DXT814CVX8FR9T1D\",\"redeemed_at\":\"2025-12-19T06:26:36Z\",\"redeemer\":{\"user_id\":123},\"status\":\"pending\",\"user_input\":\"sorry mr strimer\"}],\"reward\":{\"can_manage\":true,\"cost\":100,\"description\":\"Request to have your ban lifted\",\"id\":\"01KCTMJ2X3DXT814CVX8FR9T1D\",\"is_deleted\":false,\"title\":\"Unban Request\"}}],\"message\":\"OK\",\"pagination\":{\"next_cursor\":\"[no example in the spec]\"}}",
+    "status": 200
+  },
+  "source": "Kick's spec (api.kick.com/swagger/doc.json), its example values, transcribed 2026-11-15: not a recording"
+}

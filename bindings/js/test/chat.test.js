@@ -433,3 +433,83 @@ test('mistakes in the options throw at once', () => {
   // undefined endpoints, as a Partial<> carries them, are fine.
   sdk.connectChat({ ...base, endpoints: { realtime: undefined }, WebSocket: class {} }).close();
 });
+
+test('after close(), an error from a callback goes to console.error, not onError', async (t) => {
+  let chat;
+  const kick = fakeKick();
+  const h = harness(t, {
+    kick,
+    onEvent: () => {
+      chat.close();
+      throw new Error('after close');
+    }
+  });
+  chat = h.chat;
+  const logged = [];
+  t.mock.method(console, 'error', (...args) => logged.push(args));
+  await h.advance(100);
+  kick.last().push(chatPush('one'));
+  await h.advance(10);
+  assert.deepEqual(h.log.errors, []);
+  assert.equal(logged.length, 1);
+  assert.match(String(logged[0][1]), /after close/);
+});
+
+test('a session left unusable by a panic is replaced, and the chat reconnects', async (t) => {
+  // What wasm-bindgen does after a trap: the call throws, and the object
+  // stays borrowed, so every later call on it throws, free() included.
+  const proto = sdk.Session.prototype;
+  const poisoned = new WeakSet();
+  const originals = {};
+  for (const name of ['receive', 'closed', 'free', 'isConnected', 'isSubscribed', 'deadline']) {
+    originals[name] = proto[name];
+    proto[name] = function (...args) {
+      if (poisoned.has(this)) {
+        throw new Error('recursive use of an object detected which would lead to unsafe aliasing in rust');
+      }
+      if (name === 'receive' && String(args[0]).includes('"boom"')) {
+        poisoned.add(this);
+        throw new WebAssembly.RuntimeError('unreachable');
+      }
+      return originals[name].apply(this, args);
+    };
+  }
+  t.after(() => Object.assign(proto, originals));
+  const { kick, chat, log, advance } = harness(t);
+  await advance(100);
+  assert.ok(subscribed(log));
+  kick.last().push('{"push":{"channel":"boom"}}');
+  await advance(10);
+  assert.ok(log.errors.some((e) => e instanceof WebAssembly.RuntimeError));
+  assert.equal(log.drops.length, 1);
+  assert.equal(log.states.at(-1).connected, false);
+  await advance(2_000);
+  assert.equal(kick.sockets.length, 2);
+  assert.equal(log.states.at(-1).subscribed.includes(CHAT_FEED), true);
+  kick.last().push(chatPush('again'));
+  await advance(10);
+  assert.equal(log.events.at(-1).event.content, 'again');
+  chat.close();
+});
+
+test('a subscribe Kick refuses for now ends the connection, and the reconnect subscribes', async (t) => {
+  const kick = fakeKick();
+  const { log, advance } = harness(t, { kick, channels: [CHAT_FEED] });
+  await advance(100);
+  // Kick takes the subscribe back (2500-2999), then refuses it for now.
+  const first = kick.last();
+  first.send = function (text) {
+    this.sent.push(text);
+    const f = JSON.parse(text);
+    if (f.subscribe) this.push({ id: f.id, error: { code: 111, message: 'too many requests', temporary: true } });
+  };
+  first.push({ push: { channel: CHAT_FEED, unsub: { code: 2500, reason: 'resubscribe' } } });
+  await advance(10);
+  assert.ok(first.closedByClient);
+  assert.equal(log.drops.length, 1);
+  assert.equal(log.drops[0].terminal, false);
+  assert.match(log.drops[0].reason, /111/);
+  await advance(2_000);
+  assert.equal(kick.sockets.length, 2);
+  assert.equal(log.states.at(-1).subscribed.includes(CHAT_FEED), true);
+});

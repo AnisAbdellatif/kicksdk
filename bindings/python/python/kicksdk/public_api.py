@@ -1,5 +1,6 @@
-"""Kick's official API (``api.kick.com/public/v1``). Batches are 50 ids; one
-unknown slug fails a whole ``/channels`` request."""
+"""Kick's official API (``api.kick.com/public/v1`` and ``/public/v2``).
+Batches are 50 ids (100 for live streams by user id); one unknown slug fails a
+whole ``/channels`` request."""
 
 from __future__ import annotations
 
@@ -19,33 +20,40 @@ def parse_token(status: int, body: str) -> dict:
 
 
 def livestreams_requests(token: str, user_ids: list[int], endpoints: E = None) -> list[Request]:
-    """One request per 50 user ids."""
+    """``/public/v1/users/livestreams``: one request per 100 user ids."""
     return _requests("public_api.livestreams_requests", token=token, user_ids=list(user_ids), endpoints=endpoints)
 
 
-def top_livestreams_request(
+def livestreams_page_request(
     token: str,
-    category_id: Optional[int] = None,
-    language: Optional[str] = None,
-    sort: str = "viewer_count",
-    limit: int = 100,
+    category_ids: Optional[list[int]] = None,
+    language_codes: Optional[list[str]] = None,
+    limit: Optional[int] = None,
+    cursor: Optional[str] = None,
     endpoints: E = None,
 ) -> Request:
-    """The top live streams, overall or in a category or language: up to 100.
-    ``sort`` is ``viewer_count`` or ``started_at``."""
+    """One page of the streams live now (``/public/v2/livestreams``), in up to
+    25 categories and 25 languages (none: all). ``limit`` is 1 to 1000;
+    ``cursor`` is the previous page's ``next_cursor``. Kick has no sort:
+    streams come oldest first."""
     return _request(
-        "public_api.top_livestreams_request",
+        "public_api.livestreams_page_request",
         token=token,
-        category_id=category_id,
-        language=language,
-        sort=sort,
+        category_ids=None if category_ids is None else list(category_ids),
+        language_codes=None if language_codes is None else list(language_codes),
         limit=limit,
+        cursor=cursor,
         endpoints=endpoints,
     )
 
 
 def parse_livestreams(status: int, body: str) -> list[dict]:
     return _call("public_api.parse_livestreams", status=status, body=body)
+
+
+def parse_livestreams_page(status: int, body: str) -> dict:
+    """A ``livestreams_page_request`` answer: ``{"data": [...], "next_cursor": ...}``."""
+    return _call("public_api.parse_livestreams_page", status=status, body=body)
 
 
 def channels_by_ids_request(token: str, user_ids: list[int], endpoints: E = None) -> Request:
@@ -88,3 +96,72 @@ def parse_subscriptions(status: int, body: str) -> list[dict]:
 
 def unsubscribe_requests(token: str, ids: list[str], endpoints: E = None) -> list[Request]:
     return _requests("public_api.unsubscribe_requests", token=token, ids=list(ids), endpoints=endpoints)
+
+
+def users_request(token: str, user_ids: Optional[list[int]] = None, endpoints: E = None) -> Request:
+    """Up to 50 users by id; none, with a user token: the token's own user."""
+    return _request(
+        "public_api.users_request",
+        token=token,
+        user_ids=None if user_ids is None else list(user_ids),
+        endpoints=endpoints,
+    )
+
+
+def parse_users(status: int, body: str) -> list[dict]:
+    """``[{"user_id", "name", "profile_picture", "email"}]``"""
+    return _call("public_api.parse_users", status=status, body=body)
+
+
+def categories_request(
+    token: str,
+    names: Optional[list[str]] = None,
+    tags: Optional[list[str]] = None,
+    ids: Optional[list[int]] = None,
+    limit: Optional[int] = None,
+    cursor: Optional[str] = None,
+    endpoints: E = None,
+) -> Request:
+    """One page of categories (``/public/v2/categories``), by names and tags
+    or by ids (none: all). ``limit`` is 1 to 1000."""
+    return _request(
+        "public_api.categories_request",
+        token=token,
+        names=None if names is None else list(names),
+        tags=None if tags is None else list(tags),
+        ids=None if ids is None else list(ids),
+        limit=limit,
+        cursor=cursor,
+        endpoints=endpoints,
+    )
+
+
+def parse_categories(status: int, body: str) -> dict:
+    """``{"data": [...], "next_cursor": ...}``"""
+    return _call("public_api.parse_categories", status=status, body=body)
+
+
+def livestream_stats_request(token: str, endpoints: E = None) -> Request:
+    """How many streams are live on Kick."""
+    return _request("public_api.livestream_stats_request", token=token, endpoints=endpoints)
+
+
+def parse_livestream_stats(status: int, body: str) -> dict:
+    """``{"total_count"}``"""
+    return _call("public_api.parse_livestream_stats", status=status, body=body)
+
+
+def kicks_leaderboard_request(token: str, top: Optional[int] = None, endpoints: E = None) -> Request:
+    """The top 1 to 100 Kicks gifters of the token's own channel (``kicks:read``)."""
+    return _request("public_api.kicks_leaderboard_request", token=token, top=top, endpoints=endpoints)
+
+
+def parse_kicks_leaderboard(status: int, body: str) -> dict:
+    """``{"lifetime", "month", "week"}``, each ``[{"user_id", "username", "rank", "gifted_amount"}]``"""
+    return _call("public_api.parse_kicks_leaderboard", status=status, body=body)
+
+
+def parse_done(status: int, body: str) -> None:
+    """Reads an answer that carries nothing (a delete, a ban, an update):
+    raises :class:`kicksdk.KickError` unless Kick says it is done."""
+    _call("public_api.parse_done", status=status, body=body)

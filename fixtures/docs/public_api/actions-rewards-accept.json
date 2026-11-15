@@ -1,0 +1,19 @@
+{
+  "kind": "docs",
+  "request": {
+    "json": {
+      "ids": [
+        "01KEWZ2RKYZZFGD154K50Y3F8D",
+        "01KEWZ2YC27070XWMHKFJR6C87"
+      ]
+    },
+    "method": "POST",
+    "params": {},
+    "url": "https://api.kick.com/public/v1/channels/rewards/redemptions/accept"
+  },
+  "response": {
+    "body": "{\"data\":[{\"id\":\"01KERB68MZZ04551D6X5TNRFYV\",\"reason\":\"NOT_OWNED\"}],\"message\":\"OK\"}",
+    "status": 200
+  },
+  "source": "Kick's spec (api.kick.com/swagger/doc.json), its example values, transcribed 2026-11-15: not a recording"
+}

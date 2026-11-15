@@ -1,10 +1,10 @@
 defmodule Kicksdk.PublicApi do
   @moduledoc """
-  Kick's official API (`api.kick.com/public/v1`).
+  Kick's official API (`api.kick.com/public/v1` and `/public/v2`).
 
   An app token reads any channel's public data and subscribes to any channel's
-  webhooks. Batches are 50 ids; one unknown slug fails a whole `/channels`
-  request (400), so batch by id. `viewer_count` refreshes about once a minute.
+  webhooks. Batches are 50 ids (100 for live streams by user id); one unknown
+  slug fails a whole `/channels` request (400), so batch by id. `viewer_count` refreshes about once a minute.
   See `docs/KICK.md` §3.
 
   The builders that send a token refuse one with a control character (a
@@ -30,25 +30,37 @@ defmodule Kicksdk.PublicApi do
         else: Native.parse_app_token(status, body)
       )
 
-  @doc "`/livestreams` for any number of user ids: one request per 50."
+  @doc "`/public/v1/users/livestreams` for any number of user ids: one request per 100."
   @spec livestreams_requests(String.t(), [non_neg_integer()], Kicksdk.endpoints()) ::
           Kicksdk.result([Kicksdk.request()])
   def livestreams_requests(token, user_ids, endpoints \\ nil),
     do: request(Native.livestreams_requests(encode_endpoints(endpoints), token, user_ids))
 
   @doc """
-  The top live streams, overall or in a category or language: up to 100.
-  Options: `:category_id`, `:language`, `:sort` (`"viewer_count"` or
-  `"started_at"`), `:limit`, `:endpoints`.
+  One page of the streams live now (`/public/v2/livestreams`), in up to 25
+  categories and 25 languages (none: all). Options: `:category_ids`,
+  `:language_codes`, `:limit` (1 to 1000), `:cursor` (the previous page's
+  `"next_cursor"`), `:endpoints`. Kick has no sort: streams come oldest first.
   """
-  @spec top_livestreams_request(String.t(), keyword()) :: Kicksdk.result(Kicksdk.request())
-  def top_livestreams_request(token, opts \\ []) do
-    args = %{token: token, category_id: opts[:category_id], language: opts[:language]}
-    args = Map.merge(args, %{sort: opts[:sort] || "viewer_count", limit: opts[:limit] || 100})
-    Kicksdk.call_request("public_api.top_livestreams_request", args, opts[:endpoints])
+  @spec livestreams_page_request(String.t(), keyword()) :: Kicksdk.result(Kicksdk.request())
+  def livestreams_page_request(token, opts \\ []) do
+    args = %{
+      token: token,
+      category_ids: opts[:category_ids],
+      language_codes: opts[:language_codes],
+      limit: opts[:limit],
+      cursor: opts[:cursor]
+    }
+
+    Kicksdk.call_request("public_api.livestreams_page_request", args, opts[:endpoints])
   end
 
-  @doc "Reads a `/livestreams` answer. Offline is `{:ok, []}`."
+  @doc "Reads a `livestreams_page_request/2` answer: `%{\"data\" => [...], \"next_cursor\" => ...}`."
+  @spec parse_livestreams_page(integer(), binary()) :: Kicksdk.result(map())
+  def parse_livestreams_page(status, body),
+    do: Kicksdk.call("public_api.parse_livestreams_page", %{status: status, body: body})
+
+  @doc "Reads a `livestreams_requests/3` answer (or a page's streams alone). Offline is `{:ok, []}`."
   @spec parse_livestreams(integer(), binary()) :: Kicksdk.result([map()])
   def parse_livestreams(status, body),
     do:
@@ -122,4 +134,74 @@ defmodule Kicksdk.PublicApi do
           Kicksdk.result([Kicksdk.request()])
   def unsubscribe_requests(token, ids, endpoints \\ nil),
     do: request(Native.unsubscribe_requests(encode_endpoints(endpoints), token, ids))
+
+  @doc """
+  Users by id, up to 50 (`/public/v1/users`), with an app or a user token. No
+  ids, with a user token: the token's own user.
+  """
+  @spec users_request(String.t(), [non_neg_integer()] | nil, Kicksdk.endpoints()) ::
+          Kicksdk.result(Kicksdk.request())
+  def users_request(token, user_ids \\ nil, endpoints \\ nil),
+    do: Kicksdk.call_request("public_api.users_request", %{token: token, user_ids: user_ids}, endpoints)
+
+  @doc ~s[Reads a users answer: `"user_id"`, `"name"`, `"profile_picture"`, `"email"` (only for a user token with `user:read`, for its own user).]
+  @spec parse_users(integer(), binary()) :: Kicksdk.result([map()])
+  def parse_users(status, body), do: Kicksdk.call("public_api.parse_users", %{status: status, body: body})
+
+  @doc """
+  One page of categories (`/public/v2/categories`): by `:names` and `:tags`,
+  or by `:ids`; none of them, all categories. Other options: `:limit` (1 to
+  1000; Kick's default: 25), `:cursor` (the previous page's `"next_cursor"`),
+  `:endpoints`.
+  """
+  @spec categories_request(String.t(), keyword()) :: Kicksdk.result(Kicksdk.request())
+  def categories_request(token, opts \\ []) do
+    args = %{
+      token: token,
+      names: opts[:names],
+      tags: opts[:tags],
+      ids: opts[:ids],
+      limit: opts[:limit],
+      cursor: opts[:cursor]
+    }
+
+    Kicksdk.call_request("public_api.categories_request", args, opts[:endpoints])
+  end
+
+  @doc "Reads a `categories_request/2` answer: `%{\"data\" => [...], \"next_cursor\" => ...}`."
+  @spec parse_categories(integer(), binary()) :: Kicksdk.result(map())
+  def parse_categories(status, body),
+    do: Kicksdk.call("public_api.parse_categories", %{status: status, body: body})
+
+  @doc "How many streams are live on Kick, with an app or a user token."
+  @spec livestream_stats_request(String.t(), Kicksdk.endpoints()) :: Kicksdk.result(Kicksdk.request())
+  def livestream_stats_request(token, endpoints \\ nil),
+    do: Kicksdk.call_request("public_api.livestream_stats_request", %{token: token}, endpoints)
+
+  @doc ~s(Reads a stats answer: `%{"total_count" => n}`.)
+  @spec parse_livestream_stats(integer(), binary()) :: Kicksdk.result(map())
+  def parse_livestream_stats(status, body),
+    do: Kicksdk.call("public_api.parse_livestream_stats", %{status: status, body: body})
+
+  @doc """
+  The top `top` Kicks gifters (1 to 100; Kick's default: 10) of the token's
+  own channel. A user token with `kicks:read`.
+  """
+  @spec kicks_leaderboard_request(String.t(), pos_integer() | nil, Kicksdk.endpoints()) ::
+          Kicksdk.result(Kicksdk.request())
+  def kicks_leaderboard_request(token, top \\ nil, endpoints \\ nil),
+    do: Kicksdk.call_request("public_api.kicks_leaderboard_request", %{token: token, top: top}, endpoints)
+
+  @doc ~s(Reads a leaderboard answer: `"lifetime"`, `"month"`, `"week"`, each a list of `"user_id"`, `"username"`, `"rank"`, `"gifted_amount"`.)
+  @spec parse_kicks_leaderboard(integer(), binary()) :: Kicksdk.result(map())
+  def parse_kicks_leaderboard(status, body),
+    do: Kicksdk.call("public_api.parse_kicks_leaderboard", %{status: status, body: body})
+
+  @doc """
+  Whether an action worked, for the answers with nothing to read (a deleted
+  message, a ban, a channel update, a deleted reward, enrolling in ads,
+  updated drops claims): `{:ok, nil}` or `{:error, reason}`.
+  """
+  @spec parse_done(integer(), binary()) :: Kicksdk.result(nil)
+  def parse_done(status, body), do: Kicksdk.call("public_api.parse_done", %{status: status, body: body})
 end

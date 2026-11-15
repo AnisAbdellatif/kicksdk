@@ -3,7 +3,31 @@
 // what it throws on.
 
 import * as kick from '../../index.js';
-import type { ChatDrop, ChatState, Endpoints, VerifiedWebhook } from '../../index.js';
+import type {
+  AdBreak,
+  AdStatus,
+  Category,
+  ChatDrop,
+  ChatState,
+  ClaimFilter,
+  Claims,
+  Endpoints,
+  FailedRedemption,
+  HttpRequest,
+  Introspection,
+  KicksLeaderboard,
+  LivestreamStats,
+  Page,
+  Pkce,
+  RedemptionPage,
+  Reward,
+  RewardFields,
+  Scope,
+  Sent,
+  User,
+  UserToken,
+  VerifiedWebhook
+} from '../../index.js';
 
 export async function main(pem: string, body: Uint8Array, headers: Headers): Promise<void> {
   const loaded: void = await kick.init();
@@ -23,8 +47,9 @@ export async function main(pem: string, body: Uint8Array, headers: Headers): Pro
   kick.channelsByIdsRequest('token', [1, 2]);
   const feeds: string[] = kick.chatChannels(668);
   kick.chatChannels(668, 1);
-  kick.topLivestreamsRequest('token');
-  kick.topLivestreamsRequest('token', undefined, 'en', 'started_at', 10);
+  kick.livestreamsPageRequest('token');
+  kick.livestreamsPageRequest('token', undefined, ['en'], 10, 'cursor');
+  kick.livestreamsPageRequest('token', ids, undefined, undefined, undefined, { api: 'http://localhost:9' });
   kick.sendRequest('session', 668, 'hi', 'ref');
   kick.sendRequest('session', 668, 'hi', 'ref', { message_id: 'm', sender_id: 1, sender_username: 'someone' });
   kick.subscribeRequest('token', 1, [{ name: 'channel.followed' }]);
@@ -32,8 +57,8 @@ export async function main(pem: string, body: Uint8Array, headers: Headers): Pro
   kick.chatChannels('668');
   // @ts-expect-error not a Float64Array any more, but neither strings
   kick.livestreamsRequests('token', ['1']);
-  // @ts-expect-error an unknown sort
-  kick.topLivestreamsRequest('token', null, null, 'loudest');
+  // @ts-expect-error languages are a list
+  kick.livestreamsPageRequest('token', null, 'en');
 
   // The realtime pieces.
   const after: number = kick.retryAfterMs(1006);
@@ -117,6 +142,96 @@ export async function main(pem: string, body: Uint8Array, headers: Headers): Pro
     close(_code?: number, _reason?: string): void {}
   }
   kick.connectChat({ chatroomId: 668, onEvent() {}, WebSocket: WsLike }).close();
+}
+
+// User tokens: PKCE and state from the CSPRNG, the token, what it may do.
+export function oauth(status: number, body: string, endpoints: Endpoints): void {
+  const pkce: Pkce = kick.newPkce();
+  const state: string = kick.newState();
+  kick.oauthPkce(crypto.getRandomValues(new Uint8Array(32)));
+  kick.oauthPkceFromVerifier(pkce.verifier);
+  const scopes: Scope[] = ['user:read', 'chat:write', 'some:new-scope'];
+  const url: string = kick.oauthAuthorizeUrl('client', 'https://app.example/cb', scopes, state, pkce.verifier);
+  kick.oauthAuthorizeUrl('client', 'https://app.example/cb', kick.oauthScopes(), state, pkce.verifier, endpoints);
+  const code: HttpRequest = kick.oauthCodeRequest('c', 's', 'r', 'code', pkce.verifier);
+  kick.oauthRefreshRequest('c', 's', 'refresh');
+  const token: UserToken = kick.oauthParseUserToken(status, body);
+  const refresh: string | null = token.refresh_token;
+  kick.oauthRevokeRequest(token.access_token, 'refresh_token');
+  kick.oauthRevokeRequest(token.access_token);
+  kick.oauthParseRevoke(status, body);
+  kick.oauthIntrospectRequest(token.access_token);
+  const i: Introspection = kick.oauthParseIntrospect(status, body);
+  const active: boolean = i.active;
+  // @ts-expect-error random bytes, not a string
+  kick.oauthPkce('random');
+  // @ts-expect-error the hint is one of two
+  kick.oauthRevokeRequest('t', 'refresh');
+  void [url, code, refresh, active];
+}
+
+// The official API's newer reads, and what a user token may do.
+export function publicApi(status: number, body: string): void {
+  kick.usersRequest('t');
+  kick.usersRequest('t', [1, 2]);
+  const users: User[] = kick.parseUsers(status, body);
+  kick.categoriesRequest('t', ['Rust'], undefined, undefined, 10, 'cursor');
+  const categories: Page<Category> = kick.parseCategories(status, body);
+  const tags: string[] = categories.data[0]!.tags;
+  kick.livestreamStatsRequest('t');
+  const stats: LivestreamStats = kick.parseLivestreamStats(status, body);
+  kick.kicksLeaderboardRequest('t', 10);
+  const board: KicksLeaderboard = kick.parseKicksLeaderboard(status, body);
+  kick.parseDone(status, body);
+
+  kick.chatSendRequest('t', { user: 123 }, 'hi');
+  kick.chatSendRequest('t', 'bot', 'hi', 'reply-to-id');
+  const sent: Sent = kick.chatParseSend(status, body);
+  kick.chatDeleteRequest('t', 'message-id');
+  kick.moderationBanRequest('t', 1, 2, 'reason');
+  kick.moderationTimeoutRequest('t', 1, 2, 10);
+  kick.moderationUnbanRequest('t', 1, 2);
+  kick.channelsUpdateRequest('t', 1, ['tag'], 'title');
+  kick.channelsUpdateRequest('t', undefined, []);
+
+  const fields: RewardFields = { title: 'Song', cost: 100, description: undefined };
+  kick.rewardsListRequest('t');
+  const rewards: Reward[] = kick.rewardsParseRewards(status, body);
+  kick.rewardsCreateRequest('t', fields);
+  kick.rewardsUpdateRequest('t', 'id', { is_paused: true });
+  const reward: Reward = kick.rewardsParseReward(status, body);
+  kick.rewardsDeleteRequest('t', 'id');
+  kick.rewardsRedemptionsRequest('t', undefined, 'pending');
+  kick.rewardsRedemptionsByIdsRequest('t', ['a'], 'cursor');
+  const page: RedemptionPage = kick.rewardsParseRedemptions(status, body);
+  const redeemer: number | null = page.rewards[0]!.redemptions[0]!.redeemer;
+  kick.rewardsAcceptRequest('t', ['a']);
+  kick.rewardsRejectRequest('t', ['a']);
+  const failed: FailedRedemption[] = kick.rewardsParseFailures(status, body);
+
+  kick.adsAdBreakRequest('t', crypto.randomUUID(), 30);
+  const adBreak: AdBreak = kick.adsParseAdBreak(status, body);
+  kick.adsStatusRequest('t');
+  const ads: AdStatus = kick.adsParseStatus(status, body);
+  kick.adsEnrollRequest('t');
+
+  const filter: ClaimFilter = { campaign_id: 'c', user_id: 1, limit: 10, cursor: undefined };
+  kick.dropsClaimsRequest('t');
+  kick.dropsClaimsRequest('t', filter);
+  const claims: Claims = kick.dropsParseClaims(status, body);
+  kick.dropsUpdateClaimsRequest('t', [{ claim_id: 'c', external_status: 'processed' }]);
+
+  // @ts-expect-error a sender is {user} or 'bot'
+  kick.chatSendRequest('t', 'user', 'hi');
+  // @ts-expect-error ids are numbers
+  kick.moderationBanRequest('t', '1', 2);
+  // @ts-expect-error reward fields are the core's, snake_case
+  kick.rewardsCreateRequest('t', { title: 'x', cost: 1, isEnabled: true });
+  // @ts-expect-error a redemption status is one of three
+  kick.rewardsRedemptionsRequest('t', undefined, 'done');
+  // @ts-expect-error updates are {claim_id, external_status}
+  kick.dropsUpdateClaimsRequest('t', [['c', 'processed']]);
+  void [users, tags, stats, board, sent, rewards, reward, failed, adBreak, ads, claims];
 }
 
 type Buffer = Uint8Array;

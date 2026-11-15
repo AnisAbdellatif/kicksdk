@@ -231,6 +231,86 @@ fn unsub_codes_2500_to_2999_resubscribe() {
 }
 
 #[test]
+fn a_repeated_unsub_with_nothing_between_closes_instead_of_looping() {
+    let unsub = r#"{"push":{"channel":"chatrooms.1.v2","unsub":{"code":2500,"reason":"insufficient state"}}}"#;
+    let event = r#"{"push":{"channel":"chatrooms.1.v2","pub":{"data":{"event":"X","data":"{}"}}}}"#;
+    let mut s = connected(2700);
+    s.receive(unsub, 1);
+    s.receive(r#"{"id":3,"subscribe":{}}"#, 2);
+    // An event in between: Kick may ask once more.
+    s.receive(event, 3);
+    assert!(matches!(&s.receive(unsub, 4)[1], Action::Send { text } if text.contains("\"subscribe\"")));
+    s.receive(r#"{"id":4,"subscribe":{}}"#, 5);
+    // Asked again with nothing on the feed since: a close, not a subscribe.
+    let out = s.receive(unsub, 6);
+    assert!(matches!(&out[0], Action::Unsubscribed { code: 2500, .. }), "{out:?}");
+    assert_eq!(close_of(&out[1..]), (2500, false));
+    assert!(s.closed().is_empty());
+    // A new connection starts the count over.
+    s.open("t2", 7);
+    s.receive(r#"{"id":1,"connect":{"ping":25}}"#, 7);
+    s.receive(r#"{"id":2,"subscribe":{}}"#, 8);
+    assert!(matches!(&s.receive(unsub, 9)[1], Action::Send { .. }));
+}
+
+#[test]
+fn a_subscribe_refused_for_now_closes_a_refused_one_for_good_does_not() {
+    let failed = |s: &mut Session, id: u64, error: &str| s.receive(&format!(r#"{{"id":{id},"error":{error}}}"#), 1);
+    let permission = r#"{"code":103,"message":"permission denied"}"#;
+    let mut s = connected(2700);
+    // A refusal that stands: the connection stays up without the feed.
+    s.receive(r#"{"push":{"channel":"chatrooms.1.v2","unsub":{"code":2500,"reason":"x"}}}"#, 1);
+    let out = failed(&mut s, 3, permission);
+    assert_eq!(
+        out,
+        vec![Action::SubscribeFailed {
+            channel: "chatrooms.1.v2".into(),
+            code: 103,
+            message: "permission denied".into(),
+            temporary: false
+        }]
+    );
+    assert!(s.is_connected());
+
+    for error in [
+        r#"{"code":111,"message":"too many requests","temporary":true}"#,
+        r#"{"code":103,"message":"permission denied","temporary":true}"#,
+        r#"{"code":109,"message":"token expired"}"#,
+        r#"{"code":3,"message":"transport"}"#,
+    ] {
+        let code = serde_json::from_str::<serde_json::Value>(error).unwrap()["code"].as_i64().unwrap();
+        // On the first subscribe, and on one Kick asked for (2500-2999).
+        for again in [false, true] {
+            let mut s = connected(2700);
+            let mut id = 2;
+            if again {
+                s.receive(r#"{"push":{"channel":"chatrooms.1.v2","unsub":{"code":2500,"reason":"x"}}}"#, 1);
+                id = 3;
+            } else {
+                s.open("t", 0);
+                s.receive(r#"{"id":1,"connect":{"ping":25}}"#, 0);
+            }
+            let out = failed(&mut s, id, error);
+            assert!(
+                matches!(&out[0], Action::SubscribeFailed { code: c, temporary: true, .. } if *c == code),
+                "{error}: {out:?}"
+            );
+            assert_eq!(close_of(&out[1..]), (code, false), "{error}");
+            assert!(s.deadline().is_none());
+        }
+    }
+}
+
+#[test]
+fn a_subscribe_failure_serializes_with_temporary() {
+    let a = Action::SubscribeFailed { channel: "c".into(), code: 103, message: "m".into(), temporary: false };
+    assert_eq!(
+        serde_json::to_string(&a).unwrap(),
+        r#"{"action":"subscribe_failed","channel":"c","code":103,"message":"m","temporary":false}"#
+    );
+}
+
+#[test]
 fn no_ping_from_the_server_means_no_silence_timeout() {
     let mut s = Session::new(SessionOptions::new(vec!["a".into()]));
     s.open("t", 0);

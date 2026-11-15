@@ -5,8 +5,9 @@
 //!
 //! - the **user id** (`broadcaster_user_id`): what the official API and the
 //!   webhooks use;
-//! - the **channel id**: `/livestreams`' `channel_id`, the website API's `id`,
-//!   the `channel.<id>` feeds, the realtime connection endpoint;
+//! - the **channel id**: the old `/public/v1/livestreams`' `channel_id`, the
+//!   website API's `id`, the `channel.<id>` feeds, the realtime connection
+//!   endpoint. The current livestreams endpoints do not give it;
 //! - the **chatroom id**: the website API's `chatroom.id`, the chat feeds.
 //!   No official endpoint gives it.
 //!
@@ -41,7 +42,8 @@ id!(
     UserId
 );
 id!(
-    /// A channel's id: `channel_id` in `/livestreams`, `id` in the website API.
+    /// A channel's id: `channel_id` in the old `/public/v1/livestreams`, `id`
+    /// in the website API.
     ChannelId
 );
 id!(

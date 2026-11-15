@@ -209,7 +209,11 @@ class ChatFeed:
             raise ValueError("max_queue must be at least 1 (or None, for no limit)")
         if max_refusals < 1:
             raise ValueError("max_refusals must be at least 1")
-        self.channels: list[str] = list(channels) if channels else rt.chat_channels(chatroom_id, channel_id)
+        # None: the default feeds; [] is no feed at all, as in the other
+        # bindings.
+        self.channels: list[str] = (
+            list(channels) if channels is not None else rt.chat_channels(chatroom_id, channel_id)
+        )
         self.channel_id = channel_id
         self.endpoints = endpoints
         self.max_queue = max_queue
@@ -347,7 +351,12 @@ class ChatFeed:
                         await self._keep_up(http)
                     finally:
                         self._closing = True  # the client, now: let it close
-        except Exception as e:  # noqa: BLE001 - kept for the iterator, which raises it
+        except (KeyboardInterrupt, SystemExit, GeneratorExit, asyncio.CancelledError):
+            raise
+        except BaseException as e:  # noqa: BLE001 - kept for the iterator, which raises it
+            # BaseException: a panic in a native extension (PyO3's
+            # PanicException) is one, and must not end the feed as if the
+            # block had.
             self._error = e
             log.warning("chat feed stopped: %s", _describe(e))
         finally:
@@ -412,7 +421,7 @@ class ChatFeed:
         ended. Raises for a failed attempt."""
         where = (
             rt.chat_connection_request(self.channel_id, client_id, self.endpoints)
-            if self.channel_id
+            if self.channel_id is not None
             else rt.connection_request(client_id, self.endpoints)
         )
         found = [c for c in rt.parse_connection(*await _send(http, where)) if c.get("provider") == "centrifugo"]
@@ -447,6 +456,10 @@ class ChatFeed:
                         refresher = asyncio.create_task(refresh())
                 elif kind == "connected":
                     self._refusals = 0
+                    # With no feed to subscribe to, the connection is all
+                    # there is.
+                    if not self.channels:
+                        backoff.reset()
                 elif kind == "subscribed":
                     self.subscribed.add(a["channel"])
                     if a["channel"] == self.channels[0]:
@@ -456,8 +469,11 @@ class ChatFeed:
                 elif kind == "subscribe_failed":
                     # Kick refuses a guest some of the default feeds (103);
                     # only the chat feed itself is worth a warning.
+                    # A temporary refusal closes the connection (the next
+                    # action) and the reconnect subscribes again.
                     level = logging.WARNING if a["channel"] == self.channels[0] else logging.DEBUG
-                    log.log(level, "Kick refused feed %s: %s %s", a["channel"], a["code"], a["message"])
+                    later = " for now; reconnecting" if a["temporary"] else ""
+                    log.log(level, "Kick refused feed %s%s: %s %s", a["channel"], later, a["code"], a["message"])
                 elif kind == "event":
                     await self._put(a)
             return None
@@ -535,10 +551,11 @@ def connect_chat(
 
     ``channel_id`` also finds the server for the chat's region. ``channels``
     replaces the feeds (:func:`kicksdk.realtime.chat_channels`, the chat
-    feed first); ``endpoints`` points Kick's URLs elsewhere. ``max_queue``
-    and ``overflow`` set what happens to events the consumer is not reading
-    fast enough, ``max_refusals`` how many refused attempts in a row count
-    as a terminal close (see the module docs). ``http`` is a client to send
+    feed first; ``[]`` for none, the connection alone); ``endpoints``
+    points Kick's URLs elsewhere. ``max_queue`` and ``overflow`` set what
+    happens to events the consumer is not reading fast enough,
+    ``max_refusals`` how many refused attempts in a row count as a terminal
+    close (see the module docs). ``http`` is a client to send
     Kick's HTTP requests with (it stays open); by default the feed has its
     own. ``backoff`` is the :class:`kicksdk.realtime.Backoff` to wait by
     (default: 1 s doubling to 30 s).

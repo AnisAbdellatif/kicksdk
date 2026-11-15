@@ -14,8 +14,10 @@
 //!
 //! - [`http`]: a [`Request`] to send, and the [`Error`] a parser returns
 //!   when Kick's answer is not what it should be.
-//! - [`public_api`]: Kick's official API (`api.kick.com/public/v1`) and the
-//!   app token.
+//! - [`public_api`]: Kick's official API (`api.kick.com/public/v1` and `/v2`)
+//!   and the app token.
+//! - [`oauth`]: user tokens (authorization code with PKCE), their scopes,
+//!   refresh, revocation and introspection.
 //! - [`website`]: the endpoints kick.com's own frontend uses (`kick.com/api/v2`):
 //!   the chatroom id, follower totals, chat history, and moderation with a
 //!   viewer's session.
@@ -42,6 +44,8 @@ pub mod events;
 pub mod http;
 pub mod ids;
 mod lenient;
+#[cfg(feature = "oauth")]
+pub mod oauth;
 pub mod public_api;
 pub mod realtime;
 #[cfg(feature = "webhooks")]

@@ -33,6 +33,10 @@ class FakeKick {
   bool Function(int n) tokenFails = (_) => false;
   String connectReply = '{"client":"c","ping":25,"pong":true}';
 
+  /// The error to answer the first `refuseSubscribes` subscribes with.
+  var refuseSubscribes = 0;
+  String subscribeError = '{"code":111,"message":"too many requests","temporary":true}';
+
   Map<String, String> get endpoints => {'realtime': 'http://127.0.0.1:${_server.port}'};
   String get _ws => 'ws://127.0.0.1:${_server.port}/ws';
 
@@ -98,7 +102,14 @@ class FakeKick {
         }
         ws.add('{"id":$id,"connect":$connectReply}');
       }
-      if (m.containsKey('subscribe')) ws.add('{"id":$id,"subscribe":{}}');
+      if (m.containsKey('subscribe')) {
+        if (refuseSubscribes > 0) {
+          refuseSubscribes--;
+          ws.add('{"id":$id,"error":$subscribeError}');
+        } else {
+          ws.add('{"id":$id,"subscribe":{}}');
+        }
+      }
       if (m.containsKey('refresh')) ws.add('{"id":$id,"refresh":{"expires":true,"ttl":3600}}');
     }
   }
@@ -272,6 +283,31 @@ void main() {
     expect(kick.received.last, contains('"token":"t4"'));
     expect(kick.connections, 1);
     expect(drops, isEmpty);
+  });
+
+  test('a subscribe refused for now ends the connection; the reconnect subscribes', () async {
+    kick.refuseSubscribes = 1;
+    final c = connect();
+    await until(() => kick.connections == 2 && subscribed);
+    expect(infos.first.code, 111);
+    expect(infos.first.terminal, isFalse);
+    expect(backoff.asked.first, 0);
+    expect(errors, isEmpty);
+    c.close();
+    await c.done;
+  });
+
+  test('a subscribe refused for good leaves the connection up without it', () async {
+    kick.refuseSubscribes = 1;
+    kick.subscribeError = '{"code":103,"message":"permission denied"}';
+    final c = connect();
+    await until(() => kick.received.length >= 2);
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    expect(kick.connections, 1);
+    expect(subscribed, isFalse);
+    expect(infos, isEmpty);
+    c.close();
+    await c.done;
   });
 
   test('a terminal disconnect waits long, then reconnects as a new client', () async {
