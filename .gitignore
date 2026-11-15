@@ -29,3 +29,8 @@ site/
 
 # tokenade — legacy per-project embedding model cache (now global)
 .fastembed_cache/
+
+# Graphify rebuild state (published graph outputs remain tracked)
+/graphify-out/.*
+/graphify-out/cache/
+/graphify-out/manifest.json
