@@ -11,8 +11,10 @@
 #
 # A run on a tag releases that tag, with the workflow and scripts of that same
 # commit. A run on a branch is always a dry run. An unknown job in ONLY, an
-# ONLY that names no job (","), a tag that is not v<semver>, or a tag that is
-# not the packages' version fails the plan, and with it the whole run.
+# ONLY that names no job (","), a tag that is not v<semver>, a tag that is
+# not the packages' version, or (unless a dry run) a tag on a commit main does
+# not contain fails the plan, and with it the whole run. That last check
+# fetches main from origin, so it needs the checkout's origin and git.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -39,6 +41,19 @@ else
     echo "::notice::a run on a branch ($ref_name) is a dry run: nothing is uploaded or published"
   fi
   dry=true
+fi
+# A release is the merge commit tagged (docs/releasing.md): one that is not
+# on main is refused. main's commits only, no blobs; the repository is public,
+# so the fetch needs no credentials.
+if [ "$ref_type" = tag ] && [ "$dry" != true ]; then
+  if ! git fetch --quiet --no-tags --filter=blob:none origin main; then
+    echo "::error::could not fetch main from origin, to check that tag $ref_name is on it"
+    exit 1
+  fi
+  if ! git merge-base --is-ancestor HEAD FETCH_HEAD; then
+    echo "::error::tag $ref_name is on $(git rev-parse --short HEAD), which is not on main: tag the merge commit"
+    exit 1
+  fi
 fi
 scripts/release-check.sh "$version"
 scripts/ffi-targets.sh --check
@@ -77,6 +92,11 @@ if has pub && [ "$event" != push ] && [ "$dry" != true ]; then
   echo "::warning::pub.dev publishes from tag pushes only, so this run leaves pub out: re-run the failed jobs of the tag's own run, or run scripts/publish-dart.sh $version from a clean checkout of the tag"
   unset 'want[pub]'
 fi
+# hex and pub record their binaries' checksums: they take them from the
+# release, and hold them to the binaries this run built (scripts/check-built.sh),
+# so they need this run's NIFs or FFI libraries.
+if has hex; then want[nif]=1; fi
+if has pub; then want[ffi]=1; fi
 
 flag() { if "$@"; then echo true; else echo false; fi; }
 publish() { [ "$dry" = false ] && has "$1"; }

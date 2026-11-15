@@ -4,9 +4,20 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly, for the advisories job alone: a new RustSec advisory shows up
+  # without waiting for a change.
+  schedule:
+    - cron: "41 4 * * 1"
 
 permissions:
   contents: read
+
+# One run per pull request: a new push cancels the run it supersedes. Every
+# other run (main, the weekly one) is in a group of its own, so none is ever
+# cancelled, not even one still waiting to start.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,7 +25,9 @@ env:
 jobs:
   rust:
     name: Rust core
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -25,20 +38,39 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo fmt --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo doc --no-deps -p kicksdk
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo doc --no-deps -p kicksdk --all-features
         env:
           RUSTDOCFLAGS: -D warnings
-      - run: cargo test --workspace
-      # The minimum supported Rust version, for the core alone.
+      - run: cargo test --workspace --all-features
+      # The minimum supported Rust version, for the two crates published to
+      # crates.io (both declare it).
       - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
         with:
           toolchain: "1.88"
-      - run: cargo +1.88 build -p kicksdk --all-features
+      - run: cargo +1.88 build --locked -p kicksdk -p kicksdk-ffi --all-features
+
+  # RustSec advisories against Cargo.lock, with the exceptions (and their
+  # reasons) in deny.toml and .cargo/audit.toml.
+  advisories:
+    name: Advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-deny@0.20.2,cargo-audit@0.22.2
+      - run: cargo deny check advisories
+      - run: cargo audit
 
   js:
     name: npm package (WebAssembly)
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -62,7 +94,9 @@ jobs:
 
   consistency:
     name: One version, every function in every language
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -75,7 +109,9 @@ jobs:
 
   lint:
     name: Workflows and scripts
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -91,7 +127,9 @@ jobs:
 
   python:
     name: Python package (PyO3, ${{ matrix.python }})
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # The oldest Python and dependency versions the package allows, and the
     # current ones: the wheel is abi3, and aio supports websockets 13+ and
     # httpx 0.27+.
@@ -128,7 +166,9 @@ jobs:
 
   dart:
     name: Dart package (FFI, built from source)
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: bindings/dart
@@ -150,7 +190,9 @@ jobs:
 
   elixir:
     name: hex package (NIF)
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: bindings/elixir
@@ -176,6 +218,7 @@ jobs:
   # workspaces build offline, and each package builds itself from one.
   vendored:
     name: Vendored sources
+    if: github.event_name != 'schedule'
     uses: ./.github/workflows/build.yml
     with:
       part: vendored

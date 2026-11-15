@@ -7,7 +7,8 @@
 #   ffi       the Dart/C library per target, named as the release names it
 #             (artifacts ffi-<target>)
 #   wheels    the Python wheels and sdist (artifacts wheels-*), each wheel
-#             installed and tested on a machine it is for
+#             installed and tested on a machine it is for, and the sdist
+#             built from source and tested
 #   js        the npm package's tarball (artifact js-package)
 #   vendored  the hex and pub packages' vendored native/ workspaces, built
 #             --locked --offline, and each package built from them; the pub
@@ -50,6 +51,7 @@ jobs:
     name: NIF ${{ matrix.target }}
     if: inputs.part == 'nif'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -137,6 +139,7 @@ jobs:
     name: NIF tarballs
     needs: nif
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -167,6 +170,7 @@ jobs:
     name: FFI ${{ matrix.target }}
     if: inputs.part == 'ffi'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -264,6 +268,7 @@ jobs:
     name: Wheels ${{ matrix.os }} ${{ matrix.target }} ${{ matrix.manylinux }}
     if: inputs.part == 'wheels'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -282,6 +287,9 @@ jobs:
           persist-credentials: false
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          # The maturin the repository is developed with (in the range
+          # pyproject.toml's build-system allows).
+          maturin-version: "1.15.0"
           working-directory: bindings/python
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux || 'auto' }}
@@ -296,12 +304,16 @@ jobs:
     name: Python sdist
     if: inputs.part == 'wheels'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          # The maturin the repository is developed with (in the range
+          # pyproject.toml's build-system allows).
+          maturin-version: "1.15.0"
           working-directory: bindings/python
           command: sdist
           args: --out dist
@@ -311,10 +323,40 @@ jobs:
           path: bindings/python/dist
           if-no-files-found: error
 
+  # Where no wheel fits, pip builds the sdist: from source, with a Rust
+  # toolchain. That build, and the tests against it.
+  sdist-test:
+    name: sdist, built from source and tested
+    needs: sdist
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wheels-sdist
+          path: dist
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
+        with:
+          toolchain: stable
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+      - name: Install from the sdist and run the tests against it
+        run: |
+          python -m pip install pytest httpx websockets
+          python -m pip install --no-binary kicksdk-py dist/*.tar.gz
+          cd "$RUNNER_TEMP"
+          python -c 'import kicksdk; print(kicksdk.__file__)'
+          python -m pytest -q -p no:cacheprovider "$GITHUB_WORKSPACE/bindings/python/tests"
+
   wheels-test:
     name: Wheel test ${{ matrix.os }} ${{ matrix.libc }}
     needs: wheels
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -368,6 +410,7 @@ jobs:
     name: npm package (WebAssembly)
     if: inputs.part == 'js'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -401,6 +444,7 @@ jobs:
     name: From vendored sources (${{ matrix.package }})
     if: inputs.part == 'vendored'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -458,6 +502,7 @@ jobs:
     name: hex package (dry run)
     if: inputs.part == 'packages'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: bindings/elixir
@@ -507,6 +552,7 @@ jobs:
     name: pub package (dry run)
     if: inputs.part == 'packages'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -548,6 +594,7 @@ jobs:
     name: crates.io packages (dry run)
     if: inputs.part == 'packages'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:

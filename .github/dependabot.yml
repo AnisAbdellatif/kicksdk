@@ -1,0 +1,48 @@
+# Weekly update pull requests, one per ecosystem (every update grouped), so
+# there are a handful a week at most. bindings/js has no dependencies to
+# update; the Rust toolchain and the container images are pinned by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Cargo.lock: the workspace, which every binding's native code builds from.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        patterns: ["*"]
+
+  - package-ecosystem: mix
+    directory: /bindings/elixir
+    schedule:
+      interval: weekly
+    groups:
+      mix:
+        patterns: ["*"]
+
+  - package-ecosystem: pub
+    directory: /bindings/dart
+    schedule:
+      interval: weekly
+    groups:
+      pub:
+        patterns: ["*"]
+
+  # pyproject.toml's ranges: a pull request only when a release falls
+  # outside one (CI tests the oldest versions they allow on purpose).
+  - package-ecosystem: pip
+    directory: /bindings/python
+    versioning-strategy: widen
+    schedule:
+      interval: weekly
+    groups:
+      pip:
+        patterns: ["*"]

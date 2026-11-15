@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Build
+- The `kicksdk` and `kicksdk-ffi` crates ship the MIT and Apache-2.0
+  licence texts.
+- A release publishes nothing unless every build and upload of the run
+  succeeded, and its tag must be on main.
+- A file already on the GitHub release that differs from the run's build
+  fails the release; the hex and pub checksums are held to the run's own
+  builds (`scripts/check-built.sh`).
+- The PyPI sdist is installed from source and tested before release.
+- CI checks RustSec advisories (weekly too), runs with `--all-features`,
+  and builds `kicksdk-ffi` at the MSRV. Dependabot opens weekly grouped
+  updates.
+- `tools/record-realtime.mjs` anonymizes everything it is not told to
+  keep: HTTP bodies, subscribe and connect history, join and leave info,
+  publication info and tags, lines that are not JSON, close reasons,
+  camelCase and plural ids, URLs of any scheme.
+
 ## 0.2.0
 
 Fixes from two security and robustness audits of the core, the bindings and

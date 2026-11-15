@@ -22,10 +22,22 @@ check bindings/elixir/mix.exs "$(sed -n 's/^  @version "\(.*\)"$/\1/p' bindings/
 check bindings/python/pyproject.toml "$(sed -n 's/^version = "\(.*\)"$/\1/p' bindings/python/pyproject.toml)"
 check bindings/dart/pubspec.yaml "$(sed -n 's/^version: \(.*\)$/\1/p' bindings/dart/pubspec.yaml)"
 check bindings/dart/hook/build.dart "$(sed -n "s/^const version = '\(.*\)';$/\1/p" bindings/dart/hook/build.dart)"
-# Every package ships CHANGELOG.md; it has to say what this version is.
+# The hex and pub packages ship CHANGELOG.md (scripts/package-files.sh); it
+# has to say what this version is.
 if ! grep -qxF "## $want" CHANGELOG.md; then
   echo "CHANGELOG.md: no '## $want' heading" >&2
   fail=1
 fi
+# The packages that ship the two licence files as committed copies (cargo
+# and PEP 639 take nothing from outside the package): the same text as the
+# repository's.
+for dir in crates/kicksdk crates/kicksdk-ffi bindings/python; do
+  for f in LICENSE-MIT LICENSE-APACHE; do
+    if ! cmp -s "$f" "$dir/$f"; then
+      echo "$dir/$f: missing, or not the same as $f (cp $f $dir/)" >&2
+      fail=1
+    fi
+  done
+done
 [ "$fail" = 0 ] && echo "every package is at $want"
 exit "$fail"

@@ -7,8 +7,16 @@
 # ($PYTHON, default python3), dart, and mix.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-site=$(realpath -m "${1:-site}")
 python=${PYTHON:-python3}
+# The target is emptied first: refuse /, the repository and anything above
+# it. A relative path is from the repository root.
+mkdir -p "${1:-site}"
+site=$(cd "${1:-site}" && pwd -P)
+root=$(pwd -P)
+case "$root/" in
+  "$site"/*) echo "build-docs.sh: refusing to empty $site (the repository or above it)" >&2; exit 2 ;;
+esac
+if [ "$site" = / ]; then echo "build-docs.sh: refusing to empty /" >&2; exit 2; fi
 rm -rf "$site" && mkdir -p "$site"
 
 python3 scripts/docs/api_table.py --check

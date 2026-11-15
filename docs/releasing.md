@@ -16,28 +16,32 @@ and the sources all taken from the tagged commit.
    on a branch builds and checks everything a release does and uploads and
    publishes nothing.
 3. Merge, then tag the merge commit: `git tag v<version> && git push origin
-   v<version>`.
+   v<version>`. The plan refuses a tag (other than a dry run's) on a commit
+   that main does not contain.
 
 ## What the workflow does
 
-1. **plan** (`scripts/release-plan.sh`) checks the tag is `v<semver>` and is
-   the version of every package, and decides which jobs run.
+1. **plan** (`scripts/release-plan.sh`) checks the tag is `v<semver>`, is
+   the version of every package and is on main, and decides which jobs run.
 2. **Builds** (`.github/workflows/build.yml`, read-only): the Elixir NIFs, the
    Dart/C library per target, the Python wheels and the npm package, as
    artifacts of the run; and the vendored `native/` workspaces the hex and
    pub packages ship, built `--locked --offline`, with each package built
    from its own. Every Linux glibc library is checked against its target's
    glibc floor (below). Every wheel is installed and tested on a machine it
-   is for.
+   is for, and the sdist is built from source and tested.
 3. **The GitHub release** is created, and the NIF tarballs and the FFI
    libraries are uploaded to it afterwards, by other jobs (which is why
-   GitHub's immutable releases must stay off: see the setup below). The
+   GitHub's immutable releases must stay off: see the setup below). A file
+   the release has already, with other bytes, fails the upload (below). The
    wheels and the npm package go to their registries only.
-4. **Publishing.** crates.io, PyPI and npm publish as soon as their own
-   builds are done. hex and pub wait for every one of their binaries to be
-   on the release (and for the vendored-source check), record those files'
-   SHA-256s in the package (`checksum-Elixir.Kicksdk.Native.exs`,
-   `hook/checksums.json`), test the package as a user gets it (the binary
+4. **Publishing** starts only once every build and upload of the run has
+   succeeded: one failed target holds every registry back, so none of them
+   ends up with a version the others lack. hex and pub record the SHA-256s
+   of their binaries on the release in the package
+   (`checksum-Elixir.Kicksdk.Native.exs`, `hook/checksums.json`), check
+   those against the binaries this run built (`scripts/check-built.sh`),
+   test the package as a user gets it (the binary
    downloaded from the release and checked, with no Rust on `PATH` to fall
    back to), check that the package as the registry will serve it builds
    from source (`scripts/check-dart-archive.sh` on the archive pub uploads,
@@ -53,17 +57,21 @@ The NIF tarballs and FFI libraries on a release are what the hex and pub
 packages' checksums name, and neither registry takes a version twice.
 Replacing one of those files breaks every install of that version, for good.
 So the workflow never replaces a release file (`scripts/upload-release-assets.sh`):
-one that is there is kept, and if a re-run built different bytes, the run
-says so in a warning and the release's file stays. The packages take their
-checksums from the release, never from the build, so they always match it.
+one that is there is kept. If its bytes are not the ones this run built (a
+re-run rebuilt it differently, or someone uploaded a file of that name), the
+upload job fails with both SHA-256s, and nothing is published. The packages
+take their checksums from the release, so they match what users download,
+and hex and pub refuse to publish unless those are the bytes this run built:
+no package vouches for a file the run did not make.
 
 NIF tarballs are packed reproducibly (`scripts/package-nif.sh`: one entry,
 owner 0, fixed mode, the commit's time, `gzip -n`), so the same library
 always gives the same tarball.
 
-If a file on a release is wrong, delete it by hand only while neither hex
-nor pub has published that version; then re-run (below). Once either has, the
-fix is a new version.
+If a file on a release is wrong, or an upload failed because the release's
+file differs, delete it by hand (`gh release delete-asset v<version>
+<file>`) only while neither hex nor pub has published that version; then
+re-run (below). Once either has, the fix is a new version.
 
 ## Re-running part of a release
 
@@ -96,7 +104,7 @@ re-run therefore does only what is left.
   | `crates` | publishes `kicksdk`, then `kicksdk-ffi`, each unless crates.io has it |
   | `pypi` | builds the wheels and publishes them (skipping files PyPI has) |
   | `npm` | builds, tests and publishes `kicksdk-js` unless npm has the version |
-  | `hex` | publishes from the release's NIFs, which must all be there |
+  | `hex` | builds the NIFs (as `nif` does) and publishes from the release's, which must all be there and be the bytes built |
   | `pub` | refused on a dispatched run: pub.dev rejects it (below) |
 
   Empty means all of them. An unknown value fails the run. `dry_run` builds
@@ -107,10 +115,12 @@ re-run therefore does only what is left.
   leaves pub out (with a warning), and fails if `pub` is asked for by name.
   Publish such a version by hand: `git checkout v<version> &&
   scripts/publish-dart.sh <version>`.
-- **Hazards**: hex and pub need every binary on the release; with `only=hex`
-  or `only=pub` they take what the release has and fail if a target is
-  missing. Two runs of one tag never overlap: the second waits for the
-  first. GitHub keeps only one waiting run per tag, though: a third run
+- **Hazards**: hex and pub need every binary on the release, and the run's
+  own build of each: `only=hex` builds the NIFs again, uploads any the
+  release lacks, and fails if one there differs from the rebuild. A rebuild
+  on a later stable Rust can differ, so re-run the failed jobs of the tag's
+  own run where you can: its builds are kept. Two runs of one tag never
+  overlap: the second waits for the first. GitHub keeps only one waiting run per tag, though: a third run
   started while the second waits cancels the second, so start one re-run
   at a time, or start the cancelled one again once the others are done.
 

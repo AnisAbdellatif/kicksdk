@@ -4,7 +4,9 @@ description = "kicksdk behind a C ABI: every function by name, JSON in and out (
 readme = "../../README.md"
 keywords = ["kick", "ffi", "dart"]
 categories = ["api-bindings"]
-include = ["src/**/*.rs", "include/*.h"]
+# The licence files: copies of the repository's, kept equal by
+# scripts/release-check.sh.
+include = ["src/**/*.rs", "include/*.h", "LICENSE-MIT", "LICENSE-APACHE"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

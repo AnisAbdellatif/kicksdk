@@ -12,7 +12,8 @@ shift
 
 fail=0
 for lib in "$@"; do
-  needs=$(readelf --version-info --wide "$lib" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/^GLIBC_//' | sort -uV)
+  # No GLIBC_ need at all is reported below, not a grep failure under pipefail.
+  needs=$(readelf --version-info --wide "$lib" | { grep -o 'GLIBC_[0-9][0-9.]*' || true; } | sed 's/^GLIBC_//' | sort -uV)
   newest=$(printf '%s\n' "$needs" | tail -1)
   if [ -z "$newest" ]; then
     echo "$lib: no glibc version needs (not a glibc library?)" >&2

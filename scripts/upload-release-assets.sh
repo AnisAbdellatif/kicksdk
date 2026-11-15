@@ -6,9 +6,10 @@
 # A release asset's checksum goes into the hex and pub packages, and neither
 # registry takes a version twice: replacing the file under a published
 # checksum breaks every install of that version. So an asset already there is
-# kept as it is. When the new file differs (a re-run rebuilt it), that is
-# reported as a warning and the release's file still wins; the packages take
-# their checksums from the release, never from the build.
+# kept as it is. When it differs from this build's file (a re-run rebuilt it,
+# or someone else uploaded a file of that name), the script fails, after
+# going through every file: the hex and pub jobs, which need the upload jobs,
+# then do not run, so no package vouches for bytes this run did not build.
 set -euo pipefail
 tag=${1:?tag}
 shift
@@ -22,6 +23,7 @@ sha256() {
 existing=$(gh release view "$tag" --json assets --jq '.assets[] | "\(.name) \(.digest // "")"')
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+fail=0
 
 for f in "$@"; do
   name=$(basename "$f")
@@ -40,6 +42,8 @@ for f in "$@"; do
   if [ "$theirs" = "$ours" ]; then
     echo "kept $name: the release has these bytes already"
   else
-    echo "::warning title=Release asset kept::$name is already on $tag with SHA-256 $theirs; this build's is $ours. The release's file stays (published checksums may name it); delete it by hand first only if no registry has published this version."
+    echo "::error title=Release asset differs::$name is already on $tag with SHA-256 $theirs; this build's is $ours. The release's file is kept (published checksums may name it). If neither hex nor pub has published this version, delete $name from the release by hand (gh release delete-asset $tag $name) and re-run; once either has, release a new version."
+    fail=1
   fi
 done
+exit "$fail"

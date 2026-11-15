@@ -26,14 +26,23 @@ every frame in and out. Pick a busy live channel so chat is in it.
 
 It anonymizes as it goes:
 
-- tokens are `[redacted]`;
+- tokens are `[redacted]`, and so is the reason a socket was closed with;
 - names become `user0001` (a username and its slug share one pseudonym);
 - message text becomes `text-N`, keeping its emote tokens' shape;
-- ids become `900000001`…, and UUIDs `00000000-0000-4000-8000-…`;
-- URLs become `https://example.invalid/asset/N`.
+- ids (`id`, `user_id`, `userId`, `user_ids`, …) become `900000001`…, and
+  UUIDs `00000000-0000-4000-8000-…`;
+- URLs, whatever the scheme, become `https://example.invalid/asset/N`;
+- every other string becomes `str-N`, wherever it is: in the events, in the
+  history a subscribe or connect answer carries, in join and leave info, in
+  a publication's info and tags, and in the HTTP answers;
+- a line that is not JSON is written as `[unparsed]`.
 
-Kick's protocol, event names, feed names (with the ids replaced), badge kinds,
-colours and times are kept.
+Kick's protocol, event names, feed names (with the ids replaced), badge kinds
+(a badge's `name` and `text`), colours and times are kept, and the realtime
+endpoint the connection answer names (without its query). A field nobody
+listed is replaced, not kept: to keep a new one, add it to the recorder's
+lists. `import('./tools/record-realtime.mjs')` records nothing, and gives
+`anonFrame`, `anonHttp` and `anonClose` to try on made-up input.
 
 The fixtures under `public_api/`, `v2/`, `webhook/`, `id/`, `probe/` and
 `pusher-legacy/` came from KickTracker's recorder and anonymizer
@@ -50,6 +59,8 @@ cargo fmt --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps -p kicksdk --all-features
 cargo test --workspace --all-features
+cargo +1.88 build -p kicksdk -p kicksdk-ffi --all-features   # the MSRV
+cargo deny check advisories && cargo audit   # also weekly in CI
 scripts/build-js.sh && (cd bindings/js && npm test)
 (cd bindings/python && maturin develop && pytest)
 (cd bindings/dart && dart format --line-length 120 . && dart analyze --fatal-infos && dart test)
